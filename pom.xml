@@ -805,6 +805,19 @@
       </properties>
     </profile>
     <profile>
+      <id>backends-omni</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <modules>
+        <module>gluten-arrow</module>
+        <module>backends-omni</module>
+      </modules>
+      <properties>
+        <backend_type>omni</backend_type>
+      </properties>
+    </profile>
+    <profile>
       <id>spark-ut</id>
       <modules>
         <module>gluten-ut</module>

@@ -493,6 +493,34 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableBroadcastBuildRelationInOffheap: Boolean =
     conf.getConf(VELOX_BROADCAST_BUILD_RELATION_USE_OFFHEAP)
+
+  def omniColumnarShuffleCompressBlockSize: Int =
+    conf.getConf(COLUMNAR_OMNI_SHUFFLE_COMPRESS_BLOCK_SIZE)
+
+  def omniColumnarShuffleTaskSpillMemoryThreshold: Long =
+    conf.getConf(COLUMNAR_OMNI_SHUFFLE_TASK_SPILL_MEMORY_THRESHOLD)
+
+  def omniColumnarShuffleSpillBatchRowNum: Int =
+    conf.getConf(COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM)
+
+  def omniColumnarSpillMemPctThreshold: Int = conf.getConf(COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD)
+
+  def enableOmniExpCheck : Boolean = conf.getConf(ENABLE_OMNI_EXP_CHECK)
+
+  def enableOmniUnixTimeFunc: Boolean = conf.getConf(ENABLE_OMNI_UNIXTIME_FUNCTION)
+
+  def timeParserPolicy: String = conf.getConfString("spark.sql.legacy.timeParserPolicy")
+
+  def enableColumnarTopNSort: Boolean = conf.getConf(ENABLE_COLUMNAR_TOP_N_SORT)
+
+  def enableShareBroadcastJoinHashTable: Boolean = conf.getConf(ENABLE_SHARE_BROADCAST_JOIN_HASH_TABLE)
+
+  def enableShareBroadcastJoinNestedTable: Boolean = conf.getConf(ENABLE_SHARE_BROADCAST_JOIN_NESTED_TABLE)
+
+  def enableOmniRowShuffle: Boolean = conf.getConf(ENABLE_OMNI_ROW_SHUFFLE)
+
+  def omniRowShuffleColumnsThreshold: Int =
+    conf.getConf(COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD)
 }
 
 object GlutenConfig {
@@ -2268,4 +2296,89 @@ object GlutenConfig {
         "Otherwise, broadcast build relation will use onheap memory.")
       .booleanConf
       .createWithDefault(false)
+      
+  val COLUMNAR_OMNI_SHUFFLE_COMPRESS_BLOCK_SIZE =
+    buildConf("spark.gluten.sql.columnar.backend.omni.compressBlockSize")
+      .internal()
+      .doc("columnar shuffle compress block size")
+      .intConf
+      .createWithDefault(65536)
+
+  val COLUMNAR_OMNI_SHUFFLE_TASK_SPILL_MEMORY_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.shuffleTaskSpillMemoryThreshold")
+      .internal()
+      .doc("columnar shuffle spill memory threshold in task level")
+      .longConf
+      .createWithDefault(2147483648L)
+
+  val COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM =
+    buildConf("spark.gluten.sql.columnar.backend.omni.shuffleSpillBatchRowNum")
+      .internal()
+      .doc("columnar shuffle spill batch row number")
+      .intConf
+      .createWithDefault(10000)
+
+  val COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.memFraction")
+      .internal()
+      .doc("columnar spill threshold - Percentage of memory usage," +
+        " associate with the \"spark.memory.offHeap\" together")
+      .intConf
+      .createWithDefault(90)
+
+  val ENABLE_OMNI_EXP_CHECK =
+    buildConf("spark.gluten.sql.columnar.backend.omni.omniExpCheck")
+      .internal()
+      .booleanConf
+      .createWithDefault(true)
+
+  val ENABLE_OMNI_UNIXTIME_FUNCTION =
+    buildConf("spark.gluten.sql.columnar.backend.omni.unixTimeFunc.enabled")
+      .internal()
+      .doc("enable omni unix_timestamp and from_unixtime")
+      .booleanConf
+      .createWithDefault(true)
+
+  val ENABLE_COLUMNAR_TOP_N_SORT = buildConf("spark.gluten.sql.columnar.backend.omni.topNSort")
+    .internal()
+    .doc("enable or disable columnar TopNSort")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ENABLE_SHARE_BROADCAST_JOIN_HASH_TABLE = buildConf("spark.gluten.sql.columnar.backend.omni.broadcastJoin.sharehashtable")
+    .internal()
+    .doc("enable or disable share columnar BroadcastHashJoin hashtable")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ENABLE_SHARE_BROADCAST_JOIN_NESTED_TABLE = buildConf("spark.gluten.sql.columnar.backend.omni.broadcastNestedJoin.shareBuildTable")
+    .internal()
+    .doc("enable or disable share columnar broadcastNestedJoin buildtable")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ENABLE_JOIN_REORDER_ENHANCE = buildConf("spark.gluten.sql.columnar.backend.omni.JoinReorderEnhance")
+    .internal()
+    .doc("enable or disable join reorder enhance")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ENABLE_SHUFFLE_BATCH_MERGE = buildConf("spark.gluten.sql.columnar.backend.omni.sql.shuffle.merge")
+    .internal()
+    .doc("enable columnar shuffle merge")
+    .booleanConf
+    .createWithDefault(true)
+
+  val ENABLE_OMNI_ROW_SHUFFLE =
+    buildConf("spark.gluten.sql.columnar.backend.omni.rowShuffle.enabled")
+      .internal()
+      .doc("enable or disable row shuffle")
+      .booleanConf
+      .createWithDefault(true)
+
+  val COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.rowShuffle.columnsThreshold")
+    .internal()
+    .intConf
+    .createWithDefault(10)
 }

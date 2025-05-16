@@ -60,6 +60,10 @@ public class PlanNode implements Serializable {
     this.extension = extension;
   }
 
+  public TypeNode getOutputSchema() {
+    return outputSchema;
+  }
+  
   public Plan toProtobuf() {
     Plan.Builder planBuilder = Plan.newBuilder();
     // add the extension functions

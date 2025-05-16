@@ -64,6 +64,16 @@
       </dependencies>
     </profile>
     <profile>
+      <id>backends-omni</id>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.gluten</groupId>
+          <artifactId>backends-omni</artifactId>
+          <version>${project.version}</version>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
       <id>celeborn</id>
       <dependencies>
         <dependency>

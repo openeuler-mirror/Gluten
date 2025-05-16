@@ -91,6 +91,23 @@
         <clickhouse.lib.path></clickhouse.lib.path>
       </properties>
     </profile>
+    <profile>
+      <id>backends-omni</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.gluten</groupId>
+          <artifactId>backends-omni</artifactId>
+          <version>${project.version}</version>
+          <scope>test</scope>
+        </dependency>
+      </dependencies>
+      <properties>
+        <clickhouse.lib.path></clickhouse.lib.path>
+      </properties>
+    </profile>
   </profiles>
 
   <build>
