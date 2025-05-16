@@ -45,7 +45,16 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectR
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FilterRel &filterRel) {}
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel &fetchRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel &fetchRel)
+{
+    auto childNode = convertSingleInput<::substrait::FetchRel>(fetchRel);
+    return std::make_shared<LimitNode>(
+        nextPlanNodeId(),
+        static_cast<int32_t>(fetchRel.offset()),
+        static_cast<int32_t>(fetchRel.count()),
+        false,
+        childNode);
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel &topNRel) {}
 
