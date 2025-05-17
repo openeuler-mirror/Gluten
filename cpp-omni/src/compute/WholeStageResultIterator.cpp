@@ -21,7 +21,7 @@ WholeStageResultIterator::WholeStageResultIterator(
 {
     // Create task instance.
     std::unordered_set<PlanNodeId> emptySet;
-    PlanFragment planFragment{planNode, ExecutionStrategy::kUngrouped, 1, emptySet};
+    PlanFragment planFragment{planNode, ExecutionStrategy::K_UNGROUPED, 1, emptySet};
     task_ = std::make_shared<OmniTask>(planFragment, OperatorConfig());
 }
 

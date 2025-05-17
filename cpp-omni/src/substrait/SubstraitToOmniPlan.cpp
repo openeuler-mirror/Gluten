@@ -11,13 +11,13 @@ SortOrder ToSortOrder(const ::substrait::SortField &sortField)
 {
     switch (sortField.direction()) {
         case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
-            return kAscNullsFirst;
+            return K_ASC_NULLS_FIRST;
         case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
-            return kAscNullsLast;
+            return K_ASC_NULLS_LAST;
         case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
-            return kDescNullsFirst;
+            return K_DESC_NULLS_FIRST;
         case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
-            return kDescNullsLast;
+            return K_DESC_NULLS_LAST;
         default:
             OMNI_THROW("2", "Sort direction is not supported.");
     }
@@ -240,7 +240,7 @@ void SubstraitToOmniPlanConverter::constructFunctionMap(const ::substrait::Plan 
 
 std::string SubstraitToOmniPlanConverter::nextPlanNodeId()
 {
-    auto id = fmt::format("{}", planNodeId_);
+    auto id = Format("{}", planNodeId_);
     planNodeId_++;
     return id;
 }

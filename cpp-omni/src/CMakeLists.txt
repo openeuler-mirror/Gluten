@@ -63,7 +63,6 @@ target_link_libraries (${PROJ_TARGET} PUBLIC
         snappy
         lz4
         zstd
-        fmt::fmt
         boostkit-omniop-vector-1.8.0-aarch64
         boostkit-omniop-operator-1.8.0-aarch64
         boostkit-omniop-codegen-1.8.0-aarch64
