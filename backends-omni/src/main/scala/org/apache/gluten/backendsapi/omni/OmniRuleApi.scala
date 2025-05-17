@@ -28,7 +28,7 @@ import org.apache.gluten.extension.columnar.transition.{InsertTransitions, Remov
 import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
-
+import org.apache.gluten.extension.MiscColumnarRules.RewriteAQEShuffleRead
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
 
 class OmniRuleApi extends RuleApi {
@@ -59,6 +59,7 @@ object OmniRuleApi {
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
     injector.injectPreTransform(_ => RewriteSubqueryBroadcast())
+    injector.injectPreTransform(_ => RewriteAQEShuffleRead())
 //    injector.injectPreTransform(c => BloomFilterMightContainJointRewriteRule.apply(c.session))
 //    injector.injectPreTransform(c => ArrowScanReplaceRule.apply(c.session))
 

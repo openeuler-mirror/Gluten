@@ -226,6 +226,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def enableTakeOrderedAndProject: Boolean =
     conf.getConf(COLUMNAR_TAKE_ORDERED_AND_PROJECT_ENABLED)
 
+  def enableShuffleBatchMerge: Boolean = conf.getConf(ENABLE_SHUFFLE_BATCH_MERGE)
+
   def enableNativeBloomFilter: Boolean = conf.getConf(COLUMNAR_NATIVE_BLOOMFILTER_ENABLED)
 
   def enableNativeHyperLogLogAggregateFunction: Boolean =
@@ -521,6 +523,14 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniRowShuffleColumnsThreshold: Int =
     conf.getConf(COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD)
+  
+  def omniColumnarMaxBatchSizeInBytes: Int = conf.getConf(COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES)
+
+  def omniColumnarMaxRowCount: Int = conf.getConf(COLUMNAR_OMNI_MAX_ROW_COUNT)
+
+  def omniColumnarMergedBatchThreshold: Int = conf.getConf(COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD)
+
+  def enableColumnarAQEShuffle: Boolean = conf.getConf(COLUMNAR_OMNI_AQE_SHUFFLE_MERGE)
 }
 
 object GlutenConfig {
@@ -2381,4 +2391,25 @@ object GlutenConfig {
     .internal()
     .intConf
     .createWithDefault(10)
+  
+  val COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES = buildConf("spark.gluten.sql.columnar.backend.omni.maxBatchSizeInBytes")
+    .internal()
+    .intConf
+    .createWithDefault(2097152)
+  
+  val COLUMNAR_OMNI_MAX_ROW_COUNT = buildConf("spark.gluten.sql.columnar.backend.omni.maxRowCount")
+    .internal()
+    .intConf
+    .createWithDefault(20000)
+  
+  val COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.mergedBatchThreshold")
+    .internal()
+    .intConf
+    .createWithDefault(100)
+  
+  val COLUMNAR_OMNI_AQE_SHUFFLE_MERGE = buildConf("spark.gluten.sql.columnar.backend.omni.aqe.shuffle")
+    .internal()
+    .doc("enable or disable aqe shuffle")
+    .booleanConf
+    .createWithDefault(true)
 }
