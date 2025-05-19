@@ -33,7 +33,21 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowGroupLimitRel &windowGroupLimitRel) {}
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SetRel &setRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SetRel &setRel)
+{
+    std::vector<PlanNodePtr> childNodeList;
+    for (int i = 0; i < setRel.inputs_size(); i++) {
+        const ::substrait::Rel& input = setRel.inputs(i);
+        childNodeList.push_back(ToOmniPlan(input));
+    }
+    switch (setRel.op()) {
+        case ::substrait::SetRel_SetOp::SetRel_SetOp_SET_OP_UNION_ALL: {
+            return std::make_shared<UnionNode>(nextPlanNodeId(), childNodeList, false);
+        }
+        default:
+            OMNI_THROW("Substrait Error", "Unsupported SetRel op: " + std::to_string(setRel.op()));
+    }
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel &joinRel) {}
 
