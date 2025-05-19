@@ -30,7 +30,7 @@ VectorBatch *WholeStageResultIterator::Next()
     VectorBatch *vectorBatch = nullptr;
     while (true) {
         auto future = OmniFuture::makeEmpty();
-        auto out = task_->next(&future);
+        auto out = task_->Next(&future);
         if (!future.valid()) {
             // Not need to wait. Break.
             vectorBatch = out;
