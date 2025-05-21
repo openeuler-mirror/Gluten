@@ -76,7 +76,13 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel
         childNode);
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel &topNRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel &topNRel)
+{
+    auto childNode = ConvertSingleInput<::substrait::TopNRel>(topNRel);
+    auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(topNRel.sorts(), childNode->OutputType());
+    return std::make_shared<TopNNode>(NextPlanNodeId(), sortingKeys,
+        sortingOrders, sortNullFirsts, static_cast<int32_t>(topNRel.n()), childNode);
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel &readRel, const DataTypesPtr &type) {}
 
@@ -123,7 +129,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(const ::subst
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SortRel &sortRel)
 {
     auto childNode = ConvertSingleInput<::substrait::SortRel>(sortRel);
-    auto [sortingKeys, sortingOrders,sortNullFirsts] = ProcessSortField(sortRel.sorts(), childNode->OutputType());
+    auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(sortRel.sorts(), childNode->OutputType());
     return std::make_shared<OrderByNode>(NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode);
 }
 

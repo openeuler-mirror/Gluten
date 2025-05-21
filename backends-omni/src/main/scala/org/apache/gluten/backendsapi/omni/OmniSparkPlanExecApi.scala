@@ -32,7 +32,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expressio
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
-import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning}
+import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
 import org.apache.spark.sql.execution.{ColumnarShuffleExchangeExec, ColumnarWriteFilesExec, GenerateExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
@@ -282,4 +282,19 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   override def genPreProjectForGenerate(generate: GenerateExec): SparkPlan = null
 
   override def genPostProjectForGenerate(generate: GenerateExec): SparkPlan = null
+
+  override def maybeCollapseTakeOrderedAndProject(plan: SparkPlan): SparkPlan = {
+    // This to-top-n optimization assumes exchange operators were already placed in input plan.
+    plan.transformUp {
+      case p @ LimitExecTransformer(SortExecTransformer(sortOrder, _, child, _), 0, count) =>
+        val global = child.outputPartitioning.satisfies(AllTuples)
+        val topN = OmniTopNTransformer(count, sortOrder, global, child)
+        if (topN.doValidate().ok()) {
+          topN
+        } else {
+          p
+        }
+      case other => other
+    }
+  }
 }
