@@ -5,8 +5,7 @@
 #include "SubstraitToOmniPlan.h"
 #include <expression/expressions.h>
 
-namespace omniruntime
-{
+namespace omniruntime {
 SortOrder ToSortOrder(const ::substrait::SortField &sortField)
 {
     switch (sortField.direction()) {
@@ -23,6 +22,13 @@ SortOrder ToSortOrder(const ::substrait::SortField &sortField)
     }
 }
 
+std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id) {}
+
+void SubstraitToOmniPlanConverter::ExtractJoinKeys(
+    const ::substrait::Expression &joinExpression,
+    std::vector<const ::substrait::Expression::FieldReference*> &leftExprs,
+    std::vector<const ::substrait::Expression::FieldReference*> &rightExprs) {}
+
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WriteRel &writeRel) {}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRel &expandRel) {}
@@ -37,12 +43,12 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SetRel &
 {
     std::vector<PlanNodePtr> childNodeList;
     for (int i = 0; i < setRel.inputs_size(); i++) {
-        const ::substrait::Rel& input = setRel.inputs(i);
+        const ::substrait::Rel &input = setRel.inputs(i);
         childNodeList.push_back(ToOmniPlan(input));
     }
     switch (setRel.op()) {
         case ::substrait::SetRel_SetOp::SetRel_SetOp_SET_OP_UNION_ALL: {
-            return std::make_shared<UnionNode>(nextPlanNodeId(), childNodeList, false);
+            return std::make_shared<UnionNode>(NextPlanNodeId(), childNodeList, false);
         }
         default:
             OMNI_THROW("Substrait Error", "Unsupported SetRel op: " + std::to_string(setRel.op()));
@@ -61,9 +67,9 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FilterRe
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel &fetchRel)
 {
-    auto childNode = convertSingleInput<::substrait::FetchRel>(fetchRel);
+    auto childNode = ConvertSingleInput<::substrait::FetchRel>(fetchRel);
     return std::make_shared<LimitNode>(
-        nextPlanNodeId(),
+        NextPlanNodeId(),
         static_cast<int32_t>(fetchRel.offset()),
         static_cast<int32_t>(fetchRel.count()),
         false,
@@ -106,19 +112,19 @@ PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(const ::subst
 
     auto outputType = std::make_shared<DataTypes>(veloxTypeList);
     std::shared_ptr<ResultIterator> iterator;
-    if (!validationMode_) {
-        OMNI_CHECK(streamIdx <= inputIters_.size(), "Could not find stream index {} in input iterator list.");
-        iterator = inputIters_[streamIdx];
+    if (!validationMode) {
+        OMNI_CHECK(streamIdx <= inputIters.size(), "Could not find stream index {} in input iterator list.");
+        iterator = inputIters[streamIdx];
     }
-    auto node = std::make_shared<ValueStreamNode>(nextPlanNodeId(), outputType, std::move(iterator));
+    auto node = std::make_shared<ValueStreamNode>(NextPlanNodeId(), outputType, std::move(iterator));
     return node;
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SortRel &sortRel)
 {
-    auto childNode = convertSingleInput<::substrait::SortRel>(sortRel);
-    auto [sortingKeys, sortingOrders,sortNullFirsts] = processSortField(sortRel.sorts(), childNode->OutputType());
-    return std::make_shared<OrderByNode>(nextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode);
+    auto childNode = ConvertSingleInput<::substrait::SortRel>(sortRel);
+    auto [sortingKeys, sortingOrders,sortNullFirsts] = ProcessSortField(sortRel.sorts(), childNode->OutputType());
+    return std::make_shared<OrderByNode>(NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode);
 }
 
 int32_t SubstraitToOmniPlanConverter::GetStreamIndex(const ::substrait::ReadRel &sRead)
@@ -150,15 +156,15 @@ int32_t SubstraitToOmniPlanConverter::GetStreamIndex(const ::substrait::ReadRel 
 }
 
 std::tuple<std::vector<int32_t>, std::vector<int32_t>, std::vector<int32_t>>
-SubstraitToOmniPlanConverter::processSortField(
+SubstraitToOmniPlanConverter::ProcessSortField(
     const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortFields, const DataTypesPtr &inputType)
 {
     std::vector<int32_t> sortingKeys;
     std::vector<int32_t> sortingOrders;
     std::vector<int32_t> sortNullFirsts;
-    for (const auto &sort: sortFields) {
+    for (const auto &sort : sortFields) {
         OMNI_CHECK(sort.has_expr(), "Sort field must have expr");
-        auto expression = exprConverter_->ToOmniExpr(sort.expr(), inputType);
+        auto expression = exprConverter->ToOmniExpr(sort.expr(), inputType);
         auto fieldExpr = std::dynamic_pointer_cast<const FieldExpr>(expression);
         // OMNI_CHECK(fieldExpr==nullptr, "Sort Operator only supports field sorting key");
         sortingKeys.emplace_back(fieldExpr->colVal);
@@ -167,6 +173,28 @@ SubstraitToOmniPlanConverter::processSortField(
         sortNullFirsts.emplace_back(sortOrder.IsNullsFirst());
     }
     return {sortingKeys, sortingOrders, sortNullFirsts};
+}
+
+AggregationNode::Step SubstraitToOmniPlanConverter::ToAggregationFunctionStep(
+    const ::substrait::AggregateFunction &sAggFuc)
+{
+    const auto &phase = sAggFuc.phase();
+    switch (phase) {
+        case ::substrait::AGGREGATION_PHASE_UNSPECIFIED: {
+            OMNI_THROW("RUNTIME_ERROR:", "Aggregation phase not specified.");
+            break;
+        }
+        case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
+            return AggregationNode::Step::K_PARTIAL;
+        case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
+            return AggregationNode::Step::K_INTERMEDIATE;
+        case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
+            return AggregationNode::Step::K_SINGLE;
+        case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
+            return AggregationNode::Step::K_FINAL;
+        default:
+            OMNI_THROW("RUNTIME_ERROR:", "Unexpected aggregation phase.");
+    }
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Rel &rel)
@@ -223,7 +251,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Plan &su
     // OMNI_CHECK(checkTypeExtension(substraitPlan), "The type extension only have unknown type.");
     // Construct the function map based on the Substrait representation,
     // and initialize the expression converter with it.
-    constructFunctionMap(substraitPlan);
+    ConstructFunctionMap(substraitPlan);
 
     // In fact, only one RelRoot or Rel is expected here.
     const auto &rel = substraitPlan.relations(0);
@@ -236,12 +264,25 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Plan &su
     }
 }
 
-void SubstraitToOmniPlanConverter::constructFunctionMap(const ::substrait::Plan &substraitPlan) {}
-
-std::string SubstraitToOmniPlanConverter::nextPlanNodeId()
+void SubstraitToOmniPlanConverter::ConstructFunctionMap(const ::substrait::Plan &substraitPlan)
 {
-    auto id = Format("{}", planNodeId_);
-    planNodeId_++;
+    // Construct the function map based on the Substrait representation.
+    for (const auto &extension : substraitPlan.extensions()) {
+        if (!extension.has_extension_function()) {
+            continue;
+        }
+        const auto &sFmap = extension.extension_function();
+        auto id = sFmap.function_anchor();
+        auto name = sFmap.name();
+        functionMap[id] = name;
+    }
+    exprConverter = std::make_unique<SubstraitOmniExprConverter>(functionMap);
+}
+
+std::string SubstraitToOmniPlanConverter::NextPlanNodeId()
+{
+    auto id = Format("{}", planNodeId);
+    planNodeId++;
     return id;
 }
 }

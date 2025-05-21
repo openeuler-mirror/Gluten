@@ -2,7 +2,6 @@ include_directories(SYSTEM "/user/local/include")
 
 set (PROJ_TARGET spark_columnar_plugin)
 
-find_package(fmt REQUIRED)
 file(GLOB_RECURSE SOURCE_FILES "*.cpp" "*.cc")
 
 #Find required protobuf package
@@ -63,6 +62,7 @@ target_link_libraries (${PROJ_TARGET} PUBLIC
         snappy
         lz4
         zstd
+        re2
         boostkit-omniop-vector-1.8.0-aarch64
         boostkit-omniop-operator-1.8.0-aarch64
         boostkit-omniop-codegen-1.8.0-aarch64

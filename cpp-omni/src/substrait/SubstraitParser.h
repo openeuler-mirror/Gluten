@@ -17,8 +17,7 @@
 
 #include "util/type_util.h"
 
-namespace omniruntime
-{
+namespace omniruntime {
 /// This class contains some common functions used to parse Substrait
 /// components, and convert them into recognizable representations.
 class SubstraitParser {
@@ -27,7 +26,7 @@ public:
     static std::vector<type::DataTypePtr> ParseNamedStruct(const ::substrait::NamedStruct &namedStruct,
         bool asLowerCase = false);
 
-    /// Parse Substrait Type to Velox type.
+    /// Parse Substrait Type to Omni type.
     static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false);
 
     /// Parse Substrait ReferenceSegment and extract the field index. Return false if the segment is not a valid unnested
@@ -60,12 +59,12 @@ public:
     /// This function is used get the types from the compound name.
     static std::vector<std::string> GetSubFunctionTypes(const std::string &subFuncSpec);
 
-    /// Used to find the Velox function name according to the function id
+    /// Used to find the Omni function name according to the function id
     /// from a pre-constructed function map.
-    static std::string FindVeloxFunction(const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
+    static std::string FindOmniFunction(const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
 
-    /// Map the Substrait function keyword into Velox function keyword.
-    static std::string MapToVeloxFunction(const std::string &substraitFunction, bool isDecimal);
+    /// Map the Substrait function keyword into Omni function keyword.
+    static std::string MapToOmniFunction(const std::string &substraitFunction, bool isDecimal);
 
     /// @brief Return whether a config is set as true in AdvancedExtension
     /// optimization.
@@ -78,15 +77,15 @@ public:
     static std::vector<type::DataTypePtr> SigToTypes(const std::string &functionSig);
 
     // Get values for the different supported types.
-    template<typename T>
+    template <typename T>
     static T GetLiteralValue(const ::substrait::Expression::Literal & /* literal */);
 
 private:
-    /// A map used for mapping Substrait function keywords into Velox functions'
-    /// keywords. Key: the Substrait function keyword, Value: the Velox function
-    /// keyword. For those functions with different names in Substrait and Velox,
+    /// A map used for mapping Substrait function keywords into Omni functions'
+    /// keywords. Key: the Substrait function keyword, Value: the Omni function
+    /// keyword. For those functions with different names in Substrait and Omni,
     /// a mapping relation should be added here.
-    static std::unordered_map<std::string, std::string> substraitVeloxFunctionMap;
+    static std::unordered_map<std::string, std::string> substraitOmniFunctionMap;
 
     // The map is uesd for mapping substrait type.
     // Key: type in function name.

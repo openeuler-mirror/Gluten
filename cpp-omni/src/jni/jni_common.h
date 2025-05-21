@@ -159,6 +159,7 @@ extern jclass arrayListClass;
 extern jclass threadClass;
 extern jclass serializedColumnarBatchIteratorClass;
 extern jclass vecBatchCls;
+extern jclass infoCls;
 
 extern jmethodID jsonMethodInt;
 extern jmethodID jsonMethodLong;
@@ -174,5 +175,6 @@ extern jmethodID threadGetId;
 extern jmethodID serializedColumnarBatchIteratorHasNext;
 extern jmethodID serializedColumnarBatchIteratorNext;
 extern jmethodID vecBatchInitMethodId;
+extern jmethodID method;
 
 #endif //THESTRAL_PLUGIN_MASTER_JNI_COMMON_H

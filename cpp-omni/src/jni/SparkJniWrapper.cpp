@@ -25,6 +25,7 @@
 #include "jni_common.h"
 #include "SparkJniWrapper.hh"
 #include "compute/OmniPlanConverter.h"
+#include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
 
 using namespace spark;
@@ -237,6 +238,38 @@ inline uint8_t *getByteArrayElementsSafe(
 {
     auto nativeArray = env->GetByteArrayElements(array, nullptr);
     return reinterpret_cast<uint8_t *>(nativeArray);
+}
+
+JNIEXPORT jobject JNICALL
+Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(JNIEnv *env, jobject wrapper,
+    jbyteArray planArray)
+{
+    JNI_FUNC_START
+        auto planData = getByteArrayElementsSafe(env, planArray);
+        auto planSize = env->GetArrayLength(planArray);
+
+        ::substrait::Plan subPlan;
+        CodedInputStream codedStream{planData, planSize};
+        codedStream.SetRecursionLimit(100000);
+        ::substrait::Plan substraitPlan;
+        substraitPlan.ParseFromCodedStream(&codedStream);
+
+        auto pool = GetMemoryPool();
+        omniruntime::SubstraitToOmniPlanValidator planValidator(pool);
+
+        try {
+            auto isSupported = planValidator.Validate(subPlan);
+            auto logs = planValidator.GetValidateLog();
+            std::string concatLog;
+            for (int i = 0; i < logs.size(); i++) {
+                concatLog += logs[i] + "@";
+            }
+            return env->NewObject(infoCls, method, isSupported, env->NewStringUTF(concatLog.c_str()));
+        } catch (std::invalid_argument &e) {
+            auto isSupported = false;
+            return env->NewObject(infoCls, method, isSupported, env->NewStringUTF(""));
+        }
+    JNI_FUNC_END(runtimeExceptionClass)
 }
 
 JNIEXPORT jlong JNICALL

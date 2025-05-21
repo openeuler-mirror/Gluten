@@ -31,6 +31,7 @@ jclass arrayListClass;
 jclass threadClass;
 jclass serializedColumnarBatchIteratorClass;
 jclass vecBatchCls;
+jclass infoCls;
 
 jmethodID jsonMethodInt;
 jmethodID jsonMethodLong;
@@ -46,6 +47,7 @@ jmethodID threadGetId;
 jmethodID serializedColumnarBatchIteratorHasNext;
 jmethodID serializedColumnarBatchIteratorNext;
 jmethodID vecBatchInitMethodId;
+jmethodID method;
 
 static jint JNI_VERSION = JNI_VERSION_1_8;
 
@@ -143,6 +145,12 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     vecBatchCls = CreateGlobalClassReference(env, "nova/hetu/omniruntime/vector/VecBatch");
     vecBatchInitMethodId = env->GetMethodID(vecBatchCls, "<init>", "(J[J[J[J[J[I[II)V");
 
+    infoCls = env->FindClass("Lorg/apache/gluten/validate/NativePlanValidationInfo;");
+    if (infoCls == nullptr) {
+        std::string errorMessage = "Unable to CreateGlobalClassReferenceOrError for NativePlanValidationInfo";
+        OMNI_THROW("RUNTIME_ERROR", errorMessage);
+    }
+    method = env->GetMethodID(infoCls, "<init>", "(ILjava/lang/String;)V");
 
     return JNI_VERSION;
 }

@@ -14,8 +14,7 @@
 #include "compute/ResultIterator.h"
 #include "plannode/RowVectorStream.h"
 
-namespace omniruntime
-{
+namespace omniruntime {
 /// This class is used to convert the Substrait plan into Omni plan.
 class SubstraitToOmniPlanConverter {
 public:
@@ -23,7 +22,7 @@ public:
         const std::unordered_map<std::string, std::string> &confMap = {},
         const std::optional<std::string> writeFilesTempPath = std::nullopt,
         bool validationMode = false)
-        : confMap_(confMap), writeFilesTempPath_(writeFilesTempPath), validationMode_(validationMode) {}
+        : confMap(confMap), writeFilesTempPath(writeFilesTempPath), validationMode(validationMode) {}
 
     /// Used to convert Substrait WriteRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::WriteRel &writeRel);
@@ -88,48 +87,34 @@ public:
     /// Used to convert Substrait Plan into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::Plan &substraitPlan);
 
-    // // return the raw ptr of ExprConverter
-    // SubstraitOmniExprConverter* getExprConverter() {
-    //   return exprConverter_.get();
-    // }
+    // return the raw ptr of ExprConverter
+    SubstraitOmniExprConverter *GetExprConverter()
+    {
+        return this->exprConverter.get();
+    }
 
     /// Used to construct the function map between the index
     /// and the Substrait function name. Initialize the expression
     /// converter based on the constructed function map.
-    void constructFunctionMap(const ::substrait::Plan &substraitPlan);
+    void ConstructFunctionMap(const ::substrait::Plan &substraitPlan);
 
     /// Will return the function map used by this plan converter.
-    const std::unordered_map<uint64_t, std::string> &getFunctionMap() const
+    const std::unordered_map<uint64_t, std::string> &GetFunctionMap() const
     {
-        return functionMap_;
+        return this->functionMap;
     }
-
-    // /// Return the splitInfo map used by this plan converter.
-    // const std::unordered_map<PlanNodeId, std::shared_ptr<SplitInfo>>& splitInfos() const {
-    //   return splitInfoMap_;
-    // }
 
     /// Used to insert certain plan node as input. The plan node
     /// id will start from the setted one.
-    void insertInputNode(uint64_t inputIdx, const std::shared_ptr<const PlanNode> &inputNode, int planNodeId)
+    void InsertInputNode(uint64_t inputIdx, const std::shared_ptr<const PlanNode> &inputNode, int planNodeId)
     {
-        inputNodesMap_[inputIdx] = inputNode;
-        planNodeId_ = planNodeId;
+        this->inputNodesMap[inputIdx] = inputNode;
+        this->planNodeId = planNodeId;
     }
 
-    //
-    // void setSplitInfos(std::vector<std::shared_ptr<SplitInfo>> splitInfos) {
-    //   splitInfos_ = splitInfos;
-    // }
-    //
-    // void setValueStreamNodeFactory(
-    //     std::function<PlanNodePtr(std::string, memory::MemoryPool*, int32_t, RowTypePtr)> factory) {
-    //   valueStreamNodeFactory_ = std::move(factory);
-    // }
-    //
     void setInputIters(std::vector<std::shared_ptr<ResultIterator>> inputIters)
     {
-        inputIters_ = std::move(inputIters);
+        this->inputIters = std::move(inputIters);
     }
 
     /// Used to check if ReadRel specifies an input of stream.
@@ -138,27 +123,28 @@ public:
     int32_t GetStreamIndex(const ::substrait::ReadRel &sRel);
 
     /// Used to find the function specification in the constructed function map.
-    std::string findFuncSpec(uint64_t id);
+    std::string FindFuncSpec(uint64_t id);
 
     /// Extract join keys from joinExpression.
     /// joinExpression is a boolean condition that describes whether each record
     /// from the left set “match” the record from the right set. The condition
     /// must only include the following operations: AND, ==, field references.
     /// Field references correspond to the direct output order of the data.
-    void extractJoinKeys(
+    void ExtractJoinKeys(
         const ::substrait::Expression &joinExpression,
-        std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
-        std::vector<const ::substrait::Expression::FieldReference *> &rightExprs);
+        std::vector<const ::substrait::Expression::FieldReference*> &leftExprs,
+        std::vector<const ::substrait::Expression::FieldReference*> &rightExprs);
 
     // /// Get aggregation step from AggregateRel.
     // /// If returned Partial, it means the aggregate generated can leveraging flushing and abandoning like
     // /// what streaming pre-aggregation can do in MPP databases.
     // AggregationNode::Step toAggregationStep(const ::substrait::AggregateRel& sAgg);
-    //
-    // /// Get aggregation function step for AggregateFunction.
-    // /// The returned step value will be used to decide which Omni aggregate function or companion function
-    // /// is used for the actual data processing.
-    // AggregationNode::Step toAggregationFunctionStep(const ::substrait::AggregateFunction& sAggFuc);
+
+    /// Get aggregation function step for AggregateFunction.
+    /// The returned step value will be used to decide which Omni aggregate function or companion function
+    /// is used for the actual data processing.
+    static AggregationNode::Step ToAggregationFunctionStep(const ::substrait::AggregateFunction &sAggFuc);
+
     //
     // /// We use companion functions if the aggregate is not single.
     // std::string toAggregationFunctionName(const std::string& baseName, const AggregationNode::Step& step);
@@ -166,7 +152,7 @@ public:
     /// Helper Function to convert Substrait sortField to Omni sortingKeys and
     /// sortingOrders.
     /// Note that, this method would deduplicate the sorting keys which have the same field name.
-    std::tuple<std::vector<int32_t>, std::vector<int32_t>, std::vector<int32_t>> processSortField(
+    std::tuple<std::vector<int32_t>, std::vector<int32_t>, std::vector<int32_t>> ProcessSortField(
         const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortField,
         const DataTypesPtr &inputType);
 
@@ -176,14 +162,14 @@ private:
     /// ProjectNode is added on top of 'noEmitNode' to represent output order
     /// specified in 'relCommon::emit'. Return 'noEmitNode' as is
     /// if output order is 'kDriect'.
-    PlanNodePtr processEmit(const ::substrait::RelCommon &relCommon, const PlanNodePtr &noEmitNode);
+    PlanNodePtr ProcessEmit(const ::substrait::RelCommon &relCommon, const PlanNodePtr &noEmitNode);
 
     /// Check the Substrait type extension only has one unknown extension.
-    static bool checkTypeExtension(const ::substrait::Plan &substraitPlan);
+    static bool CheckTypeExtension(const ::substrait::Plan &substraitPlan);
 
     /// Returns unique ID to use for plan node. Produces sequential numbers
     /// starting from zero.
-    std::string nextPlanNodeId();
+    std::string NextPlanNodeId();
 
     // /// Used to convert AggregateRel into Omni plan node.
     // /// The output of child node will be used as the input of Aggregation.
@@ -193,8 +179,8 @@ private:
     //     const AggregationNode::Step& aggStep);
 
     /// Helper function to convert the input of Substrait Rel to Omni Node.
-    template<typename T>
-    PlanNodePtr convertSingleInput(T rel)
+    template <typename T>
+    PlanNodePtr ConvertSingleInput(T rel)
     {
         OMNI_CHECK(rel.has_input(), "Child Rel is expected here.");
         return ToOmniPlan(rel.input());
@@ -207,41 +193,41 @@ private:
     //     const RowTypePtr& inputType);
 
     /// The unique identification for each PlanNode.
-    int planNodeId_ = 0;
+    int planNodeId = 0;
 
     /// The map storing the relations between the function id and the function
     /// name. Will be constructed based on the Substrait representation.
-    std::unordered_map<uint64_t, std::string> functionMap_;
+    std::unordered_map<uint64_t, std::string> functionMap;
 
     // /// The map storing the split stats for each PlanNode.
     // std::unordered_map<PlanNodeId, std::shared_ptr<SplitInfo>> splitInfoMap_;
     //
     // std::function<PlanNodePtr(std::string, memory::MemoryPool*, int32_t, RowTypePtr)> valueStreamNodeFactory_;
     //
-    std::vector<std::shared_ptr<ResultIterator>> inputIters_;
+    std::vector<std::shared_ptr<ResultIterator>> inputIters;
 
     /// The map storing the pre-built plan nodes which can be accessed through
     /// index. This map is only used when the computation of a Substrait plan
     /// depends on other input nodes.
-    std::unordered_map<uint64_t, std::shared_ptr<const PlanNode>> inputNodesMap_;
+    std::unordered_map<uint64_t, std::shared_ptr<const PlanNode>> inputNodesMap;
 
     int32_t splitInfoIdx_{0};
     // std::vector<std::shared_ptr<SplitInfo>> splitInfos_;
 
     /// The Expression converter used to convert Substrait representations into
     /// Omni expressions.
-    std::unique_ptr<SubstraitOmniExprConverter> exprConverter_;
+    std::unique_ptr<SubstraitOmniExprConverter> exprConverter;
     //
     // /// Memory pool.
     // memory::MemoryPool* pool_;
 
     /// A map of custom configs.
-    std::unordered_map<std::string, std::string> confMap_;
+    std::unordered_map<std::string, std::string> confMap;
 
     /// The temporary path used to write files.
-    std::optional<std::string> writeFilesTempPath_;
+    std::optional<std::string> writeFilesTempPath;
 
     /// A flag used to specify validation.
-    bool validationMode_ = false;
+    bool validationMode = false;
 };
 }

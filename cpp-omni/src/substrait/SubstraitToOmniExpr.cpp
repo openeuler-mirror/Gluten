@@ -5,17 +5,7 @@
 
 #include "SubstraitToOmniExpr.h"
 
-namespace omniruntime
-{
-// template<typename T>
-// void setLiteralValue(const ::substrait::Expression::Literal &literal, FlatVector<T> *vector, vector_size_t index)
-// {
-//     if (literal.has_null()) {
-//         vector->setNull(index, true);
-//     } else {
-//         vector->set(index, gluten::SubstraitParser::getLiteralValue<T>(literal));
-//     }
-// }
+namespace omniruntime {
 
 DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal)
 {
@@ -64,7 +54,7 @@ bool IsNullOnFailure(::substrait::Expression::Cast::FailureBehavior failureBehav
     }
 }
 
-template<DataTypeId kind>
+template <DataTypeId kind>
 std::shared_ptr<LiteralExpr> ConstructConstantVector(const ::substrait::Expression::Literal &substraitLit,
     const DataTypePtr &type)
 {

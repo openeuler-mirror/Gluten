@@ -11,8 +11,7 @@
 #include "expression/expressions.h"
 #include "SubstraitParser.h"
 
-namespace omniruntime
-{
+namespace omniruntime {
 using namespace expressions;
 using TypedExprPtr = std::shared_ptr<const expressions::Expr>;
 

@@ -60,6 +60,10 @@ JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(
     JNIEnv *env, jobject, jlong splitter_id);
 
+JNIEXPORT jobject JNICALL
+Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(JNIEnv *env, jobject wrapper,
+    jbyteArray planArray);
+
 JNIEXPORT jlong JNICALL
 Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(JNIEnv *env,
     jobject wrapper,
@@ -69,8 +73,8 @@ Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernel
 JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeHasNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 
-    JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeTransform(JNIEnv *env,
-        jobject wrapper, jlong iterHandle);
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeTransform(JNIEnv *env,
+    jobject wrapper, jlong iterHandle);
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
