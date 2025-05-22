@@ -101,6 +101,22 @@
         <clickhouse.lib.path></clickhouse.lib.path>
       </properties>
     </profile>
+    <profile>
+      <id>backends-omni</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.gluten</groupId>
+          <artifactId>backends-omni</artifactId>
+          <version>${project.version}</version>
+          <scope>test</scope>
+        </dependency>       
+      </dependencies>
+      <properties>
+      </properties>
+    </profile>
   </profiles>
 
   <build>
@@ -146,6 +162,7 @@
             <configuration>
               <systemProperties>
                 <clickhouse.lib.path>${clickhouse.lib.path}</clickhouse.lib.path>
+                <omni.lib.path>${project.basedir}/../../cpp-omni/build/releases/libspark_columnar_plugin.so</omni.lib.path>
                 <tpcds.data.path>${tpcds.data.path}</tpcds.data.path>
               </systemProperties>
             </configuration>

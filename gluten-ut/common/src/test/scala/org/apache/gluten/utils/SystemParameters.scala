@@ -24,6 +24,16 @@ object SystemParameters {
   val TPCDS_DATA_PATH_KEY = "tpcds.data.path"
   val TPCDS_DATA_PATH_DEFAULT_VALUE = "/data/tpcds-data-sf1"
 
+  val OMNI_LIB_PATH_KEY = "omni.lib.path"
+  val OMNI_LIB_PATH_DEFAULT_VALUE = "/opt/lib/libspark_columnar_plugin.so"
+
+
+  def getOmniLibPath: String = {
+    System.getProperty(
+      SystemParameters.OMNI_LIB_PATH_KEY,
+      SystemParameters.OMNI_LIB_PATH_DEFAULT_VALUE)
+  }
+
   def getClickHouseLibPath: String = {
     System.getProperty(
       SystemParameters.CLICKHOUSE_LIB_PATH_KEY,

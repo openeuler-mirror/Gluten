@@ -30,4 +30,8 @@ object BackendTestUtils {
   def isCHBackendLoaded(): Boolean = {
     BackendsApiManager.getBackendName == "ch" // the same with CHBackend.BACKEND_NAME
   }
+
+  def isOmniBackendLoaded(): Boolean = {
+    BackendsApiManager.getBackendName == "omni" // the same with OmniBackend.BACKEND_NAME
+  }
 }

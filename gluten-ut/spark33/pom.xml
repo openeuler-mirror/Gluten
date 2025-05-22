@@ -153,6 +153,7 @@
             <configuration>
               <systemProperties>
                 <clickhouse.lib.path>${clickhouse.lib.path}</clickhouse.lib.path>
+                <omni.lib.path>${project.basedir}/../../cpp-omni/build/releases/libspark_columnar_plugin.so</omni.lib.path>
                 <tpcds.data.path>${tpcds.data.path}</tpcds.data.path>
               </systemProperties>
             </configuration>

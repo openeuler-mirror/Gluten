@@ -44,6 +44,9 @@ class GlutenExpressionMappingSuite
       conf
         .set("spark.gluten.sql.enable.native.validation", "false")
         .set(GlutenConfig.GLUTEN_LIB_PATH, SystemParameters.getClickHouseLibPath)
+    } else if (BackendTestUtils.isOmniBackendLoaded()) {
+      conf
+        .set(GlutenConfig.GLUTEN_LIB_PATH, SystemParameters.getOmniLibPath)
     }
     conf
   }
