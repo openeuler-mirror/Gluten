@@ -27,27 +27,26 @@
 #include "compute/OmniPlanConverter.h"
 #include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
+#include "compute/Runtime.h"
+#include "config/OmniConfig.h"
 
 using namespace spark;
 using namespace google::protobuf::io;
 using namespace omniruntime::vec;
 
-JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMake(
-    JNIEnv *env, jobject, jstring partitioning_name_jstr, jint num_partitions,
-    jstring jInputType, jint jNumCols, jint buffer_size,
-    jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs,
-    jstring local_dirs_jstr, jlong compress_block_size,
-    jint spill_batch_row, jlong task_spill_memory_threshold, jlong executor_spill_memory_threshold)
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMake(JNIEnv *env, jobject,
+    jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
+    jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs, jstring local_dirs_jstr,
+    jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
+    jlong executor_spill_memory_threshold)
 {
     JNI_FUNC_START
         if (partitioning_name_jstr == nullptr) {
-            env->ThrowNew(runtimeExceptionClass,
-                std::string("Short partitioning name can't be null").c_str());
+            env->ThrowNew(runtimeExceptionClass, std::string("Short partitioning name can't be null").c_str());
             return 0;
         }
         if (jInputType == nullptr) {
-            env->ThrowNew(runtimeExceptionClass,
-                std::string("input types can't be null").c_str());
+            env->ThrowNew(runtimeExceptionClass, std::string("input types can't be null").c_str());
             return 0;
         }
 
@@ -68,18 +67,16 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         inputDataTypes.clear();
 
         InputDataTypes inputDataTypesTmp;
-        inputDataTypesTmp.inputVecTypeIds = (int32_t *)inputVecTypeIds;
+        inputDataTypesTmp.inputVecTypeIds = (int32_t*)inputVecTypeIds;
         inputDataTypesTmp.inputDataPrecisions = inputDataPrecisions;
         inputDataTypesTmp.inputDataScales = inputDataScales;
 
         if (data_file_jstr == nullptr) {
-            env->ThrowNew(runtimeExceptionClass,
-                std::string("Shuffle DataFile can't be null").c_str());
+            env->ThrowNew(runtimeExceptionClass, std::string("Shuffle DataFile can't be null").c_str());
             return 0;
         }
         if (local_dirs_jstr == nullptr) {
-            env->ThrowNew(runtimeExceptionClass,
-                std::string("Shuffle DataFile can't be null").c_str());
+            env->ThrowNew(runtimeExceptionClass, std::string("Shuffle DataFile can't be null").c_str());
             return 0;
         }
 
@@ -130,21 +127,21 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
 
         auto splitter = Splitter::Make(partitioning_name, inputDataTypesTmp, jNumCols, num_partitions,
             std::move(splitOptions));
-        return reinterpret_cast<intptr_t>(static_cast<void *>(splitter));
+        return reinterpret_cast<intptr_t>(static_cast<void*>(splitter));
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(
-    JNIEnv *env, jobject jObj, jlong splitter_addr, jlong jVecBatchAddress)
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(JNIEnv *env, jobject jObj,
+    jlong splitter_addr, jlong jVecBatchAddress)
 {
-    auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+    auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
     if (!splitter) {
         std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
         env->ThrowNew(runtimeExceptionClass, error_message.c_str());
         return -1;
     }
 
-    auto vecBatch = (VectorBatch *)jVecBatchAddress;
+    auto vecBatch = (VectorBatch*)jVecBatchAddress;
     splitter->SetInputVecBatch(vecBatch);
     JNI_FUNC_START
         splitter->Split(*vecBatch);
@@ -152,17 +149,17 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split
     JNI_FUNC_END_WITH_VECBATCH(runtimeExceptionClass, splitter->GetInputVecBatch())
 }
 
-JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSplit(
-    JNIEnv *env, jobject jObj, jlong splitter_addr, jlong jVecBatchAddress)
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSplit(JNIEnv *env, jobject jObj,
+    jlong splitter_addr, jlong jVecBatchAddress)
 {
-    auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+    auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
     if (!splitter) {
         std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
         env->ThrowNew(runtimeExceptionClass, error_message.c_str());
         return -1;
     }
 
-    auto vecBatch = (VectorBatch *)jVecBatchAddress;
+    auto vecBatch = (VectorBatch*)jVecBatchAddress;
     splitter->SetInputVecBatch(vecBatch);
     JNI_FUNC_START
         splitter->SplitByRow(vecBatch);
@@ -170,11 +167,11 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSp
     JNI_FUNC_END_WITH_VECBATCH(runtimeExceptionClass, splitter->GetInputVecBatch())
 }
 
-JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(
-    JNIEnv *env, jobject, jlong splitter_addr)
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(JNIEnv *env, jobject,
+    jlong splitter_addr)
 {
     JNI_FUNC_START
-        auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+        auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
         if (!splitter) {
             std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
             env->ThrowNew(runtimeExceptionClass, error_message.c_str());
@@ -184,22 +181,21 @@ JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_sto
 
         const auto &partition_length = splitter->PartitionLengths();
         auto partition_length_arr = env->NewLongArray(partition_length.size());
-        auto src = reinterpret_cast<const jlong *>(partition_length.data());
+        auto src = reinterpret_cast<const jlong*>(partition_length.data());
         env->SetLongArrayRegion(partition_length_arr, 0, partition_length.size(), src);
-        jobject split_result = env->NewObject(
-            splitResultClass, splitResultConstructor, splitter->TotalComputePidTime(),
-            splitter->TotalWriteTime(), splitter->TotalSpillTime(),
-            splitter->TotalBytesWritten(), splitter->TotalBytesSpilled(), partition_length_arr);
+        jobject split_result = env->NewObject(splitResultClass, splitResultConstructor, splitter->TotalComputePidTime(),
+            splitter->TotalWriteTime(), splitter->TotalSpillTime(), splitter->TotalBytesWritten(),
+            splitter->TotalBytesSpilled(), partition_length_arr);
 
         return split_result;
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowStop(
-    JNIEnv *env, jobject, jlong splitter_addr)
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowStop(JNIEnv *env, jobject,
+    jlong splitter_addr)
 {
     JNI_FUNC_START
-        auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+        auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
         if (!splitter) {
             std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
             env->ThrowNew(runtimeExceptionClass, error_message.c_str());
@@ -209,22 +205,21 @@ JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_row
 
         const auto &partition_length = splitter->PartitionLengths();
         auto partition_length_arr = env->NewLongArray(partition_length.size());
-        auto src = reinterpret_cast<const jlong *>(partition_length.data());
+        auto src = reinterpret_cast<const jlong*>(partition_length.data());
         env->SetLongArrayRegion(partition_length_arr, 0, partition_length.size(), src);
-        jobject split_result = env->NewObject(
-            splitResultClass, splitResultConstructor, splitter->TotalComputePidTime(),
-            splitter->TotalWriteTime(), splitter->TotalSpillTime(),
-            splitter->TotalBytesWritten(), splitter->TotalBytesSpilled(), partition_length_arr);
+        jobject split_result = env->NewObject(splitResultClass, splitResultConstructor, splitter->TotalComputePidTime(),
+            splitter->TotalWriteTime(), splitter->TotalSpillTime(), splitter->TotalBytesWritten(),
+            splitter->TotalBytesSpilled(), partition_length_arr);
 
         return split_result;
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(
-    JNIEnv *env, jobject, jlong splitter_addr)
+JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(JNIEnv *env, jobject,
+    jlong splitter_addr)
 {
     JNI_FUNC_START
-        auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+        auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
         if (!splitter) {
             std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
             env->ThrowNew(runtimeExceptionClass, error_message.c_str());
@@ -233,16 +228,14 @@ JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
 
-inline uint8_t *getByteArrayElementsSafe(
-    JNIEnv *env, jbyteArray array)
+inline uint8_t *getByteArrayElementsSafe(JNIEnv *env, jbyteArray array)
 {
     auto nativeArray = env->GetByteArrayElements(array, nullptr);
-    return reinterpret_cast<uint8_t *>(nativeArray);
+    return reinterpret_cast<uint8_t*>(nativeArray);
 }
 
-JNIEXPORT jobject JNICALL
-Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(JNIEnv *env, jobject wrapper,
-    jbyteArray planArray)
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
+    JNIEnv *env, jobject wrapper, jbyteArray planArray)
 {
     JNI_FUNC_START
         auto planData = getByteArrayElementsSafe(env, planArray);
@@ -272,20 +265,18 @@ Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFail
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT jlong JNICALL
-Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(JNIEnv *env,
-    jobject wrapper, jbyteArray planArr, jobjectArray splitInfosArr, jobjectArray iterArr, jint stageId,
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(
+    JNIEnv *env, jobject wrapper, jbyteArray planArr, jobjectArray splitInfosArr, jobjectArray iterArr, jint stageId,
     jint partitionId, jlong taskId, jboolean saveInput, jstring spillDir)
 {
     JNI_FUNC_START
+        auto ctx = GetRuntime(env, wrapper);
+        auto &conf = ctx->GetConfMap();
+
         auto buf = getByteArrayElementsSafe(env, planArr);
         auto planSize = env->GetArrayLength(planArr);
-        CodedInputStream codedStream{buf, planSize};
-        // The default recursion limit is 100 which is too smaller for a deep
-        // Substrait plan.
-        codedStream.SetRecursionLimit(100000);
-        ::substrait::Plan substraitPlan;
-        substraitPlan.ParseFromCodedStream(&codedStream);
+        ctx->ParsePlan(buf, planSize, std::nullopt);
+
         // Handle the Java iters
         jsize itersLen = env->GetArrayLength(iterArr);
         std::vector<std::shared_ptr<omniruntime::ResultIterator>> inputIters;
@@ -295,19 +286,9 @@ Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernel
             auto resultIter = std::make_shared<omniruntime::ResultIterator>(std::move(arrayIter));
             inputIters.push_back(std::move(resultIter));
         }
-        std::unordered_map<std::string, std::string> confMap;
-        omniruntime::OmniPlanConverter omniPlanConverter(inputIters, GetMemoryPool(), confMap);
-        std::vector<::substrait::ReadRel_LocalFiles> localFiles;
-        auto omniPlan = omniPlanConverter.ToOmniPlan(substraitPlan, std::move(localFiles));
-
-        std::vector<omniruntime::PlanNodeId> scanIds;
-        std::vector<omniruntime::PlanNodeId> streamIds;
-
-        // todo: add spill dir and scan infos
-        auto wholeStageIter = std::make_unique<omniruntime::WholeStageResultIterator>(
-            MemoryManager::GetGlobalMemoryManager(), omniPlan, scanIds, streamIds, "spillDir", confMap);
-        auto resultIterator = new omniruntime::ResultIterator(std::move(wholeStageIter));
-        return reinterpret_cast<long>(resultIterator);
+        auto spillDirStr = JStringToCString(env, spillDir);
+        auto resultIterator = ctx->CreateResultIterator(spillDirStr, inputIters, conf);
+        return reinterpret_cast<long>(resultIterator.release());
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
@@ -315,10 +296,9 @@ JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOu
     jobject wrapper, jlong iterHandle)
 {
     JNI_FUNC_START
-        const auto iter = reinterpret_cast<omniruntime::ResultIterator *>(iterHandle);
+        const auto iter = reinterpret_cast<omniruntime::ResultIterator*>(iterHandle);
         if (iter == nullptr) {
-            const std::string errorMessage =
-                "When HasNext() is called on a closed iterator,"
+            const std::string errorMessage = "When HasNext() is called on a closed iterator,"
                 " an exception is thrown. To prevent this, consider using the protectInvocationFlow() "
                 "method when creating the iterator in scala side. "
                 "This will allow the HasNext() method to be called multiple times without issue.";
@@ -383,7 +363,7 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
     jobject wrapper, jlong batchHandle)
 {
     JNI_FUNC_START
-        const auto batch = reinterpret_cast<VectorBatch *>(batchHandle);
+        const auto batch = reinterpret_cast<VectorBatch*>(batchHandle);
         if (batch == nullptr) {
             const std::string errorMessage = "vec batch is nullptr";
             env->ThrowNew(runtimeExceptionClass, errorMessage.c_str());
@@ -398,7 +378,7 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIt
     jobject wrapper, jlong iterHandle)
 {
     JNI_FUNC_START
-        const auto iter = reinterpret_cast<omniruntime::ResultIterator *>(iterHandle);
+        const auto iter = reinterpret_cast<omniruntime::ResultIterator*>(iterHandle);
         if (!iter->HasNext()) {
             return -1;
         }
@@ -408,7 +388,21 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIt
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(
-    JNIEnv *env,
-    jobject wrapper,
-    jlong iterHandle){}
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(JNIEnv *env,
+    jobject wrapper, jlong iterHandle) {}
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_createRuntime(JNIEnv *env, jclass,
+    jstring jBackendType, jlong nmmHandle, jbyteArray sessionConf)
+{
+    JNI_FUNC_START
+        auto safeArray = getByteArrayElementsSafe(env, sessionConf);
+        auto length = env->GetArrayLength(sessionConf);
+        auto sparkConf = omniruntime::ParseConfMap(safeArray, length);
+
+        auto runtime = std::make_unique<omniruntime::Runtime>("omni", sparkConf);
+        return reinterpret_cast<jlong>(runtime.release());
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_releaseRuntime(JNIEnv *env, jclass,
+    jlong ctxHandle) {}

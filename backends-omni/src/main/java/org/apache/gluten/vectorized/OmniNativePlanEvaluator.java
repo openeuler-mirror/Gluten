@@ -19,72 +19,67 @@ package org.apache.gluten.vectorized;
 import org.apache.gluten.substrait.type.StructNode;
 import org.apache.gluten.substrait.type.TypeNode;
 import org.apache.gluten.utils.DebugUtil;
+import org.apache.gluten.runtime.OmniRuntime;
+import org.apache.gluten.runtime.OmniRuntimes;
 import org.apache.gluten.validate.NativePlanValidationInfo;
 import org.apache.spark.TaskContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class OmniNativePlanEvaluator {
-  private final OmniPlanEvaluatorJniWrapper jniWrapper;
+    private static final AtomicInteger ID = new AtomicInteger(0);
 
-  private OmniNativePlanEvaluator() {
-    this.jniWrapper = OmniPlanEvaluatorJniWrapper.create();
-  }
+    private final OmniRuntime runtime;
+    private final OmniPlanEvaluatorJniWrapper jniWrapper;
 
-  public static OmniNativePlanEvaluator create(String backendName) {
-    return new OmniNativePlanEvaluator();
-  }
+    private OmniNativePlanEvaluator(OmniRuntime runtime) {
+        this.runtime = runtime;
+        this.jniWrapper = OmniPlanEvaluatorJniWrapper.create(runtime);
+    }
 
-  public NativePlanValidationInfo doNativeValidateWithFailureReason(byte[] subPlan) {
-    return jniWrapper.nativeValidateWithFailureReason(subPlan);
-  }
+    public static OmniNativePlanEvaluator create(String backendName) {
+        return new OmniNativePlanEvaluator(
+                OmniRuntimes.contextInstance(
+                        backendName, String.format("NativePlanEvaluator-%d", ID.getAndIncrement())));
+    }
 
-  public static void injectWriteFilesTempPath(String path) {
-    PlanEvaluatorJniWrapper.injectWriteFilesTempPath(path.getBytes(StandardCharsets.UTF_8));
-  }
+    public NativePlanValidationInfo doNativeValidateWithFailureReason(byte[] subPlan) {
+        return jniWrapper.nativeValidateWithFailureReason(subPlan);
+    }
 
-  // Used by WholeStageTransform to create the native computing pipeline and
-  // return a columnar result iterator.
-  public OmniColumnarBatchOutIterator createKernelWithBatchIterator(
-      byte[] wsPlan,
-      byte[][] splitInfo,
-      List<ColumnarBatchInIterator> iterList,
-      int partitionIndex,
-      String spillDirPath,
-      TypeNode typeNode)
-      throws RuntimeException {
-    final long itrHandle =
-        jniWrapper.nativeCreateKernelWithIterator(
-            wsPlan,
-            splitInfo,
-            iterList.toArray(new OmniColumnarBatchInIterator[0]),
-            TaskContext.get().stageId(),
-            partitionIndex, // TaskContext.getPartitionId(),
-            TaskContext.get().taskAttemptId(),
-            DebugUtil.saveInputToFile(),
-            spillDirPath);
-    List<TypeNode> outputTypes = ((StructNode) typeNode).getFieldTypes();
-    final OmniColumnarBatchOutIterator out = createOutIterator(itrHandle, outputTypes);
-    // todo add spill
-    // runtime
-    //     .memoryManager()
-    //     .addSpiller(
-    //         new Spiller() {
-    //           @Override
-    //           public long spill(MemoryTarget self, Spiller.Phase phase, long size) {
-    //             if (!Spillers.PHASE_SET_SPILL_ONLY.contains(phase)) {
-    //               return 0L;
-    //             }
-    //             return out.spill(size);
-    //           }
-    //         });
-    return out;
-  }
+    public static void injectWriteFilesTempPath(String path) {
+        PlanEvaluatorJniWrapper.injectWriteFilesTempPath(path.getBytes(StandardCharsets.UTF_8));
+    }
 
-  private OmniColumnarBatchOutIterator createOutIterator(long itrHandle,  List<TypeNode> outputTypes) {
-    OmniColumnarBatchOutIterator columnarBatchOutIterator = new OmniColumnarBatchOutIterator(itrHandle);
-    columnarBatchOutIterator.setOutputTypes(outputTypes);
-    return columnarBatchOutIterator;
-  }
+    // Used by WholeStageTransform to create the native computing pipeline and
+    // return a columnar result iterator.
+    public OmniColumnarBatchOutIterator createKernelWithBatchIterator(
+            byte[] wsPlan,
+            byte[][] splitInfo,
+            List<ColumnarBatchInIterator> iterList,
+            int partitionIndex,
+            String spillDirPath,
+            TypeNode typeNode)
+            throws RuntimeException {
+        final long itrHandle =
+                jniWrapper.nativeCreateKernelWithIterator(
+                        wsPlan,
+                        splitInfo,
+                        iterList.toArray(new OmniColumnarBatchInIterator[0]),
+                        TaskContext.get().stageId(),
+                        partitionIndex, // TaskContext.getPartitionId(),
+                        TaskContext.get().taskAttemptId(),
+                        DebugUtil.saveInputToFile(),
+                        spillDirPath);
+        List<TypeNode> outputTypes = ((StructNode) typeNode).getFieldTypes();
+        return createOutIterator(itrHandle, outputTypes);
+    }
+
+    private OmniColumnarBatchOutIterator createOutIterator(long itrHandle, List<TypeNode> outputTypes) {
+        OmniColumnarBatchOutIterator columnarBatchOutIterator = new OmniColumnarBatchOutIterator(itrHandle);
+        columnarBatchOutIterator.setOutputTypes(outputTypes);
+        return columnarBatchOutIterator;
+    }
 }

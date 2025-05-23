@@ -16,6 +16,7 @@
  */
 package org.apache.gluten.vectorized;
 
+import org.apache.gluten.runtime.OmniRuntime;
 import org.apache.gluten.runtime.RuntimeAware;
 import org.apache.gluten.validate.NativePlanValidationInfo;
 
@@ -25,44 +26,46 @@ import org.apache.gluten.validate.NativePlanValidationInfo;
  * this file.
  */
 public class OmniPlanEvaluatorJniWrapper implements RuntimeAware {
+    private final OmniRuntime runtime;
 
-  private OmniPlanEvaluatorJniWrapper() {
-  }
+    private OmniPlanEvaluatorJniWrapper(OmniRuntime runtime) {
+        this.runtime = runtime;
+    }
 
-  public static OmniPlanEvaluatorJniWrapper create() {
-    return new OmniPlanEvaluatorJniWrapper();
-  }
+    public static OmniPlanEvaluatorJniWrapper create(OmniRuntime runtime) {
+        return new OmniPlanEvaluatorJniWrapper(runtime);
+    }
 
-  @Override
-  public long rtHandle() {
-    return -1;
-  }
+    @Override
+    public long rtHandle() {
+        return runtime.getHandle();
+    }
 
-  public static native void injectWriteFilesTempPath(byte[] path);
+    public static native void injectWriteFilesTempPath(byte[] path);
 
-  /**
-   * Validate the Substrait plan in native compute engine.
-   *
-   * @param subPlan the Substrait plan in binary format.
-   * @return whether the computing of this plan is supported in native and related info.
-   */
-  native NativePlanValidationInfo nativeValidateWithFailureReason(byte[] subPlan);
+    /**
+     * Validate the Substrait plan in native compute engine.
+     *
+     * @param subPlan the Substrait plan in binary format.
+     * @return whether the computing of this plan is supported in native and related info.
+     */
+    native NativePlanValidationInfo nativeValidateWithFailureReason(byte[] subPlan);
 
-  public native String nativePlanString(byte[] substraitPlan, Boolean details);
+    public native String nativePlanString(byte[] substraitPlan, Boolean details);
 
-  /**
-   * Create a native compute kernel and return a columnar result iterator.
-   *
-   * @return iterator instance id
-   */
-  public native long nativeCreateKernelWithIterator(
-      byte[] wsPlan,
-      byte[][] splitInfo,
-      ColumnarBatchInIterator[] batchItr,
-      int stageId,
-      int partitionId,
-      long taskId,
-      boolean saveInputToFile,
-      String spillDir)
-      throws RuntimeException;
+    /**
+     * Create a native compute kernel and return a columnar result iterator.
+     *
+     * @return iterator instance id
+     */
+    public native long nativeCreateKernelWithIterator(
+            byte[] wsPlan,
+            byte[][] splitInfo,
+            ColumnarBatchInIterator[] batchItr,
+            int stageId,
+            int partitionId,
+            long taskId,
+            boolean saveInputToFile,
+            String spillDir)
+            throws RuntimeException;
 }

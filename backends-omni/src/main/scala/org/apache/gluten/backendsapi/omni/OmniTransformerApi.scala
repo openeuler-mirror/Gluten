@@ -16,11 +16,13 @@
  */
 package org.apache.gluten.backendsapi.omni
 
-import org.apache.gluten.backendsapi.TransformerApi
+import org.apache.gluten.backendsapi.{BackendsApiManager, TransformerApi}
 import org.apache.gluten.execution.WriteFilesExecTransformer
 import org.apache.gluten.expression.ConverterUtils
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode}
 import org.apache.gluten.utils.InputPartitionsUtil
+import org.apache.gluten.runtime.OmniRuntimes
+import org.apache.gluten.vectorized.OmniPlanEvaluatorJniWrapper
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
@@ -29,6 +31,7 @@ import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, PartitionDi
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.{DataType, DecimalType, StructType}
 import org.apache.spark.util.collection.BitSet
+import org.apache.spark.task.TaskResources
 
 import com.google.protobuf
 import com.google.protobuf.{Any, Message, StringValue}
@@ -75,7 +78,13 @@ class OmniTransformerApi extends TransformerApi with Logging {
   }
 
   override def getNativePlanString(substraitPlan: Array[Byte], details: Boolean): String = {
-    "Omni Test"
+    TaskResources.runUnsafe {
+      val jniWrapper = OmniPlanEvaluatorJniWrapper.create(
+        OmniRuntimes.contextInstance(
+          BackendsApiManager.getBackendName,
+          "OmniTransformerApi#getNativePlanString"))
+      jniWrapper.nativePlanString(substraitPlan, details)
+    }
   }
 
   override def packPBMessage(message: Message): protobuf.Any = Any.pack(message, "")

@@ -32,43 +32,33 @@ extern "C" {
  * Method:  nativeMake
  * Signature:   ()V
  */
-JNIEXPORT jlong JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMake(
-    JNIEnv *env, jobject, jstring partitioning_name_jstr, jint num_partitions,
-    jstring jInputType, jint jNumCols, jint buffer_size,
-    jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs,
-    jstring local_dirs_jstr, jlong compress_block_size,
-    jint spill_batch_row, jlong task_spill_memory_threshold, jlong executor_spill_memory_threshold);
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMake(JNIEnv *env, jobject,
+    jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
+    jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs, jstring local_dirs_jstr,
+    jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
+    jlong executor_spill_memory_threshold);
 
-JNIEXPORT jlong JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(
-    JNIEnv *env, jobject jObj, jlong splitter_id, jlong jVecBatchAddress);
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(JNIEnv *env, jobject jObj,
+    jlong splitter_id, jlong jVecBatchAddress);
 
-JNIEXPORT jlong JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSplit(
-    JNIEnv *env, jobject jObj, jlong splitter_id, jlong jVecBatchAddress);
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSplit(JNIEnv *env, jobject jObj,
+    jlong splitter_id, jlong jVecBatchAddress);
 
-JNIEXPORT jobject JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(
-    JNIEnv *env, jobject, jlong splitter_id);
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(JNIEnv *env, jobject,
+    jlong splitter_id);
 
-JNIEXPORT jobject JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowStop(
-    JNIEnv *env, jobject, jlong splitter_id);
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowStop(JNIEnv *env, jobject,
+    jlong splitter_id);
 
 JNIEXPORT void JNICALL
-Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(
-    JNIEnv *env, jobject, jlong splitter_id);
+Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(JNIEnv *env, jobject, jlong splitter_id);
 
-JNIEXPORT jobject JNICALL
-Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(JNIEnv *env, jobject wrapper,
-    jbyteArray planArray);
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
+    JNIEnv *env, jobject wrapper, jbyteArray planArray);
 
-JNIEXPORT jlong JNICALL
-Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(JNIEnv *env,
-    jobject wrapper,
-    jbyteArray planArr, jobjectArray splitInfosArr, jobjectArray iterArr, jint stageId, jint partitionId, jlong taskId,
-    jboolean saveInput, jstring spillDir);
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(
+    JNIEnv *env, jobject wrapper, jbyteArray planArr, jobjectArray splitInfosArr, jobjectArray iterArr, jint stageId,
+    jint partitionId, jlong taskId, jboolean saveInput, jstring spillDir);
 
 JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeHasNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
@@ -79,10 +69,14 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 
-JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(
-    JNIEnv *env,
-    jobject wrapper,
-    jlong iterHandle);
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(JNIEnv *env,
+    jobject wrapper, jlong iterHandle);
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_createRuntime(JNIEnv *env, jclass,
+    jstring jBackendType, jlong nmmHandle, jbyteArray sessionConf);
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_releaseRuntime(JNIEnv *env, jclass,
+    jlong ctxHandle);
 
 #ifdef __cplusplus
 }

@@ -735,6 +735,35 @@ object GlutenConfig {
     GLUTEN_CONFIG_PREFIX + backendName
   }
 
+  def getOmniConf(
+                   backendName: String,
+                   conf: scala.collection.Map[String, String]): util.Map[String, String] = {
+    val nativeConfMap = new util.HashMap[String, String]()
+    val keys = Set(
+      ANSI_ENABLED.key,
+      LEGACY_STATISTICAL_AGGREGATE.key,
+      COLUMNAR_OMNI_SHUFFLE_COMPRESS_BLOCK_SIZE.key,
+      COLUMNAR_OMNI_SHUFFLE_TASK_SPILL_MEMORY_THRESHOLD.key,
+      COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM.key,
+      COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD.key,
+      ENABLE_OMNI_EXP_CHECK.key,
+      ENABLE_OMNI_UNIXTIME_FUNCTION.key,
+      ENABLE_COLUMNAR_TOP_N_SORT.key,
+      ENABLE_SHARE_BROADCAST_JOIN_HASH_TABLE.key,
+      ENABLE_SHARE_BROADCAST_JOIN_NESTED_TABLE.key,
+      ENABLE_JOIN_REORDER_ENHANCE.key,
+      ENABLE_SHUFFLE_BATCH_MERGE.key,
+      ENABLE_OMNI_ROW_SHUFFLE.key,
+      COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD.key,
+      COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES.key,
+      COLUMNAR_OMNI_MAX_ROW_COUNT.key,
+      COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
+      COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
+    nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
+    // return
+    nativeConfMap
+  }
+
   /** Get dynamic configs. */
   def getNativeSessionConf(
       backendName: String,

@@ -32,6 +32,7 @@ jclass threadClass;
 jclass serializedColumnarBatchIteratorClass;
 jclass vecBatchCls;
 jclass infoCls;
+jclass runtimeAwareClass;
 
 jmethodID jsonMethodInt;
 jmethodID jsonMethodLong;
@@ -48,6 +49,7 @@ jmethodID serializedColumnarBatchIteratorHasNext;
 jmethodID serializedColumnarBatchIteratorNext;
 jmethodID vecBatchInitMethodId;
 jmethodID method;
+jmethodID runtimeAwareCtxHandle;
 
 static jint JNI_VERSION = JNI_VERSION_1_8;
 
@@ -145,6 +147,8 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     vecBatchCls = CreateGlobalClassReference(env, "nova/hetu/omniruntime/vector/VecBatch");
     vecBatchInitMethodId = env->GetMethodID(vecBatchCls, "<init>", "(J[J[J[J[J[I[II)V");
 
+    runtimeAwareClass = CreateGlobalClassReference(env, "Lorg/apache/gluten/runtime/RuntimeAware;");
+    runtimeAwareCtxHandle = getMethodIdOrError(env, runtimeAwareClass, "rtHandle", "()J");
     infoCls = env->FindClass("Lorg/apache/gluten/validate/NativePlanValidationInfo;");
     if (infoCls == nullptr) {
         std::string errorMessage = "Unable to CreateGlobalClassReferenceOrError for NativePlanValidationInfo";
@@ -165,6 +169,15 @@ void JNI_OnUnload(JavaVM* vm, void* reserved)
     env->DeleteGlobalRef(jsonClass);
     env->DeleteGlobalRef(arrayListClass);
     env->DeleteGlobalRef(threadClass);
+}
+
+omniruntime::Runtime *GetRuntime(JNIEnv *env, jobject runtimeAware)
+{
+    int64_t ctxHandle = env->CallLongMethod(runtimeAware, runtimeAwareCtxHandle);
+    CheckException(env);
+    auto ctx = reinterpret_cast<omniruntime::Runtime*>(ctxHandle);
+    OMNI_CHECK(ctx != nullptr, "FATAL: resource instance should not be null.");
+    return ctx;
 }
 
 #endif //THESTRAL_PLUGIN_MASTER_JNI_COMMON_CPP

@@ -24,6 +24,7 @@
 #include "util/omni_exception.h"
 #include "common/common.h"
 #include "compute/ResultIterator.h"
+#include "compute/Runtime.h"
 
 
 class JniColumnarBatchIterator : public omniruntime::ColumnarBatchIterator {
@@ -64,6 +65,15 @@ static inline void AttachCurrentThreadAsDaemonOrThrow(JavaVM* vm, JNIEnv** out) 
     if (getEnvStat != JNI_OK) {
         throw std::runtime_error("Failed to attach current thread to JVM.");
     }
+}
+
+static inline std::string JStringToCString(JNIEnv *env, jstring string)
+{
+    int32_t clen = env->GetStringUTFLength(string);
+    int32_t jlen = env->GetStringLength(string);
+    char buffer[clen];
+    env->GetStringUTFRegion(string, 0, jlen, buffer);
+    return std::string(buffer, clen);
 }
 
 static inline void CheckException(JNIEnv* env) {
@@ -114,6 +124,8 @@ jclass CreateGlobalClassReference(JNIEnv* env, const char* class_name);
 
 jmethodID GetMethodID(JNIEnv* env, jclass this_class, const char* name, const char* sig);
 
+omniruntime::Runtime *GetRuntime(JNIEnv *env, jobject runtimeAware);
+
 #define JNI_FUNC_START try {
 
 #define JNI_FUNC_END(exceptionClass)                \
@@ -160,6 +172,7 @@ extern jclass threadClass;
 extern jclass serializedColumnarBatchIteratorClass;
 extern jclass vecBatchCls;
 extern jclass infoCls;
+extern jclass runtimeAwareClass;
 
 extern jmethodID jsonMethodInt;
 extern jmethodID jsonMethodLong;
@@ -176,5 +189,5 @@ extern jmethodID serializedColumnarBatchIteratorHasNext;
 extern jmethodID serializedColumnarBatchIteratorNext;
 extern jmethodID vecBatchInitMethodId;
 extern jmethodID method;
-
+extern jmethodID runtimeAwareCtxHandle;
 #endif //THESTRAL_PLUGIN_MASTER_JNI_COMMON_H
