@@ -35,7 +35,6 @@ add_subdirectory(src)
 
 message(STATUS "Build by ${CMAKE_BUILD_TYPE}")
 
-option(BUILD_CPP_TESTS "test" ON)
 message(STATUS "Option BUILD_CPP_TESTS: ${BUILD_CPP_TESTS}")
 if(${BUILD_CPP_TESTS})
     enable_testing()

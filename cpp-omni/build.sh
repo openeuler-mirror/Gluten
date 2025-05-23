@@ -50,7 +50,7 @@ if [ $# != 0 ] ; then
     options="$options -DCMAKE_BUILD_TYPE=Release"
   elif [ $1 = 'test' ];then
     echo "-- Enable Test"
-    options="$options -DCMAKE_BUILD_TYPE=Test -DBUILD_CPP_TESTS=TRUE"
+    options="$options -DCMAKE_BUILD_TYPE=Test"
   elif [ $1 = 'coverage' ]; then
     echo "-- Enable Coverage"
     options="$options -DCMAKE_BUILD_TYPE=Debug -DDEBUG_RUNTIME=ON -DCOVERAGE=ON"
@@ -58,10 +58,10 @@ if [ $# != 0 ] ; then
     echo "-- Enable Release"
     options="$options -DCMAKE_BUILD_TYPE=Release"
   fi
-  cmake .. $options
+  cmake .. $options -DBUILD_CPP_TESTS=ON
 else
   echo "-- Enable Release"
-  cmake .. -DCMAKE_BUILD_TYPE=Release
+  cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CPP_TESTS=OFF
 fi
 
 make -j5
