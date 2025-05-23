@@ -4,7 +4,10 @@
  */
 
 #include "SubstraitToOmniExpr.h"
+#include "expression/parserhelper.h"
+#include "codegen/func_registry.h"
 
+constexpr const char* SUBSTRAIT_PARSE_ERROR = "SUBSTRAIT_PARSE_ERROR";
 namespace omniruntime {
 
 DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal)
@@ -78,8 +81,7 @@ std::shared_ptr<const FieldExpr> SubstraitOmniExprConverter::ToOmniExpr(
 
             const auto *tmp = &directRef.struct_field();
             auto idx = tmp->field();
-            auto fieldAccess = std::make_shared<FieldExpr>(idx, inputType->GetType(idx));
-            return fieldAccess;
+            return new FieldExpr(idx,inputType->GetType(idx));
         }
         default:
             OMNI_THROW("SUBSTRAIT_ERROR:", "Substrait conversion not supported for Reference '{}'",
@@ -88,7 +90,53 @@ std::shared_ptr<const FieldExpr> SubstraitOmniExprConverter::ToOmniExpr(
 }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expression::ScalarFunction &substraitFunc,
-    const DataTypesPtr &inputType) {}
+    const DataTypesPtr &inputType)
+    {
+    const auto& omniFunction = SubstraitParser::FindOmniFunction(functionMap_,substraitFunc,function_reference());
+    const auto & outputType = SubstraitParser::ParseType(substraitFunc.output_type());
+    auto type = omniFunction.first;
+    auto funcName = omniFunction.second;
+    Operator op = StringToOperator(funcName);
+    if(op == Operator::INVALIDOP){
+        return nullptr;
+    }
+    std::vector<Expr*> args;
+    args.reserve(substraitFunc.arguments().size());
+    for(const auto& sArg : substraitFunc.arguments()){
+    args.emplace_back(ToOmniExpr(sArg.value(),inputType));
+    }
+    if(type == IS_NULL_OMNI_EXPR_TYPE){
+    if(args[0] == nullptr){
+        return nullptr;
+    }
+    return new IsNullExpr(args[0]);
+    }else if(type == UNARY_OMNI_EXPR_TYPE){
+    if(args[0]==nullptr){
+    return nullptr;
+    }
+    return new UnaryExpr(op,args[0],std::make_shared<BooleanDataType>());
+    }else if (type == BINARY_OMNI_EXPR_TYPE){
+    if(outputType == nullptr){
+    return nullptr;
+    }
+    if(args[0]==nullptr){
+    return nullptr;
+    }
+    if(args[1]==nullptr){
+        delete args[0];
+        return nullptr;
+        }
+        return new BinaryExpr(op,args[0],args[1],std::make_shared<BooleanDataType>())
+    }else if(type == FUNCTION_OMNI_EXPR_TYPE){
+    if (funcName = "RLike" && args.size()==2){
+    auto secondArg =args[1];
+    if(secondArg->GetType()!=ExprType::LITERAL_E){
+    Expr::DeleteExprs(args);
+    return nullptr;
+    }
+    }
+    }
+    }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expression::SingularOrList &singularOrList,
     const DataTypesPtr &inputType) {}

@@ -11,8 +11,8 @@ case class OmniProjectExecTransformer(projectList: Seq[NamedExpression], child: 
     copy(child = newChild)
 
 
-  override protected def doValidateInternal(): ValidationResult = {
-    ValidationResult.failed("project unsupported yet")
-  }
+//  override protected def doValidateInternal(): ValidationResult = {
+//    ValidationResult.failed("project unsupported yet")
+//  }
 
 }

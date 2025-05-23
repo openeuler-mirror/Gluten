@@ -20,6 +20,16 @@
 namespace omniruntime {
 /// This class contains some common functions used to parse Substrait
 /// components, and convert them into recognizable representations.
+enum SubstraitToOmniExprType {
+    IS_NULL_OMNI_EXPR_TYPE = 0,
+    UNARY_OMNI_EXPR_TYPE,
+    BINARY_OMNI_EXPR_TYPE,
+    FUNCTION_OMNI_EXPR_TYPE,
+    COALESCE_OMNI_EXPR_TYPE,
+    HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE
+}
+
+constexpr const char* SUBSTRAIT_PARSE_ERROR  = "SUBSTRAIT_PARSE_ERROR";
 class SubstraitParser {
 public:
     /// Used to parse Substrait NamedStruct.

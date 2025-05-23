@@ -3,6 +3,8 @@
  * Description: print expression tree methods
  */
 
+#include <fmt/core.h>
+#include <fmt/format.h>
 #include <string>
 #include "google/protobuf/wrappers.pb.h"
 #include "SubstraitParser.h"
@@ -22,6 +24,14 @@ std::vector<type::DataTypePtr> SubstraitParser::ParseNamedStruct(const ::substra
         typeList.emplace_back(ParseType(type, asLowerCase));
     }
     return typeList;
+}
+
+std::string SubstraitParser::getNameBeforeDelimiter(const std::string& signature, const std::string& delimiter) {
+  std::size_t pos = signature.find(delimiter);
+  if (pos == std::string::npos) {
+    return signature;
+  }
+  return signature.substr(0, pos);
 }
 
 type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitType, bool asLowerCase)
@@ -63,6 +73,14 @@ type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitT
         default:
             OMNI_THROW("Substrait Error:", "Parsing for Substrait type not supported: {}", substraitType.DebugString());
     }
+}
+
+std::string SubstraitParser::FindOmniFunction(
+    const std::unordered_map<uint64_t, std::string>& functionMap,
+    uint64_t id) {
+  std::string funcSpec = findFunctionSpec(functionMap, id);
+  std::string funcName = getNameBeforeDelimiter(funcSpec);
+  return mapToOmniFunction(funcName);
 }
 
 std::string SubstraitParser::FindFunctionSpec(const std::unordered_map<uint64_t, std::string> &functionMap,
