@@ -10,9 +10,4 @@ case class OmniProjectExecTransformer(projectList: Seq[NamedExpression], child: 
   override protected def withNewChildInternal(newChild: SparkPlan): OmniProjectExecTransformer =
     copy(child = newChild)
 
-
-//  override protected def doValidateInternal(): ValidationResult = {
-//    ValidationResult.failed("project unsupported yet")
-//  }
-
 }

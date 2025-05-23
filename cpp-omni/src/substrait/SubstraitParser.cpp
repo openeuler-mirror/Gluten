@@ -4,7 +4,6 @@
  */
 
 #include <fmt/core.h>
-#include <fmt/format.h>
 #include <string>
 #include "google/protobuf/wrappers.pb.h"
 #include "SubstraitParser.h"
@@ -26,7 +25,7 @@ std::vector<type::DataTypePtr> SubstraitParser::ParseNamedStruct(const ::substra
     return typeList;
 }
 
-std::string SubstraitParser::getNameBeforeDelimiter(const std::string& signature, const std::string& delimiter) {
+std::string SubstraitParser::GetNameBeforeDelimiter(const std::string& signature, const std::string& delimiter) {
   std::size_t pos = signature.find(delimiter);
   if (pos == std::string::npos) {
     return signature;

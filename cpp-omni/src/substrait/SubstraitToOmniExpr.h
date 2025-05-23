@@ -25,32 +25,32 @@ public:
 
     /// Stores the variant and its type.
     // struct TypedVariant {
-    //   variant veloxVariant;
+    //   variant OmniVariant;
     //   DataTypePtr variantType;
     // };
 
-    /// Convert Substrait Field into Velox Field Expression.
+    /// Convert Substrait Field into Omni Field Expression.
     static std::shared_ptr<const FieldExpr> ToOmniExpr(const ::substrait::Expression::FieldReference &substraitField,
         const DataTypesPtr &inputType);
 
-    /// Convert Substrait ScalarFunction into Velox Expression.
+    /// Convert Substrait ScalarFunction into Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression::ScalarFunction &substraitFunc,
         const DataTypesPtr &inputType);
 
-    /// Convert Substrait SingularOrList into Velox Expression.
+    /// Convert Substrait SingularOrList into Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression::SingularOrList &singularOrList,
         const DataTypesPtr &inputType);
 
-    /// Convert Substrait CastExpression to Velox Expression.
+    /// Convert Substrait CastExpression to Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression::Cast &castExpr, const DataTypesPtr &inputType);
 
     /// Create expression for extract.
     static TypedExprPtr toExtractExpr(const std::vector<TypedExprPtr> &params, const DataTypePtr &outputType);
 
-    /// Used to convert Substrait Literal into Velox Expression.
+    /// Used to convert Substrait Literal into Omni Expression.
     std::shared_ptr<const LiteralExpr> ToOmniExpr(const ::substrait::Expression::Literal &substraitLit);
 
-    /// Convert Substrait Expression into Velox Expression.
+    /// Convert Substrait Expression into Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression &substraitExpr, const DataTypesPtr &inputType);
 
     /// Convert Substrait IfThen into switch or if expression.
@@ -73,7 +73,7 @@ private:
     /// name.
     std::unordered_map<uint64_t, std::string> functionMap_;
 
-    // The map storing the Substrait extract function input field and velox
+    // The map storing the Substrait extract function input field and Omni
     // function name.
     static std::unordered_map<std::string, std::string> extractDatetimeFunctionMap_;
 };

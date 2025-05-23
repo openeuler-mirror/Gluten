@@ -77,7 +77,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
         substraitExprName: String,
         exprs: Seq[ExpressionTransformer],
         original: HashExpression[_]): ExpressionTransformer = {
-      VeloxHashExpressionTransformer(substraitExprName, exprs, original)
+    OmniHashExpressionTransformer(substraitExprName, exprs, original)
     }
 
   /** Generate HashAggregateExecTransformer. */
