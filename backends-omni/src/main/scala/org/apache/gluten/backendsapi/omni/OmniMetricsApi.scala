@@ -166,7 +166,13 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       metrics: Map[String, SQLMetric]): MetricsUpdater = new MockMetricsUpdater()
 
   override def genColumnarBroadcastExchangeMetrics(
-      sparkContext: SparkContext): Map[String, SQLMetric] = Map.empty
+      sparkContext: SparkContext): Map[String, SQLMetric] =
+    Map(
+      "dataSize" -> SQLMetrics.createSizeMetric(sparkContext, "data size"),
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "collectTime" -> SQLMetrics.createTimingMetric(sparkContext, "time to collect"),
+      "broadcastTime" -> SQLMetrics.createTimingMetric(sparkContext, "time to broadcast")
+    )
 
   override def genColumnarSubqueryBroadcastMetrics(
       sparkContext: SparkContext): Map[String, SQLMetric] = Map.empty

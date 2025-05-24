@@ -16,13 +16,15 @@
  */
 package org.apache.gluten.backendsapi.omni
 
+import nova.hetu.omniruntime.vector.VecBatch
+import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
 import org.apache.gluten.expression.ExpressionTransformer
 import org.apache.gluten.extension.columnar.FallbackTags
-
-import org.apache.spark.ShuffleDependency
+import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
+import org.apache.spark.{ShuffleDependency, SparkException}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
@@ -35,8 +37,8 @@ import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
 import org.apache.spark.sql.execution.{ColumnarShuffleExchangeExec, ColumnarWriteFilesExec, GenerateExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.FileFormat
-import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
-import org.apache.spark.sql.execution.joins.BuildSideRelation
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
+import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -241,7 +243,65 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       mode: BroadcastMode,
       child: SparkPlan,
       numOutputRows: SQLMetric,
-      dataSize: SQLMetric): BuildSideRelation = null
+      dataSize: SQLMetric): BuildSideRelation = {
+
+    val sparkContext = child.session.sparkContext
+    val nullBatchCount = sparkContext.longAccumulator("nullBatchCount")
+
+    var nullRelationFlag = false
+
+    val input = child
+      .executeColumnar()
+      .mapPartitions {
+        iter =>
+          val serializer = VecBatchSerializerFactory.create()
+          mode match {
+            case hashRelMode: HashedRelationBroadcastMode =>
+              nullRelationFlag = hashRelMode.isNullAware
+            case _ =>
+          }
+          new Iterator[Array[Byte]] {
+            override def hasNext: Boolean = {
+              iter.hasNext
+            }
+
+            override def next(): Array[Byte] = {
+              val batch = iter.next()
+              var index = 0
+              // When nullRelationFlag is true, it means anti-join
+              // Only one column of data is involved in the anti-
+              if (nullRelationFlag && batch.numCols() > 0) {
+                val vec = batch.column(0)
+                if (vec.hasNull) {
+                  try {
+                    nullBatchCount.add(1)
+                  } catch {
+                    case e: Exception =>
+                      throw new SparkException(s"compute null BatchCount error : ${e.getMessage}.")
+                  }
+                }
+              }
+              val vectors = transColBatchToOmniVecs(batch)
+              val vecBatch = new VecBatch(vectors, batch.numRows())
+              numOutputRows += vecBatch.getRowCount
+              val vecBatchSer = serializer.serialize(vecBatch)
+              dataSize += vecBatchSer.length
+              // close omni vec
+              vecBatch.releaseAllVectors()
+              vecBatch.close()
+              vecBatchSer
+            }
+          }
+      }
+      .collect()
+    val relation = OmniColumnarBuildSideRelation(mode, child.output, input)
+    if (dataSize.value >= BroadcastExchangeExec.MAX_BROADCAST_TABLE_BYTES) {
+      throw new SparkException(
+        s"Cannot broadcast the table that is larger than 8GB: ${dataSize.value >> 30} GB")
+    }
+    // todo: add EmptyHashedRelation & HashedRelationWithAllNullKeys
+    relation
+  }
 
   /** Create ColumnarWriteFilesExec */
   override def createColumnarWriteFilesExec(
