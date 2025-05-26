@@ -4,7 +4,6 @@
  */
 
 #include "SubstraitToOmniExpr.h"
-#include "codegen/func_registry.h"
 #include "expression/parserhelper.h"
 
 constexpr const char *SUBSTRAIT_PARSE_ERROR = "SUBSTRAIT_PARSE_ERROR";
@@ -20,16 +19,20 @@ DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal) {
   case ::substrait::Expression_Literal::LiteralTypeCase::kI32:
     return IntType();
   case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
+    return LongType();
   case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
     return DoubleType();
   case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
     auto precision = literal.decimal().precision();
     auto scale = literal.decimal().scale();
-    auto type = Decimal64Type(precision, scale);
+    auto type = Decimal128Type(precision, scale);
+    if (precision < DECIMAL64_DEFAULT_PRECISION) {
+      type = Decimal64Type(precision, scale);
+    }
     return type;
   }
   case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
-    return Date64Type();
+    return Date32Type();
   case ::substrait::Expression_Literal::LiteralTypeCase::kTimestamp:
     return TimestampType();
   case ::substrait::Expression_Literal::LiteralTypeCase::kString:
@@ -37,7 +40,9 @@ DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal) {
   case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
     return VarcharType();
   default:
-    return nullptr;
+    OMNI_THROW(
+        "GET_SCALAR_TYPE_ERROR:", "the given typeCase is not supported: '{}' ",
+        std::to_string(typeCase));
   }
 }
 
@@ -60,23 +65,7 @@ bool IsNullOnFailure(
   }
 }
 
-template <DataTypeId kind>
-std::shared_ptr<LiteralExpr>
-ConstructConstantVector(const ::substrait::Expression::Literal &substraitLit,
-                        const DataTypePtr &type) {
-  if (substraitLit.has_binary()) {
-    return std::make_shared<LiteralExpr>(
-        new std::string(
-            SubstraitParser::GetLiteralValue<std::string>(substraitLit)),
-        type);
-  } else {
-    using T = typename NativeType<kind>::type;
-    return std::make_shared<LiteralExpr>(
-        SubstraitParser::GetLiteralValue<T>(substraitLit), type);
-  }
-}
-
-std::shared_ptr<const FieldExpr> SubstraitOmniExprConverter::ToOmniExpr(
+TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::FieldReference &substraitField,
     const DataTypesPtr &inputType) {
   auto typeCase = substraitField.reference_type_case();
@@ -87,6 +76,7 @@ std::shared_ptr<const FieldExpr> SubstraitOmniExprConverter::ToOmniExpr(
 
     const auto *tmp = &directRef.struct_field();
     auto idx = tmp->field();
+    // not support complicated types
     return new FieldExpr(idx, inputType->GetType(idx));
   }
   default:
@@ -100,41 +90,35 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::ScalarFunction &substraitFunc,
     const DataTypesPtr &inputType) {
   const auto &omniFunction = SubstraitParser::FindOmniFunction(
-      functionMap_, substraitFunc, function_reference());
-  const auto &outputType =
-      SubstraitParser::ParseType(substraitFunc.output_type());
+      functionMap_, substraitFunc.function_reference());
+  const auto &outputType = SubstraitParser::ParseType(substraitFunc.output_type());
   auto type = omniFunction.first;
   auto funcName = omniFunction.second;
   Operator op = StringToOperator(funcName);
-  if (op == Operator::INVALIDOP) {
-    return nullptr;
-  }
   std::vector<Expr *> args;
   args.reserve(substraitFunc.arguments().size());
   for (const auto &sArg : substraitFunc.arguments()) {
     args.emplace_back(ToOmniExpr(sArg.value(), inputType));
   }
-  if (type == IS_NULL_OMNI_EXPR_TYPE) {
-    if (args[0] == nullptr) {
-      return nullptr;
-    }
+  if (type == IS_NOT_NULL_OMNI_EXPR_TYPE) {
+    OMNI_CHECK(args[0] != nullptr,"args[0] is null");
+    auto isNullExpr = new IsNullExpr(args[0]);
+    return new UnaryExpr(Operator::NOT,isNullExpr,std::make_shared<BooleanDataType>());
+  } else if (type == IS_NULL_OMNI_EXPR_TYPE) {
+    OMNI_CHECK(args[0] != nullptr,"args[0] is null");
     return new IsNullExpr(args[0]);
   } else if (type == UNARY_OMNI_EXPR_TYPE) {
-    if (args[0] == nullptr) {
+    OMNI_CHECK(args[0] != nullptr,"args[0] is null");
+    if (op == Operator::INVALIDOP) {
       return nullptr;
     }
     auto funcStr =
         functionMap_.find(substraitFunc.function_reference())->second;
-    if (funcStr.compare("is_not_null")) {
-      return new UnaryExpr(op, new IsNullExpr(args[0]),
-                           std::make_shared<BooleanDataType>())
-    }
     return new UnaryExpr(op, args[0], std::make_shared<BooleanDataType>());
   } else if (type == BINARY_OMNI_EXPR_TYPE) {
-    if (outputType == nullptr) {
-      return nullptr;
-    }
-    if (args[0] == nullptr) {
+    OMNI_CHECK(outputType != nullptr,"outputType is null");
+    OMNI_CHECK(args[0] != nullptr,"args[0] is null");
+    if (op == Operator::INVALIDOP) {
       return nullptr;
     }
     if (args[1] == nullptr) {
@@ -142,9 +126,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       return nullptr;
     }
     return new BinaryExpr(op, args[0], args[1],
-                          std::make_shared<BooleanDataType>())
+                          std::move(outputType));
   } else if (type == FUNCTION_OMNI_EXPR_TYPE) {
-    if (funcName = "RLike" && args.size() == 2) {
+    if (funcName == "RLike" && args.size() == 2) {
       auto secondArg = args[1];
       if (secondArg->GetType() != ExprType::LITERAL_E) {
         Expr::DeleteExprs(args);
@@ -160,23 +144,20 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     std::vector<DataTypeId> argTypes(args.size());
     std::transform(
         args.begin(), args.end(), argTypes.begin(),
-        [](Expr *expr) -> DataTypeOd { return expr->GetReturnTypeId(); });
+        [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
     auto signature = FunctionSignature(funcName, argTypes, outputType->GetId());
-    auto function =
-        omniruntime::codegen::FunctionRegistry::LookupFunction(&signature);
-  } else if (type == COALESEC_OMNI_EXPR_TYPE) {
-    if (args[0] == nullptr) {
-      return nullptr;
-    }
+  } else if (type == COALESCE_OMNI_EXPR_TYPE) {
+    OMNI_CHECK(args[0] != nullptr,"args[0] is null");
     if (args[1] == nullptr) {
       delete args[0];
       return nullptr;
     }
     return new CoalesceExpr(args[0], args[1]);
   } else if (type == HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE) {
-    // todo
+    throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
+                                                    "The UDF function Unsupported yet");
   } else {
-    throw new omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERRORS,
+    throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
                                                     "function Unsupported yet");
   }
 }
@@ -203,11 +184,11 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::Cast &castExpr,
     const DataTypesPtr &inputType) {
-  auto retType = SubstrairParser::ParseType(castExpr.type());
+  auto retType = SubstraitParser::ParseType(castExpr.type());
   auto expr = ToOmniExpr(castExpr.input(), inputType);
-  auto retTypeOd = retType->GetId();
+  auto retTypeId = retType->GetId();
   auto argReturnType = expr->GetReturnType();
-  if (retType == argReturnType->GetId()) {
+  if (retTypeId == argReturnType->GetId()) {
     if (TypeUtil::IsStringType(argReturnType->GetId())) {
       auto argWidth =
           static_cast<VarcharDataType *>(argReturnType.get())->GetWidth();
@@ -227,7 +208,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
         return expr;
       }
     } else {
-      return expr
+      return expr;
     }
   }
   std::vector<Expr *> args;
@@ -236,19 +217,10 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
   std::transform(
       args.begin(), args.end(), argTypes.begin(),
       [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
-  auto signature = FunctionSignature("CAST", argsTypes, retTypeId);
-  auto function =
-      omniruntime::codegen::FunctionRegistry::LookupFunction(&signature);
-  if (function != nullptr) {
-    return new FuncExpr("CAST", args, std::move(retType), function);
-  }
-  return nullptr;
+  return new FuncExpr("CAST", args, std::move(retType));
 }
 
-TypedExprPtr SubstraitOmniExprConverter::toExtractExpr(
-    const std::vector<TypedExprPtr> &params, const DataTypePtr &outputType) {}
-
-std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::ToOmniExpr(
+TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::Literal &substraitLit) {
   auto typeCase = substraitLit.literal_type_case();
   switch (typeCase) {
@@ -270,7 +242,7 @@ std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::ToOmniExpr(
   case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar: {
     auto *stringVal = new std::string(substraitLit.var_char().value());
     return new LiteralExpr(stringVal,
-                           VarcharType(substrait.var_char().length()));
+                           VarcharType(substraitLit.var_char().length()));
   }
   case ::substrait::Expression_Literal::LiteralTypeCase::kFixedChar: {
     auto *stringVal = new std::string(substraitLit.fixed_char().data());
@@ -279,7 +251,7 @@ std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::ToOmniExpr(
   }
   case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
     auto decimal = substraitLit.decimal().value();
-    auto precision = substraitLit.decimal.precision();
+    auto precision = substraitLit.decimal().precision();
     auto scale = substraitLit.decimal().scale();
     if (precision <= DECIMAL64_DEFAULT_PRECISION) {
       int128_t decimalValue;
@@ -298,7 +270,7 @@ std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::ToOmniExpr(
       auto precision =
           std::dynamic_pointer_cast<DecimalDataType>(dataType)->GetPrecision();
       auto scale =
-          std::dynamic_pointer_cast < DecimalDataType(dataType)->GetScale();
+          std::dynamic_pointer_cast<DecimalDataType>(dataType)->GetScale();
       expr = ParserHelper::GetDefaultValueForType(dataType->GetId(), precision,
                                                   scale);
     } else {
@@ -311,7 +283,7 @@ std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::ToOmniExpr(
     return expr;
   }
   default:
-    throw new omniruntime::exception::OmniException(
+    throw omniruntime::exception::OmniException(
         SUBSTRAIT_PARSE_ERROR,
         "Substrait conversion not supported for type case '{}' " + typeCase);
   }
@@ -322,7 +294,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const DataTypesPtr &inputType) {
   auto ifs = substraitIfThen.ifs();
   if (ifs.size() > 1) {
-    throw new omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
+    throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
                                                     "IF size >1");
   }
   Expr *cond = ToOmniExpr(ifs.Get(0).if_(), inputType);

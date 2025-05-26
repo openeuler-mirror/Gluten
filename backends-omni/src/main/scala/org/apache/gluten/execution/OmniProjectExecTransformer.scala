@@ -1,6 +1,5 @@
 package org.apache.gluten.execution
 
-import org.apache.gluten.extension.ValidationResult
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.execution.SparkPlan
 

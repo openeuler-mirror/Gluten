@@ -13,7 +13,7 @@
 
 namespace omniruntime {
 using namespace expressions;
-using TypedExprPtr = std::shared_ptr<const expressions::Expr>;
+using TypedExprPtr = expressions::Expr*;
 
 class SubstraitOmniExprConverter {
 public:
@@ -30,7 +30,7 @@ public:
     // };
 
     /// Convert Substrait Field into Omni Field Expression.
-    static std::shared_ptr<const FieldExpr> ToOmniExpr(const ::substrait::Expression::FieldReference &substraitField,
+    TypedExprPtr ToOmniExpr(const ::substrait::Expression::FieldReference &substraitField,
         const DataTypesPtr &inputType);
 
     /// Convert Substrait ScalarFunction into Omni Expression.
@@ -44,11 +44,8 @@ public:
     /// Convert Substrait CastExpression to Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression::Cast &castExpr, const DataTypesPtr &inputType);
 
-    /// Create expression for extract.
-    static TypedExprPtr toExtractExpr(const std::vector<TypedExprPtr> &params, const DataTypePtr &outputType);
-
     /// Used to convert Substrait Literal into Omni Expression.
-    std::shared_ptr<const LiteralExpr> ToOmniExpr(const ::substrait::Expression::Literal &substraitLit);
+    TypedExprPtr ToOmniExpr(const ::substrait::Expression::Literal &substraitLit);
 
     /// Convert Substrait Expression into Omni Expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression &substraitExpr, const DataTypesPtr &inputType);

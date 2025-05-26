@@ -22,12 +22,13 @@ namespace omniruntime {
 /// components, and convert them into recognizable representations.
 enum SubstraitToOmniExprType {
     IS_NULL_OMNI_EXPR_TYPE = 0,
+    IS_NOT_NULL_OMNI_EXPR_TYPE,
     UNARY_OMNI_EXPR_TYPE,
     BINARY_OMNI_EXPR_TYPE,
     FUNCTION_OMNI_EXPR_TYPE,
     COALESCE_OMNI_EXPR_TYPE,
     HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE
-}
+};
 
 constexpr const char* SUBSTRAIT_PARSE_ERROR  = "SUBSTRAIT_PARSE_ERROR";
 class SubstraitParser {
@@ -35,6 +36,10 @@ public:
     /// Used to parse Substrait NamedStruct.
     static std::vector<type::DataTypePtr> ParseNamedStruct(const ::substrait::NamedStruct &namedStruct,
         bool asLowerCase = false);
+
+    /// Used to find the Omni function name according to the function id
+    /// from a pre-constructed function map.
+    static std::pair<SubstraitToOmniExprType,std::string> FindOmniFunction(const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
 
     /// Parse Substrait Type to Omni type.
     static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false);
@@ -69,12 +74,11 @@ public:
     /// This function is used get the types from the compound name.
     static std::vector<std::string> GetSubFunctionTypes(const std::string &subFuncSpec);
 
-    /// Used to find the Omni function name according to the function id
-    /// from a pre-constructed function map.
-    static std::string FindOmniFunction(const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
-
     /// Map the Substrait function keyword into Omni function keyword.
     static std::string MapToOmniFunction(const std::string &substraitFunction, bool isDecimal);
+
+    static std::pair<SubstraitToOmniExprType,std::string> MapToOmniFunction(const std::string &substraitFunction);
+
 
     /// @brief Return whether a config is set as true in AdvancedExtension
     /// optimization.
@@ -95,7 +99,7 @@ private:
     /// keywords. Key: the Substrait function keyword, Value: the Omni function
     /// keyword. For those functions with different names in Substrait and Omni,
     /// a mapping relation should be added here.
-    static std::unordered_map<std::string, std::string> substraitOmniFunctionMap;
+    static std::unordered_map<std::string, std::pair<SubstraitToOmniExprType,std::string>> substraitOmniFunctionMap;
 
     // The map is uesd for mapping substrait type.
     // Key: type in function name.

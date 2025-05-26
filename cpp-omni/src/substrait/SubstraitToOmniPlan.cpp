@@ -6,26 +6,28 @@
 #include <expression/expressions.h>
 
 namespace omniruntime {
-namespace {
-struct EmitInfo {
-  std::vector<TypeExprPtr> expressions;
-};
+namespace
+{
+  struct EmitInfo {
+    std::vector<TypedExprPtr> expressions;
+  };
 
-EmitInfo getEmitInfo(const ::substrait::RelCommon &relCommon,
-                     const PlanNodePtr &node) {
-  const auto &emit = relCommon.emit();
-  int emitSize = emit.output_mapping_size();
-  EmitInfo emitInfo;
-  emitInfo.expressions.reserve(emitSize);
-  const auto &outputType = node->OutputType();
-  for (int i = 0; i < emitSize; i++) {
-    int32_t mapId = emit.output_mapping(i);
-    emitInfo.expressions[i] = new FieldExpr(i, outputType->GetType(i));
-  }
-  return emitInfo;
-}
+    EmitInfo getEmitInfo(const ::substrait::RelCommon &relCommon,
+                         const PlanNodePtr &node) {
+      const auto &emit = relCommon.emit();
+      int emitSize = emit.output_mapping_size();
+      EmitInfo emitInfo;
+      emitInfo.expressions.reserve(emitSize);
+      const auto &outputType = node->OutputType();
+      for (int i = 0; i < emitSize; i++) {
+        int32_t mapId = emit.output_mapping(i);
+        emitInfo.expressions[i] = new FieldExpr(i, outputType->GetType(i));
+      }
+      return emitInfo;
+    }
 } // namespace
-SortOrder ToSortOrder(const ::substrait::SortField &sortField) {
+SortOrder ToSortOrder(const ::substrait::SortField &sortField)
+{
   switch (sortField.direction()) {
   case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
     return K_ASC_NULLS_FIRST;
@@ -90,54 +92,59 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
     const ::substrait::ProjectRel &projectRel) {
-  auto childNode = converSingleInput<::substrait::ProjectRel>(projectRel);
+  auto childNode = ConvertSingleInput<::substrait::ProjectRel>(projectRel);
   const auto &projectExprs = projectRel.expressions();
-  std::vector<TypeExprPtr> expressions;
+  std::vector<TypedExprPtr> expressions;
   expressions.reserve(projectExprs.size());
   const auto &inputType = childNode->OutputType();
   int colIdx = 0;
+//  Noted that Substrait projection adds the project expressions on top of the
+//  input to the projection node. Thus we need to add the input columns first
+//  and then add the projection expressions.
+//
+//  First, adding the project names and expressions from the input to the project node
   for (uint32_t idx = 0; idx < inputType->GetSize(); idx++) {
     expressions.emplace_back(new FieldExpr(idx, inputType->GetType(idx)));
     colIdx += 1;
   }
+
+  //Then, adding project expression related project names and expressions.
   for (const auto &expr : projectExprs) {
-    expressions.emplace_back(exprConverter_->ToOmniExpr(expr, inputType));
+    expressions.emplace_back(exprConverter->ToOmniExpr(expr, inputType));
     colIdx += 1;
   }
+
   if (projectRel.has_common()) {
     auto relCommon = projectRel.common();
     const auto &emit = relCommon.emit();
     int emitSize = emit.output_mapping_size();
-    std::vector<TypeExprPtr> emitExpressions(emitSize);
+    std::vector<TypedExprPtr> emitExpressions(emitSize);
     for (int i = 0; i < emitSize; i++) {
       int32_t mapId = emit.output_mapping(i);
       emitExpressions[i] = expressions[mapId];
     }
     return std::make_shared<ProjectNode>(
-        nextPlanNodeId(), std::move(emitExpressions), std::move(childNode));
+        NextPlanNodeId(), std::move(emitExpressions), std::move(childNode));
   } else {
     return std::make_shared<ProjectNode>(
-        nextPlanNodeId(), std::move(expressions), std::move(childNode));
+        NextPlanNodeId(), std::move(expressions), std::move(childNode));
   }
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
     const ::substrait::FilterRel &filterRel) {
-  auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
+  auto childNode = ConvertSingleInput<::substrait::FilterRel>(filterRel);
   auto filterNode = std::make_shared<FilterNode>(
-      nextPlanNodeId(),
-      exprConverter_->ToOmniExpr(filterRel.condition(),
+      NextPlanNodeId(),
+      exprConverter->ToOmniExpr(filterRel.condition(),
                                  childNode->OutputType()),
       childNode);
   if (filterRel.has_common()) {
-    return processEmit(filterRel.common(), std::move(filterNode));
+    return ProcessEmit(filterRel.common(), std::move(filterNode));
   } else {
     return filterNode;
   }
 }
-
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
-    const ::substrait::FilterRel &filterRel) {}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
     const ::substrait::FetchRel &fetchRel) {
@@ -255,7 +262,7 @@ SubstraitToOmniPlanConverter::ProcessSortField(
   return {sortingKeys, sortingOrders, sortNullFirsts};
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::processEmit(
+PlanNodePtr SubstraitToOmniPlanConverter::ProcessEmit(
     const ::substrait::RelCommon &relCommon, const PlanNodePtr &noEmitNode) {
   switch (relCommon.emit_kind_case()) {
   case ::substrait::RelCommon::EmitKindCase::kDirect:
@@ -263,25 +270,11 @@ PlanNodePtr SubstraitToOmniPlanConverter::processEmit(
   case ::substrait::RelCommon::EmitKindCase::kEmit: {
     auto emitInfo = getEmitInfo(relCommon, noEmitNode);
     return std::make_shared<ProjectNode>(
-        nextPlanNodeId(), std::move(emitInfo, expressions), noEmitNode);
+        NextPlanNodeId(), std::move(emitInfo.expressions), noEmitNode);
   }
   default:
     OMNI_THROW("Substrait error:", "unrecognized emit kind");
   }
-}
-
-void SubstraitToOmniPlanConverter::constructFunctionMap(
-    const ::substrait::Plan &substraitPlan) {
-  for (const auto &extension : substraitPlan.extensions()) {
-    if (!extension.has_extension_function()) {
-      continue;
-    }
-    const auto &sFmap = extension.extension_function();
-    auto id = sFmap.function_anchor();
-    auto name = sFmap.name();
-    functionMap_[id] = name;
-  }
-  exprConverter_ = std::make_unique<SubstraitToOmniExpr>(functionMap_);
 }
 
 AggregationNode::Step SubstraitToOmniPlanConverter::ToAggregationFunctionStep(

@@ -24,15 +24,6 @@ std::vector<type::DataTypePtr> SubstraitParser::ParseNamedStruct(const ::substra
     }
     return typeList;
 }
-
-std::string SubstraitParser::GetNameBeforeDelimiter(const std::string& signature, const std::string& delimiter) {
-  std::size_t pos = signature.find(delimiter);
-  if (pos == std::string::npos) {
-    return signature;
-  }
-  return signature.substr(0, pos);
-}
-
 type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitType, bool asLowerCase)
 {
     switch (substraitType.kind_case()) {
@@ -74,12 +65,12 @@ type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitT
     }
 }
 
-std::string SubstraitParser::FindOmniFunction(
+std::pair<SubstraitToOmniExprType,std::string> SubstraitParser::FindOmniFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) {
-  std::string funcSpec = findFunctionSpec(functionMap, id);
-  std::string funcName = getNameBeforeDelimiter(funcSpec);
-  return mapToOmniFunction(funcName);
+  std::string funcSpec = FindFunctionSpec(functionMap, id);
+  std::string funcName = GetNameBeforeDelimiter(funcSpec);
+  return MapToOmniFunction(funcName);
 }
 
 std::string SubstraitParser::FindFunctionSpec(const std::unordered_map<uint64_t, std::string> &functionMap,
@@ -145,18 +136,27 @@ std::string SubstraitParser::MapToOmniFunction(const std::string &substraitFunct
     if (isDecimal) {
         if (substraitFunction == "lt" || substraitFunction == "lte" || substraitFunction == "gt" ||
             substraitFunction == "gte" || substraitFunction == "equal") {
-            return "decimal_" + it->second;
+            return "decimal_" + it->second.second;
         }
         if (substraitFunction == "round") {
             return "decimal_round";
         }
     }
     if (it != substraitOmniFunctionMap.end()) {
-        return it->second;
+        return it->second.second;
     }
     // If not finding the mapping from Substrait function name to Velox function
     // name, the original Substrait function name will be used.
     return substraitFunction;
+}
+
+std::pair<SubstraitToOmniExprType,std::string> SubstraitParser::MapToOmniFunction(const std::string &substraitFunction){
+  auto it = substraitOmniFunctionMap.find(substraitFunction);
+  if(it != substraitOmniFunctionMap.end()){
+    return it->second;
+  }
+  throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
+                                                  "Could not find function in function map:" + substraitFunction);
 }
 
 bool SubstraitParser::ConfigSetInOptimization(
@@ -255,26 +255,44 @@ std::string SubstraitParser::GetLiteralValue(const ::substrait::Expression::Lite
     }
 }
 
-std::unordered_map<std::string, std::string> SubstraitParser::substraitOmniFunctionMap = {
-    {"is_not_null", "isnotnull"},
-    {"is_null", "isnull"},
-    {"equal", "equalto"},
-    {"equal_null_safe", "equalnullsafe"},
-    {"lt", "lessthan"},
-    {"lte", "lessthanorequal"},
-    {"gt", "greaterthan"},
-    {"gte", "greaterthanorequal"},
-    {"not_equal", "notequalto"},
-    {"char_length", "length"},
-    {"strpos", "instr"},
-    {"ends_with", "endswith"},
-    {"starts_with", "startswith"},
-    {"bit_or", "bitwise_or_agg"},
-    {"bit_and", "bitwise_and_agg"},
-    {"murmur3hash", "hash_with_seed"},
-    {"xxhash64", "xxhash64_with_seed"},
-    {"modulus", "remainder"},
-    {"date_format", "format_datetime"},
-    {"negative", "unaryminus"}
-};
+  std::unordered_map<std::string, std::pair<SubstraitToOmniExprType,std::string>> SubstraitParser::substraitOmniFunctionMap = 
+      {
+        {"is_not_null", {IS_NOT_NULL_OMNI_EXPR_TYPE,"IS_NOT_NULL"}},
+        {"is_null", {IS_NULL_OMNI_EXPR_TYPE,"IS_NULL"}},
+        {"not",{UNARY_OMNI_EXPR_TYPE,"NOT"}},
+        {"not_equal", {BINARY_OMNI_EXPR_TYPE,"NOT_EQUAL"}},
+        {"add",{BINARY_OMNI_EXPR_TYPE,"ADD"}},
+        {"subtract",{BINARY_OMNI_EXPR_TYPE,"SUBTRACT"}},
+        {"multiply",{BINARY_OMNI_EXPR_TYPE,"MULTIPLY"}},
+        {"divide",{BINARY_OMNI_EXPR_TYPE,"DIVIDE"}},
+        {"modulus", {BINARY_OMNI_EXPR_TYPE,"MODULUS"}},
+        {"and", {BINARY_OMNI_EXPR_TYPE,"AND"}},
+        {"gt", {BINARY_OMNI_EXPR_TYPE,"GREATER_THAN"}},
+        {"gte", {BINARY_OMNI_EXPR_TYPE,"GREATER_THAN_OR_EQUAL"}},
+        {"lt", {BINARY_OMNI_EXPR_TYPE,"LESS_THAN"}},
+        {"lte", {BINARY_OMNI_EXPR_TYPE,"LESS_THAN_OR_EQUAL"}},
+        {"equal", {BINARY_OMNI_EXPR_TYPE,"EUQAL"}},
+        {"or", {BINARY_OMNI_EXPR_TYPE,"OR"}},
+        {"lower", {FUNCTION_OMNI_EXPR_TYPE,"lower"}},
+        {"upper", {FUNCTION_OMNI_EXPR_TYPE,"upper"}},
+        {"char_length", {FUNCTION_OMNI_EXPR_TYPE,"length"}},
+        {"replace", {FUNCTION_OMNI_EXPR_TYPE,"replace"}},
+        {"unscaled_value", {FUNCTION_OMNI_EXPR_TYPE,"UnscaledValue"}},
+        {"substring", {FUNCTION_OMNI_EXPR_TYPE,"substr"}},
+        {"cast", {FUNCTION_OMNI_EXPR_TYPE,"CAST"}},
+        {"abs", {FUNCTION_OMNI_EXPR_TYPE,"abs"}},
+        {"round", {FUNCTION_OMNI_EXPR_TYPE,"round"}},
+        {"might_contain", {FUNCTION_OMNI_EXPR_TYPE,"might_contain"}},
+        {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE,"might_contain"}},
+        {"concat", {FUNCTION_OMNI_EXPR_TYPE,"concat"}},
+        {"xxhash64", {FUNCTION_OMNI_EXPR_TYPE,"xxhash64"}},
+        {"strpos", {FUNCTION_OMNI_EXPR_TYPE,"instr"}},
+        {"normalize_named_zero", {FUNCTION_OMNI_EXPR_TYPE,"NormalizeNamedAndZero"}},
+        {"starts_with", {FUNCTION_OMNI_EXPR_TYPE,"StartsWith"}},
+        {"ends_with", {FUNCTION_OMNI_EXPR_TYPE,"EndsWith"}},
+        {"unscaled_value", {FUNCTION_OMNI_EXPR_TYPE,"UnscaledValue"}},
+        {"make_decimal", {FUNCTION_OMNI_EXPR_TYPE,"MakeDecimal"}},
+        {"coalesce", {COALESCE_OMNI_EXPR_TYPE,"COALESCE"}}
+      };
 }
+
