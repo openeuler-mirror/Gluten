@@ -184,50 +184,40 @@ object OmniExpressionAdaptor extends Logging {
               s"Unsupported datatype for MakeDecimal: ${makeDecimal.child.dataType}")
         }
 
-//      case sub: Subtract =>
-//        ShimUtil.unsupportedEvalModeCheck(sub)
-//        val (left, right) = ShimUtil.binaryOperatorAdjust(sub, returnDatatype)
-//        new JsonObject().put("exprType", "BINARY")
-//          .addOmniExpJsonType("returnType", returnDatatype)
-//          .put("operator", "SUBTRACT")
-//          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(left, exprsIndexMap))
-//          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(right, exprsIndexMap))
-//
-//      case add: Add =>
-//        ShimUtil.unsupportedEvalModeCheck(add)
-//        val (left, right) = ShimUtil.binaryOperatorAdjust(add, returnDatatype)
-//        new JsonObject().put("exprType", "BINARY")
-//          .addOmniExpJsonType("returnType", returnDatatype)
-//          .put("operator", "ADD")
-//          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(left, exprsIndexMap))
-//          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(right, exprsIndexMap))
-//
-//      case mult: Multiply =>
-//        ShimUtil.unsupportedEvalModeCheck(mult)
-//        val (left, right) = ShimUtil.binaryOperatorAdjust(mult, returnDatatype)
-//        new JsonObject().put("exprType", "BINARY")
-//          .addOmniExpJsonType("returnType", returnDatatype)
-//          .put("operator", "MULTIPLY")
-//          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(left, exprsIndexMap))
-//          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(right, exprsIndexMap))
-//
-//      case divide: Divide =>
-//        ShimUtil.unsupportedEvalModeCheck(divide)
-//        val (left, right) = ShimUtil.binaryOperatorAdjust(divide, returnDatatype)
-//        new JsonObject().put("exprType", "BINARY")
-//          .addOmniExpJsonType("returnType", returnDatatype)
-//          .put("operator", "DIVIDE")
-//          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(left, exprsIndexMap))
-//          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(right, exprsIndexMap))
-//
-//      case mod: Remainder =>
-//        ShimUtil.unsupportedEvalModeCheck(mod)
-//        val (left, right) = ShimUtil.binaryOperatorAdjust(mod, returnDatatype)
-//        new JsonObject().put("exprType", "BINARY")
-//          .addOmniExpJsonType("returnType", returnDatatype)
-//          .put("operator", "MODULUS")
-//          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(left, exprsIndexMap))
-//          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(right, exprsIndexMap))
+      case sub: Subtract =>
+        new JsonObject().put("exprType", "BINARY")
+          .addOmniExpJsonType("returnType", returnDatatype)
+          .put("operator", "SUBTRACT")
+          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(sub.left, exprsIndexMap))
+          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(sub.right, exprsIndexMap))
+
+      case add: Add =>
+        new JsonObject().put("exprType", "BINARY")
+          .addOmniExpJsonType("returnType", returnDatatype)
+          .put("operator", "ADD")
+          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(add.left, exprsIndexMap))
+          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(add.right, exprsIndexMap))
+
+      case mult: Multiply =>
+        new JsonObject().put("exprType", "BINARY")
+          .addOmniExpJsonType("returnType", returnDatatype)
+          .put("operator", "MULTIPLY")
+          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(mult.left, exprsIndexMap))
+          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(mult.right, exprsIndexMap))
+
+      case divide: Divide =>
+        new JsonObject().put("exprType", "BINARY")
+          .addOmniExpJsonType("returnType", returnDatatype)
+          .put("operator", "DIVIDE")
+          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(divide.left, exprsIndexMap))
+          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(divide.right, exprsIndexMap))
+
+      case mod: Remainder =>
+        new JsonObject().put("exprType", "BINARY")
+          .addOmniExpJsonType("returnType", returnDatatype)
+          .put("operator", "MODULUS")
+          .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(mod.left, exprsIndexMap))
+          .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(mod.right, exprsIndexMap))
 
       case greaterThan: GreaterThan =>
         new JsonObject()
