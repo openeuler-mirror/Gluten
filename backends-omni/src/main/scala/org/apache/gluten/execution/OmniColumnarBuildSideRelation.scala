@@ -21,7 +21,7 @@ import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 import org.apache.gluten.expression.ConverterUtils
 import org.apache.gluten.vectorized.VectorTransferUtils
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, BoundReference, Expression, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
 import org.apache.spark.sql.execution.joins.BuildSideRelation
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -69,46 +69,9 @@ case class OmniColumnarBuildSideRelation(
       Iterator.empty.toArray
     } else {
       val deserializer = VecBatchSerializerFactory.create()
-      val columnNames = key.flatMap {
-        case expression: AttributeReference => Some(expression)
-        case _ => None
-      }
-      if (columnNames.isEmpty) {
-        throw new IllegalArgumentException(s"Key column not found in expression: $key")
-      }
-      if (columnNames.size != 1) {
-        throw new IllegalArgumentException(s"Multiple key columns found in expression: $key")
-      }
-      val columnExpr = columnNames.head
-      val oneColumnWithSameName = output.count(_.name == columnExpr.name) == 1
-      val columnInOutput = output.zipWithIndex.filter {
-        p: (Attribute, Int) =>
-          if (oneColumnWithSameName) {
-            // The comparison of exprId can be ignored when
-            // only one attribute name match is found.
-            p._1.name == columnExpr.name
-          } else {
-            // A case where output has multiple columns with same name
-            p._1.name == columnExpr.name && p._1.exprId == columnExpr.exprId
-          }
-      }
-      if (columnInOutput.isEmpty) {
-        throw new IllegalStateException(
-          s"Key $key not found from build side relation output: $output")
-      }
-      if (columnInOutput.size != 1) {
-        throw new IllegalStateException(
-          s"More than one key $key found from build side relation output: $output")
-      }
-      val replacement =
-        BoundReference(columnInOutput.head._2, columnExpr.dataType, columnExpr.nullable)
 
-      val projExpr = key.transformDown {
-        case _: AttributeReference =>
-          replacement
-      }
+      val proj = UnsafeProjection.create(Seq(key))
 
-      val proj = UnsafeProjection.create(projExpr)
       val dataTypes = ConverterUtils.collectAttributeTypeNodes(output)
       val retRows = new ArrayBuffer[InternalRow]()
       batches.foreach {

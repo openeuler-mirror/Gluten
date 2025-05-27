@@ -91,5 +91,8 @@ private:
     // Key: type in function name.
     // Value: substrait type name.
     static const std::unordered_map<std::string, std::string> typeMap;
+
+    static const uint32_t MAX_PRECISION_64 = 18;
+    static const uint32_t MAX_PRECISION_128 = 38;
 };
 }

@@ -46,7 +46,7 @@ type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitT
         case ::substrait::Type::KindCase::kDecimal: {
             auto precision = substraitType.decimal().precision();
             auto scale = substraitType.decimal().scale();
-            if (precision < 17) {
+            if (precision <= MAX_PRECISION_64) {
                 return type::Decimal64Type(precision, scale);
             }
             return type::Decimal128Type(precision, scale);

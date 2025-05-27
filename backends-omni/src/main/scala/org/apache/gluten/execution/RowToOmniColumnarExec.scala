@@ -26,12 +26,13 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.sql.catalyst.expressions.SpecializedGetters
 import org.apache.spark.sql.execution.vectorized.WritableColumnVector
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
 
 case class RowToOmniColumnarExec(child: SparkPlan) extends RowToColumnarExecBase(child = child) {
   override def doExecuteColumnarInternal(): RDD[ColumnarBatch] = {
-   //  val enableOffHeapColumnVector = session.sqlContext.conf.offHeapColumnVectorEnabled // TODO
+    val enableOffHeapColumnVector = SQLConf.get.offHeapColumnVectorEnabled
     val numInputRows = longMetric("numInputRows")
     val numOutputBatches = longMetric("numOutputBatches")
     val rowToOmniColumnarTime = longMetric("rowToOmniColumnarTime")
@@ -40,7 +41,7 @@ case class RowToOmniColumnarExec(child: SparkPlan) extends RowToColumnarExecBase
     // plan (this) in the closure.
     val localSchema = schema
     child.execute().mapPartitions { rowIterator =>
-      InternalRowToColumnarBatch.convert(false, numInputRows, numOutputBatches, rowToOmniColumnarTime, numRows, localSchema, rowIterator)
+      InternalRowToColumnarBatch.convert(enableOffHeapColumnVector, numInputRows, numOutputBatches, rowToOmniColumnarTime, numRows, localSchema, rowIterator)
     }
   }
 
