@@ -388,9 +388,6 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIt
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
-JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(JNIEnv *env,
-    jobject wrapper, jlong iterHandle) {}
-
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_createRuntime(JNIEnv *env, jclass,
     jstring jBackendType, jlong nmmHandle, jbyteArray sessionConf)
 {
@@ -406,3 +403,18 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_cre
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_releaseRuntime(JNIEnv *env, jclass,
     jlong ctxHandle) {}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(
+    JNIEnv *env,
+    jobject wrapper,
+    jlong iterHandle)
+{
+    JNI_FUNC_START
+        const auto iter = reinterpret_cast<omniruntime::ResultIterator *>(iterHandle);
+        if (iter == nullptr) {
+            const std::string errorMessage = "ResultIterator is nullptr";
+            env->ThrowNew(runtimeExceptionClass, errorMessage.c_str());
+        }
+        delete iter;
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
+}
