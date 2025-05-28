@@ -16,21 +16,20 @@
  */
 package org.apache.gluten.backendsapi.omni
 
-import nova.hetu.omniruntime.vector.VecBatch
-import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.ExpressionTransformer
+import org.apache.gluten.expression.{ExpressionTransformer, OmniAliasTransformer, OmniHashExpressionTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
+
 import org.apache.spark.{ShuffleDependency, SparkException}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expression, Generator, GetMapValue, Like, NamedExpression, PosExplode, PythonUDF}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expression, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
@@ -42,6 +41,9 @@ import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBr
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import nova.hetu.omniruntime.vector.VecBatch
+import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 
 class OmniSparkPlanExecApi extends SparkPlanExecApi {
 
@@ -59,6 +61,25 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       condition: Expression,
       child: SparkPlan): FilterExecTransformerBase = {
     FilterExecTransformer(condition, child)
+  }
+
+  /**
+   * Generate Alias transformer
+   *
+   * @return
+   *   a transformer for alias
+   */
+  override def genAliasTransformer(
+      substraitExprName: String,
+      child: ExpressionTransformer,
+      original: Expression): ExpressionTransformer =
+    OmniAliasTransformer(substraitExprName, child, original)
+
+  override def genHashExpressionTransformer(
+      substraitExprName: String,
+      exprs: Seq[ExpressionTransformer],
+      original: HashExpression[_]): ExpressionTransformer = {
+    OmniHashExpressionTransformer(substraitExprName, exprs, original)
   }
 
   /** Generate HashAggregateExecTransformer. */
@@ -83,8 +104,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   /** Generate HashAggregateExecPullOutHelper */
   override def genHashAggregateExecPullOutHelper(
       aggregateExpressions: Seq[AggregateExpression],
-      aggregateAttributes: Seq[Attribute]): HashAggregateExecPullOutBaseHelper =
-    OmniHashAggregateExecPullOutBaseHelper(aggregateExpressions, aggregateAttributes)
+      aggregateAttributes: Seq[Attribute]): HashAggregateExecPullOutBaseHelper = null
 
   override def genColumnarShuffleExchange(shuffle: ShuffleExchangeExec): SparkPlan = {
     val child = shuffle.child
@@ -313,7 +333,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       options: Map[String, String],
       staticPartitions: TablePartitionSpec): ColumnarWriteFilesExec = null
 
-  /** Create ColumnarArrowEvalPythonExec, for velox backend */
+  /** Create ColumnarArrowEvalPythonExec, for omni backend */
   override def createColumnarArrowEvalPythonExec(
       udfs: Seq[PythonUDF],
       resultAttrs: Seq[Attribute],
