@@ -58,7 +58,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   override def genFilterExecTransformer(
       condition: Expression,
       child: SparkPlan): FilterExecTransformerBase = {
-    OmniFilterExecTransformer(condition, child)
+    FilterExecTransformer(condition, child)
   }
 
   /** Generate HashAggregateExecTransformer. */
