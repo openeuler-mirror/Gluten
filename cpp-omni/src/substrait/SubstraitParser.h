@@ -75,8 +75,6 @@ public:
     static std::vector<std::string> GetSubFunctionTypes(const std::string &subFuncSpec);
 
     /// Map the Substrait function keyword into Omni function keyword.
-    static std::string MapToOmniFunction(const std::string &substraitFunction, bool isDecimal);
-
     static std::pair<SubstraitToOmniExprType,std::string> MapToOmniFunction(const std::string &substraitFunction);
 
 

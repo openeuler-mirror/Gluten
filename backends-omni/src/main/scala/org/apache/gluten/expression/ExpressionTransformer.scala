@@ -38,36 +38,4 @@ case class OmniAliasTransformer(
   }
 }
 
-case class OmniHashExpressionTransformer(
-    substraitExprName: String,
-    children: Seq[ExpressionTransformer],
-    original: HashExpression[_])
-  extends ExpressionTransformer {
 
-  override def doTransform(args: java.lang.Object): ExpressionNode = {
-    // As of Spark 3.3, there are 3 kinds of HashExpression.
-    // HiveHash is not supported in native backend and will fail native validation.
-    val (seedNode, seedType) = original match {
-      case XxHash64(_, seed) =>
-        (ExpressionBuilder.makeLongLiteral(seed), LongType)
-      case Murmur3Hash(_, seed) =>
-        (ExpressionBuilder.makeIntLiteral(seed), IntegerType)
-      case HiveHash(_) =>
-        (ExpressionBuilder.makeIntLiteral(0), IntegerType)
-    }
-    val nodes = new JArrayList[ExpressionNode]()
-    // Seed as the first argument
-    nodes.add(seedNode)
-    children.foreach(
-      expression => {
-        nodes.add(expression.doTransform(args))
-      })
-    val childrenTypes = seedType +: original.children.map(child => child.dataType)
-    val functionMap = args.asInstanceOf[JHashMap[String, JLong]]
-    val functionName =
-      ConverterUtils.makeFuncName(substraitExprName, childrenTypes, FunctionConfig.OPT)
-    val functionId = ExpressionBuilder.newScalarFunction(functionMap, functionName)
-    val typeNode = ConverterUtils.getTypeNode(original.dataType, original.nullable)
-    ExpressionBuilder.makeScalarFunction(functionId, nodes, typeNode)
-  }
-}

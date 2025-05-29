@@ -38,7 +38,7 @@ SortOrder ToSortOrder(const ::substrait::SortField &sortField)
   case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
     return K_DESC_NULLS_LAST;
   default:
-    OMNI_THROW("2", "Sort direction is not supported.");
+    OMNI_THROW("PARSE_ERROR", "Sort direction is not supported.");
   }
 }
 
@@ -97,7 +97,6 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
   std::vector<TypedExprPtr> expressions;
   expressions.reserve(projectExprs.size());
   const auto &inputType = childNode->OutputType();
-  int colIdx = 0;
 //  Noted that Substrait projection adds the project expressions on top of the
 //  input to the projection node. Thus we need to add the input columns first
 //  and then add the projection expressions.

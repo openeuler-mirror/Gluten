@@ -25,11 +25,13 @@ DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal) {
   case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
     auto precision = literal.decimal().precision();
     auto scale = literal.decimal().scale();
-    auto type = Decimal128Type(precision, scale);
-    if (precision < DECIMAL64_DEFAULT_PRECISION) {
-      type = Decimal64Type(precision, scale);
+    if (precision <= DECIMAL64_DEFAULT_PRECISION) {
+      auto type = Decimal64Type(precision, scale);
+      return type;
+    }else{
+      auto type = Decimal128Type(precision, scale);
+      return type;
     }
-    return type;
   }
   case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
     return Date32Type();
@@ -109,21 +111,16 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     return new IsNullExpr(args[0]);
   } else if (type == UNARY_OMNI_EXPR_TYPE) {
     OMNI_CHECK(args[0] != nullptr,"args[0] is null");
-    if (op == Operator::INVALIDOP) {
-      return nullptr;
-    }
-    auto funcStr =
-        functionMap_.find(substraitFunc.function_reference())->second;
+    OMNI_CHECK(op != Operator::INVALIDOP,"the operator is INVALIDOP");
     return new UnaryExpr(op, args[0], std::make_shared<BooleanDataType>());
   } else if (type == BINARY_OMNI_EXPR_TYPE) {
     OMNI_CHECK(outputType != nullptr,"outputType is null");
     OMNI_CHECK(args[0] != nullptr,"args[0] is null");
-    if (op == Operator::INVALIDOP) {
-      return nullptr;
-    }
+    OMNI_CHECK(op != Operator::INVALIDOP,"the operator is INVALIDOP");
     if (args[1] == nullptr) {
       delete args[0];
-      return nullptr;
+      OMNI_THROW("SUBSTRAIT_ERROR:",
+                 "The args[1] in ScalarFunction is nullptr");
     }
     return new BinaryExpr(op, args[0], args[1],
                           std::move(outputType));
@@ -132,12 +129,14 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       auto secondArg = args[1];
       if (secondArg->GetType() != ExprType::LITERAL_E) {
         Expr::DeleteExprs(args);
-        return nullptr;
+        OMNI_THROW("SUBSTRAIT_ERROR:",
+                   "The type of args[1] is not equal to LITERAL_E,which is {}",std::to_string(secondArg->GetType()));
       }
       auto literalExpr = static_cast<LiteralExpr *>(secondArg);
       if (*(literalExpr->stringVal) != "^\\d+$") {
         Expr::DeleteExprs(args);
-        return nullptr;
+        OMNI_THROW("SUBSTRAIT_ERROR:",
+                   "The stringVal of the literalExpr is not equal to '^\\d+$',which is {}",std::to_string(*(literalExpr->stringVal)));
       }
     }
     // check the signature matches
@@ -145,12 +144,14 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     std::transform(
         args.begin(), args.end(), argTypes.begin(),
         [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
-    auto signature = FunctionSignature(funcName, argTypes, outputType->GetId());
+    return new FuncExpr(funcName, args, std::move(outputType))
   } else if (type == COALESCE_OMNI_EXPR_TYPE) {
     OMNI_CHECK(args[0] != nullptr,"args[0] is null");
     if (args[1] == nullptr) {
       delete args[0];
-      return nullptr;
+      OMNI_THROW("SUBSTRAIT_ERROR:",
+                 "The args[1] in COALESCE_OMNI_EXPR_TYPE is nullptr");
+
     }
     return new CoalesceExpr(args[0], args[1]);
   } else if (type == HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE) {
@@ -158,7 +159,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
                                                     "The UDF function Unsupported yet");
   } else {
     throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
-                                                    "function Unsupported yet");
+                                                    "function type {} and function {} is unsupported yet",std::to_string(type),funcName);
   }
 }
 
@@ -175,7 +176,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       args.push_back(arg);
     } else {
       Expr::DeleteExprs(args);
-      return nullptr;
+      OMNI_THROW("SUBSTRAIT_ERROR:",
+                 "The OmniExpression of the singularOrList.literal here is null");
+
     }
   }
   return new InExpr(args);
@@ -277,7 +280,8 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       expr = ParserHelper::GetDefaultValueForType(dataType->GetId());
     }
     if (expr == nullptr) {
-      return nullptr;
+      OMNI_THROW("SUBSTRAIT_ERROR:",
+                 "The LiteralExpr in kNull case here is null");
     }
     expr->isNull = true;
     return expr;
@@ -285,7 +289,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
   default:
     throw omniruntime::exception::OmniException(
         SUBSTRAIT_PARSE_ERROR,
-        "Substrait conversion not supported for type case '{}' " + typeCase);
+        "Substrait conversion not supported for type case '{}' " + std::to_string(typeCase));
   }
 }
 
@@ -321,7 +325,8 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     if (literalExpr == nullptr) {
       delete cond;
       delete trueExpr;
-      return nullptr;
+      literalExpr->isNull = true;
+      OMNI_THROW("substrait_error","the literal expression in substraitIfThen case is null here")
     }
     return new IfExpr(cond, trueExpr, literalExpr);
   }
@@ -359,20 +364,4 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
                std::to_string(typeCase));
   }
 }
-
-std::unordered_map<std::string, std::string>
-    SubstraitOmniExprConverter::extractDatetimeFunctionMap_ = {
-        {"MILLISECOND", "millisecond"},
-        {"SECOND", "second"},
-        {"MINUTE", "minute"},
-        {"HOUR", "hour"},
-        {"DAY", "day"},
-        {"DAY_OF_WEEK", "dayofweek"},
-        {"WEEK_DAY", "weekday"},
-        {"DAY_OF_YEAR", "dayofyear"},
-        {"MONTH", "month"},
-        {"QUARTER", "quarter"},
-        {"YEAR", "year"},
-        {"WEEK_OF_YEAR", "week_of_year"},
-        {"YEAR_OF_WEEK", "year_of_week"}};
 } // namespace omniruntime

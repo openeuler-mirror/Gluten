@@ -70,8 +70,5 @@ private:
     /// name.
     std::unordered_map<uint64_t, std::string> functionMap_;
 
-    // The map storing the Substrait extract function input field and Omni
-    // function name.
-    static std::unordered_map<std::string, std::string> extractDatetimeFunctionMap_;
 };
 }

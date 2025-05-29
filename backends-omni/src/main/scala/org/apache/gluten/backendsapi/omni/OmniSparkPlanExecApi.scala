@@ -75,13 +75,6 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       original: Expression): ExpressionTransformer =
     OmniAliasTransformer(substraitExprName, child, original)
 
-  override def genHashExpressionTransformer(
-      substraitExprName: String,
-      exprs: Seq[ExpressionTransformer],
-      original: HashExpression[_]): ExpressionTransformer = {
-    OmniHashExpressionTransformer(substraitExprName, exprs, original)
-  }
-
   /** Generate HashAggregateExecTransformer. */
   override def genHashAggregateExecTransformer(
       requiredChildDistributionExpressions: Option[Seq[Expression]],
