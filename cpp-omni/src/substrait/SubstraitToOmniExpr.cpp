@@ -234,7 +234,6 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             auto precision = substraitLit.decimal().precision();
             auto scale = substraitLit.decimal().scale();
             if (precision <= DECIMAL64_DEFAULT_PRECISION) {
-                // TODO 此处需要重点关注处理是否有问题
                 int128_t decimalValue;
                 memcpy_s(&decimalValue, sizeof(int128_t), decimal.c_str(), sizeof(int128_t));
                 return new LiteralExpr(static_cast<int64_t>(decimalValue), Decimal64Type(precision, scale));
