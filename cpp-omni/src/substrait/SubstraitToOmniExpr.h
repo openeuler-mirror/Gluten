@@ -14,6 +14,7 @@
 namespace omniruntime {
 using namespace expressions;
 using TypedExprPtr = expressions::Expr*;
+const int RLIKE_INPUT = 2;
 
 class SubstraitOmniExprConverter {
 public:

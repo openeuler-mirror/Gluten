@@ -125,7 +125,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     return new BinaryExpr(op, args[0], args[1],
                           std::move(outputType));
   } else if (type == FUNCTION_OMNI_EXPR_TYPE) {
-    if (funcName == "RLike" && args.size() == 2) {
+    if (funcName == "RLike" && args.size() == RLIKE_INPUT) {
       auto secondArg = args[1];
       if (secondArg->GetType() != ExprType::LITERAL_E) {
         Expr::DeleteExprs(args);
@@ -259,7 +259,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     if (precision <= DECIMAL64_DEFAULT_PRECISION) {
       //TODO 此处需要重点关注处理是否有问题
       int128_t decimalValue;
-      memcpy(&decimalValue, decimal.c_str(), sizeof(int128_t));
+      memcpy_s(&decimalValue, sizeof(int128_t), decimal.c_str(), sizeof(int128_t));
       return new LiteralExpr(static_cast<int64_t>(decimalValue),
                              Decimal64Type(precision, scale));
     } else {
