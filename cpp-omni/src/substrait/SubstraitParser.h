@@ -20,7 +20,7 @@
 namespace omniruntime {
 /// This class contains some common functions used to parse Substrait
 /// components, and convert them into recognizable representations.
-enum class SubstraitToOmniExprType {
+enum SubstraitToOmniExprType {
     IS_NULL_OMNI_EXPR_TYPE = 0,
     IS_NOT_NULL_OMNI_EXPR_TYPE,
     UNARY_OMNI_EXPR_TYPE,

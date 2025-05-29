@@ -4,7 +4,6 @@
  */
 
 #include "SubstraitParser.h"
-#include <fmt/core.h>
 #include <string>
 #include "google/protobuf/wrappers.pb.h"
 
@@ -240,24 +239,17 @@ std::unordered_map<std::string, std::pair<SubstraitToOmniExprType, std::string>>
         {"is_null", {IS_NULL_OMNI_EXPR_TYPE, "IS_NULL"}}, {"not", {UNARY_OMNI_EXPR_TYPE, "NOT"}},
         {"not_equal", {BINARY_OMNI_EXPR_TYPE, "NOT_EQUAL"}}, {"add", {BINARY_OMNI_EXPR_TYPE, "ADD"}},
         {"subtract", {BINARY_OMNI_EXPR_TYPE, "SUBTRACT"}}, {"multiply", {BINARY_OMNI_EXPR_TYPE, "MULTIPLY"}},
-        {"divide", {BINARY_OMNI_EXPR_TYPE, "DIVIDE"}},
-        //        {"modulus", {BINARY_OMNI_EXPR_TYPE,"MODULUS"}},
-        {"and", {BINARY_OMNI_EXPR_TYPE, "AND"}}, {"gt", {BINARY_OMNI_EXPR_TYPE, "GREATER_THAN"}},
-        {"gte", {BINARY_OMNI_EXPR_TYPE, "GREATER_THAN_OR_EQUAL"}}, {"lt", {BINARY_OMNI_EXPR_TYPE, "LESS_THAN"}},
-        {"lte", {BINARY_OMNI_EXPR_TYPE, "LESS_THAN_OR_EQUAL"}}, {"equal", {BINARY_OMNI_EXPR_TYPE, "EQUAL"}},
-        {"or", {BINARY_OMNI_EXPR_TYPE, "OR"}}, {"lower", {FUNCTION_OMNI_EXPR_TYPE, "lower"}},
-        {"upper", {FUNCTION_OMNI_EXPR_TYPE, "upper"}}, {"char_length", {FUNCTION_OMNI_EXPR_TYPE, "length"}},
-        {"replace", {FUNCTION_OMNI_EXPR_TYPE, "replace"}},
-        //        {"unscaled_value", {FUNCTION_OMNI_EXPR_TYPE,"UnscaledValue"}},
+        {"divide", {BINARY_OMNI_EXPR_TYPE, "DIVIDE"}}, {"and", {BINARY_OMNI_EXPR_TYPE, "AND"}},
+        {"gt", {BINARY_OMNI_EXPR_TYPE, "GREATER_THAN"}}, {"gte", {BINARY_OMNI_EXPR_TYPE, "GREATER_THAN_OR_EQUAL"}},
+        {"lt", {BINARY_OMNI_EXPR_TYPE, "LESS_THAN"}}, {"lte", {BINARY_OMNI_EXPR_TYPE, "LESS_THAN_OR_EQUAL"}},
+        {"equal", {BINARY_OMNI_EXPR_TYPE, "EQUAL"}}, {"or", {BINARY_OMNI_EXPR_TYPE, "OR"}},
+        {"lower", {FUNCTION_OMNI_EXPR_TYPE, "lower"}}, {"upper", {FUNCTION_OMNI_EXPR_TYPE, "upper"}},
+        {"char_length", {FUNCTION_OMNI_EXPR_TYPE, "length"}}, {"replace", {FUNCTION_OMNI_EXPR_TYPE, "replace"}},
         {"substring", {FUNCTION_OMNI_EXPR_TYPE, "substr"}}, {"cast", {FUNCTION_OMNI_EXPR_TYPE, "CAST"}},
         {"abs", {FUNCTION_OMNI_EXPR_TYPE, "abs"}}, {"round", {FUNCTION_OMNI_EXPR_TYPE, "round"}},
-        //        {"might_contain", {FUNCTION_OMNI_EXPR_TYPE,"might_contain"}},
-        //        {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE,"might_contain"}},
+        {"rlike", {FUNCTION_OMNI_EXPR_TYPE, "Rlike"}}, {"md5", {FUNCTION_OMNI_EXPR_TYPE, "Md5"}},
         {"concat", {FUNCTION_OMNI_EXPR_TYPE, "concat"}}, {"xxhash64", {FUNCTION_OMNI_EXPR_TYPE, "xxhash64"}},
-        //        {"strpos", {FUNCTION_OMNI_EXPR_TYPE,"instr"}},
-        //        {"normalize_named_zero", {FUNCTION_OMNI_EXPR_TYPE,"NormalizeNamedAndZero"}},
         {"starts_with", {FUNCTION_OMNI_EXPR_TYPE, "StartsWith"}}, {"ends_with", {FUNCTION_OMNI_EXPR_TYPE, "EndsWith"}},
         {"unscaled_value", {FUNCTION_OMNI_EXPR_TYPE, "UnscaledValue"}},
-        //        {"make_decimal", {FUNCTION_OMNI_EXPR_TYPE,"MakeDecimal"}},
         {"coalesce", {COALESCE_OMNI_EXPR_TYPE, "COALESCE"}}};
 } // namespace omniruntime
