@@ -72,8 +72,6 @@ object OmniRuleApi {
         RewriteIn,
         RewriteMultiChildrenCount,
         RewriteJoin,
-        PullOutPreProject,
-        PullOutPostProject,
         ProjectColumnPruning)
     injector.injectTransform(
       c => HeuristicTransform.WithRewrites(validatorBuilder(c.glutenConf), rewrites, offloads))
