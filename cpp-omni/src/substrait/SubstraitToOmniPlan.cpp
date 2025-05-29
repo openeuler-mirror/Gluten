@@ -104,13 +104,11 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(
 //  First, adding the project names and expressions from the input to the project node
   for (uint32_t idx = 0; idx < inputType->GetSize(); idx++) {
     expressions.emplace_back(new FieldExpr(idx, inputType->GetType(idx)));
-    colIdx += 1;
   }
 
   //Then, adding project expression related project names and expressions.
   for (const auto &expr : projectExprs) {
     expressions.emplace_back(exprConverter->ToOmniExpr(expr, inputType));
-    colIdx += 1;
   }
 
   if (projectRel.has_common()) {

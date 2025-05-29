@@ -130,13 +130,13 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       if (secondArg->GetType() != ExprType::LITERAL_E) {
         Expr::DeleteExprs(args);
         OMNI_THROW("SUBSTRAIT_ERROR:",
-                   "The type of args[1] is not equal to LITERAL_E,which is {}",std::to_string(secondArg->GetType()));
+                   "The type of args[1] is not equal to LITERAL_E");
       }
       auto literalExpr = static_cast<LiteralExpr *>(secondArg);
       if (*(literalExpr->stringVal) != "^\\d+$") {
         Expr::DeleteExprs(args);
         OMNI_THROW("SUBSTRAIT_ERROR:",
-                   "The stringVal of the literalExpr is not equal to '^\\d+$',which is {}",std::to_string(*(literalExpr->stringVal)));
+                   "The stringVal of the literalExpr is not equal to '^\\d+$',which is {}",literalExpr->stringVal);
       }
     }
     // check the signature matches
@@ -144,7 +144,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     std::transform(
         args.begin(), args.end(), argTypes.begin(),
         [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
-    return new FuncExpr(funcName, args, std::move(outputType))
+    return new FuncExpr(funcName, args, std::move(outputType));
   } else if (type == COALESCE_OMNI_EXPR_TYPE) {
     OMNI_CHECK(args[0] != nullptr,"args[0] is null");
     if (args[1] == nullptr) {
@@ -158,8 +158,8 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
                                                     "The UDF function Unsupported yet");
   } else {
-    throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
-                                                    "function type {} and function {} is unsupported yet",std::to_string(type),funcName);
+    OMNI_THROW("SUBSTRAIT_ERROR:", "function type {} and function {} is unsupported yet",
+               std::to_string(type), funcName);
   }
 }
 
@@ -257,6 +257,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     auto precision = substraitLit.decimal().precision();
     auto scale = substraitLit.decimal().scale();
     if (precision <= DECIMAL64_DEFAULT_PRECISION) {
+      //TODO 此处需要重点关注处理是否有问题
       int128_t decimalValue;
       memcpy(&decimalValue, decimal.c_str(), sizeof(int128_t));
       return new LiteralExpr(static_cast<int64_t>(decimalValue),
@@ -326,7 +327,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
       delete cond;
       delete trueExpr;
       literalExpr->isNull = true;
-      OMNI_THROW("substrait_error","the literal expression in substraitIfThen case is null here")
+      OMNI_THROW("substrait_error","the literal expression in substraitIfThen case is null here");
     }
     return new IfExpr(cond, trueExpr, literalExpr);
   }
