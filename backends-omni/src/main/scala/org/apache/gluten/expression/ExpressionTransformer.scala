@@ -16,16 +16,9 @@
  */
 package org.apache.gluten.expression
 
-import org.apache.gluten.expression.ConverterUtils.FunctionConfig
 import org.apache.gluten.substrait.expression._
-
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.types.{IntegerType, LongType}
 
-import java.lang.{Long => JLong}
-import java.util.{ArrayList => JArrayList, HashMap => JHashMap}
-
-import scala.language.existentials
 
 case class OmniAliasTransformer(
     substraitExprName: String,

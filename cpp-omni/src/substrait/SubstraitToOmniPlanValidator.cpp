@@ -172,7 +172,7 @@ bool SubstraitToOmniPlanValidator::ValidateExtractExpr(const std::vector<TypedEx
     return false;
   }
 
-  auto functionArg = dynamic_cast<const LiteralExpr*>(params[0]);
+  auto functionArg = std::dynamic_pointer_cast<const LiteralExpr>(params[0]);
   if (functionArg) {
     return true;
   }
@@ -508,7 +508,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ExpandRel &expand
         // function or mismatched type, exception will be thrown.
         ExprVerifier ev;
         for (const auto &expression : expressions) {
-          if (!ev.VisitExpr(*expression)) {
+          if (!ev.VisitExpr(expression)) {
             return false;
           }
         }
@@ -611,7 +611,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
   expressions.reserve(groupByExprs.size());
   for (const auto &expr : groupByExprs) {
     auto expression = exprConverter_->ToOmniExpr(expr, rowType);
-    auto exprField = dynamic_cast<const FieldExpr*>(expression);
+    auto exprField = dynamic_cast<const FieldExpr*>(expression.get());
     if (exprField == nullptr) {
       LOG_VALIDATION_MSG("Only field is supported for partition key in Window Operator!");
       return false;
@@ -623,7 +623,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
   // mismatched type, exception will be thrown.
   ExprVerifier ev;
   for (const auto &expression : expressions) {
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -644,12 +644,12 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
 
     if (sort.has_expr()) {
       auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
-      auto exprField = dynamic_cast<const FieldExpr*>(expression);
+      auto exprField = dynamic_cast<const FieldExpr*>(expression.get());
       if (!exprField) {
         LOG_VALIDATION_MSG("in windowRel, the sorting key in Sort Operator only support field.");
         return false;
       }
-      if (!ev.VisitExpr(*expression)) {
+      if (!ev.VisitExpr(expression)) {
         return false;
       }
     }
@@ -684,7 +684,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowGroupLimitR
   expressions.reserve(groupByExprs.size());
   for (const auto &expr : groupByExprs) {
     auto expression = exprConverter_->ToOmniExpr(expr, rowType);
-    auto exprField = dynamic_cast<const FieldExpr*>(expression);
+    auto exprField = dynamic_cast<const FieldExpr*>(expression.get());
     if (exprField == nullptr) {
       LOG_VALIDATION_MSG("Only field is supported for partition key in Window Group Limit Operator!");
       return false;
@@ -696,7 +696,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowGroupLimitR
   // mismatched type, exception will be thrown.
   ExprVerifier ev;
   for (const auto &expression : expressions) {
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -717,13 +717,13 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowGroupLimitR
 
     if (sort.has_expr()) {
       auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
-      auto exprField = dynamic_cast<const FieldExpr*>(expression);
+      auto exprField = dynamic_cast<const FieldExpr*>(expression.get());
       if (!exprField) {
         LOG_VALIDATION_MSG("in windowGroupLimitRel, the sorting key in Sort Operator only support field.");
         return false;
       }
       ExprVerifier ev;
-      if (!ev.VisitExpr(*expression)) {
+      if (!ev.VisitExpr(expression)) {
         return false;
       }
     }
@@ -817,13 +817,13 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::SortRel &sortRel)
 
     if (sort.has_expr()) {
       auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
-      auto exprField = dynamic_cast<const FieldExpr*>(expression);
+      auto exprField = dynamic_cast<const FieldExpr*>(expression.get());
       if (!exprField) {
         LOG_VALIDATION_MSG("in SortRel, the sorting key in Sort Operator only support field.");
         return false;
       }
       ExprVerifier ev;
-      if (!ev.VisitExpr(*expression)) {
+      if (!ev.VisitExpr(expression)) {
         return false;
       }
     }
@@ -875,7 +875,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ProjectRel &proje
   // mismatched type, exception will be thrown.
   ExprVerifier ev;
   for (const auto &expression : expressions) {
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -920,7 +920,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::FilterRel &filter
   // or mismatched type, exception will be thrown.
   ExprVerifier ev;
   for (const auto &expression : expressions) {
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -994,7 +994,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::JoinRel &joinRel)
   if (joinRel.has_post_join_filter()) {
     auto expression = exprConverter_->ToOmniExpr(joinRel.post_join_filter(), rowType);
     ExprVerifier ev;
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -1041,7 +1041,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::CrossRel &crossRe
   if (crossRel.has_expression()) {
     auto expression = exprConverter_->ToOmniExpr(crossRel.expression(), rowType);
     ExprVerifier ev;
-    if (!ev.VisitExpr(*expression)) {
+    if (!ev.VisitExpr(expression)) {
       return false;
     }
   }
@@ -1230,7 +1230,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ReadRel &readRel)
     // or mismatched type, exception will be thrown.
     ExprVerifier ev;
     for (const auto &expression : expressions) {
-      if (!ev.VisitExpr(*expression)) {
+      if (!ev.VisitExpr(expression)) {
         return false;
       }
     }
