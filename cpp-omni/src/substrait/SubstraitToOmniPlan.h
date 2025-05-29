@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: print expression tree methods
  */
 
@@ -8,21 +8,20 @@
 #include <optional>
 #include <string>
 #include <tuple>
-#include "plannode/planNode.h"
 #include "SubstraitParser.h"
 #include "SubstraitToOmniExpr.h"
 #include "compute/ResultIterator.h"
 #include "plannode/RowVectorStream.h"
+#include "plannode/planNode.h"
 
 namespace omniruntime {
 /// This class is used to convert the Substrait plan into Omni plan.
 class SubstraitToOmniPlanConverter {
 public:
-    SubstraitToOmniPlanConverter(
-        const std::unordered_map<std::string, std::string> &confMap = {},
-        const std::optional<std::string> writeFilesTempPath = std::nullopt,
-        bool validationMode = false)
-        : confMap(confMap), writeFilesTempPath(writeFilesTempPath), validationMode(validationMode) {}
+    SubstraitToOmniPlanConverter(const std::unordered_map<std::string, std::string> &confMap = {},
+        const std::optional<std::string> writeFilesTempPath = std::nullopt, bool validationMode = false)
+        : confMap(confMap), writeFilesTempPath(writeFilesTempPath), validationMode(validationMode)
+    {}
 
     /// Used to convert Substrait WriteRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::WriteRel &writeRel);
@@ -88,10 +87,7 @@ public:
     PlanNodePtr ToOmniPlan(const ::substrait::Plan &substraitPlan);
 
     // return the raw ptr of ExprConverter
-    SubstraitOmniExprConverter *GetExprConverter()
-    {
-        return this->exprConverter.get();
-    }
+    SubstraitOmniExprConverter *GetExprConverter() { return this->exprConverter.get(); }
 
     /// Used to construct the function map between the index
     /// and the Substrait function name. Initialize the expression
@@ -99,10 +95,7 @@ public:
     void ConstructFunctionMap(const ::substrait::Plan &substraitPlan);
 
     /// Will return the function map used by this plan converter.
-    const std::unordered_map<uint64_t, std::string> &GetFunctionMap() const
-    {
-        return this->functionMap;
-    }
+    const std::unordered_map<uint64_t, std::string> &GetFunctionMap() const { return this->functionMap; }
 
     /// Used to insert certain plan node as input. The plan node
     /// id will start from the setted one.
@@ -130,10 +123,9 @@ public:
     /// from the left set “match” the record from the right set. The condition
     /// must only include the following operations: AND, ==, field references.
     /// Field references correspond to the direct output order of the data.
-    void ExtractJoinKeys(
-        const ::substrait::Expression &joinExpression,
-        std::vector<const ::substrait::Expression::FieldReference*> &leftExprs,
-        std::vector<const ::substrait::Expression::FieldReference*> &rightExprs);
+    void ExtractJoinKeys(const ::substrait::Expression &joinExpression,
+        std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
+        std::vector<const ::substrait::Expression::FieldReference *> &rightExprs);
 
     // /// Get aggregation step from AggregateRel.
     // /// If returned Partial, it means the aggregate generated can leveraging flushing and abandoning like
@@ -153,8 +145,7 @@ public:
     /// sortingOrders.
     /// Note that, this method would deduplicate the sorting keys which have the same field name.
     std::tuple<std::vector<int32_t>, std::vector<int32_t>, std::vector<int32_t>> ProcessSortField(
-        const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortField,
-        const DataTypesPtr &inputType);
+        const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortField, const DataTypesPtr &inputType);
 
 private:
     /// Integrate Substrait emit feature. Here a given 'substrait::RelCommon'
@@ -230,4 +221,4 @@ private:
     /// A flag used to specify validation.
     bool validationMode = false;
 };
-}
+} // namespace omniruntime

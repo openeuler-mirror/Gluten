@@ -1,11 +1,9 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: print expression tree methods
  */
 
 #pragma once
-#include "type/data_types.h"
-#include "util/omni_exception.h"
 #include "substrait/algebra.pb.h"
 #include "substrait/capabilities.pb.h"
 #include "substrait/extensions/extensions.pb.h"
@@ -14,6 +12,8 @@
 #include "substrait/plan.pb.h"
 #include "substrait/type.pb.h"
 #include "substrait/type_expressions.pb.h"
+#include "type/data_types.h"
+#include "util/omni_exception.h"
 
 #include "util/type_util.h"
 
@@ -30,24 +30,25 @@ enum SubstraitToOmniExprType {
     HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE
 };
 
-constexpr const char* SUBSTRAIT_PARSE_ERROR  = "SUBSTRAIT_PARSE_ERROR";
+constexpr const char *SUBSTRAIT_PARSE_ERROR = "SUBSTRAIT_PARSE_ERROR";
 class SubstraitParser {
 public:
     /// Used to parse Substrait NamedStruct.
-    static std::vector<type::DataTypePtr> ParseNamedStruct(const ::substrait::NamedStruct &namedStruct,
-        bool asLowerCase = false);
+    static std::vector<type::DataTypePtr> ParseNamedStruct(
+        const ::substrait::NamedStruct &namedStruct, bool asLowerCase = false);
 
     /// Used to find the Omni function name according to the function id
     /// from a pre-constructed function map.
-    static std::pair<SubstraitToOmniExprType,std::string> FindOmniFunction(const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
+    static std::pair<SubstraitToOmniExprType, std::string> FindOmniFunction(
+        const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
 
     /// Parse Substrait Type to Omni type.
     static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false);
 
-    /// Parse Substrait ReferenceSegment and extract the field index. Return false if the segment is not a valid unnested
-    /// field.
-    static bool ParseReferenceSegment(const ::substrait::Expression::ReferenceSegment &refSegment,
-        uint32_t &fieldIndex);
+    /// Parse Substrait ReferenceSegment and extract the field index. Return false if the segment is not a valid
+    /// unnested field.
+    static bool ParseReferenceSegment(
+        const ::substrait::Expression::ReferenceSegment &refSegment, uint32_t &fieldIndex);
 
     /// Make names in the format of {prefix}_{index}.
     static std::vector<std::string> MakeNames(const std::string &prefix, int size);
@@ -75,8 +76,7 @@ public:
     static std::vector<std::string> GetSubFunctionTypes(const std::string &subFuncSpec);
 
     /// Map the Substrait function keyword into Omni function keyword.
-    static std::pair<SubstraitToOmniExprType,std::string> MapToOmniFunction(const std::string &substraitFunction);
-
+    static std::pair<SubstraitToOmniExprType, std::string> MapToOmniFunction(const std::string &substraitFunction);
 
     /// @brief Return whether a config is set as true in AdvancedExtension
     /// optimization.
@@ -97,7 +97,7 @@ private:
     /// keywords. Key: the Substrait function keyword, Value: the Omni function
     /// keyword. For those functions with different names in Substrait and Omni,
     /// a mapping relation should be added here.
-    static std::unordered_map<std::string, std::pair<SubstraitToOmniExprType,std::string>> substraitOmniFunctionMap;
+    static std::unordered_map<std::string, std::pair<SubstraitToOmniExprType, std::string>> substraitOmniFunctionMap;
 
     // The map is uesd for mapping substrait type.
     // Key: type in function name.
@@ -107,4 +107,4 @@ private:
     static const uint32_t MAX_PRECISION_64 = 18;
     static const uint32_t MAX_PRECISION_128 = 38;
 };
-}
+} // namespace omniruntime
