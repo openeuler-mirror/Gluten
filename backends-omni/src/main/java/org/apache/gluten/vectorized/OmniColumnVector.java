@@ -129,7 +129,7 @@ public class OmniColumnVector extends WritableColumnVector {
         DecimalTypeNode decimalTypeNode = (DecimalTypeNode) typeNode;
         return new DecimalType(decimalTypeNode.precision, decimalTypeNode.scale);
       case "FP64TypeNode":
-        return DataTypes.FloatType;
+        return DataTypes.DoubleType;
       default:
         throw new RuntimeException("Not supported partition type: " + simpleName);
     }
