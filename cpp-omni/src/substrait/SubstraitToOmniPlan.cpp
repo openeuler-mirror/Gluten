@@ -4,6 +4,9 @@
 
 #include "SubstraitToOmniPlan.h"
 #include <expression/expressions.h>
+#include <vector>
+#include <stack>
+#include <algorithm>
 
 namespace omniruntime {
 namespace {
@@ -25,7 +28,7 @@ EmitInfo getEmitInfo(const ::substrait::RelCommon &relCommon, const PlanNodePtr 
     return emitInfo;
 }
 } // namespace
-SortOrder ToSortOrder(const ::substrait::SortField &sortField)
+SortOrderInfo ToSortOrder(const ::substrait::SortField &sortField)
 {
     switch (sortField.direction()) {
         case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
@@ -41,12 +44,95 @@ SortOrder ToSortOrder(const ::substrait::SortField &sortField)
     }
 }
 
+/// @brief Get the input type from both sides of join.
+/// @param leftNode the plan node of left side.
+/// @param rightNode the plan node of right side.
+/// @return the input type.
+DataTypesPtr getJoinInputType(const PlanNodePtr& leftNode, const PlanNodePtr& rightNode)
+{
+    auto outputSize = leftNode->OutputType()->GetSize() + rightNode->OutputType()->GetSize();
+    std::vector<DataTypePtr> joinInputTypes;
+    joinInputTypes.reserve(outputSize);
+
+    joinInputTypes.insert(
+        joinInputTypes.end(), leftNode->OutputType()->Get().begin(), leftNode->OutputType()->Get().end());
+    joinInputTypes.insert(
+        joinInputTypes.end(), rightNode->OutputType()->Get().begin(), rightNode->OutputType()->Get().end());
+
+    return std::make_shared<DataTypes>(std::move(joinInputTypes));
+}
+
+/// @brief Get the direct output type of join.
+/// @param leftNode the plan node of left side.
+/// @param rightNode the plan node of right side.
+/// @param joinType the join type.
+/// @return the output type.
+std::tuple<DataTypesPtr, DataTypesPtr> getJoinOutputType(const PlanNodePtr& leftNode,
+    const PlanNodePtr& rightNode, const JoinType& joinType)
+{
+    // Decide output type.
+    // Output of right semi join cannot include columns from the left side.
+    // velox: !(core::isRightSemiFilterJoin(joinType) || core::isRightSemiProjectJoin(joinType))
+    bool outputMayIncludeLeftColumns = true;
+
+    // Output of left semi and anti joins cannot include columns from the right side.
+    bool outputMayIncludeRightColumns = !(joinType == JoinType::OMNI_JOIN_TYPE_LEFT_SEMI ||
+        joinType == JoinType::OMNI_JOIN_TYPE_EXISTENCE || joinType == JoinType::OMNI_JOIN_TYPE_LEFT_ANTI);
+
+    if (outputMayIncludeLeftColumns && outputMayIncludeRightColumns) {
+        return {leftNode->OutputType(), rightNode->OutputType()};
+    }
+
+    if (outputMayIncludeLeftColumns) {
+        if (joinType == JoinType::OMNI_JOIN_TYPE_EXISTENCE) {
+            std::vector<DataTypePtr> outputTypes = leftNode->OutputType()->Get();
+            outputTypes.emplace_back(BooleanDataType::Instance());
+            return {std::make_shared<DataTypes>(std::move(outputTypes)), std::make_shared<DataTypes>()};
+        } else {
+            return {leftNode->OutputType(), std::make_shared<DataTypes>()};
+        }
+    }
+
+    if (outputMayIncludeRightColumns) {
+        return {std::make_shared<DataTypes>(), rightNode->OutputType()};
+    }
+
+    OMNI_THROW("Substrait Error", "Output should include left or right columns.");
+}
+
 std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id) {}
 
 void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression &joinExpression,
     std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
     std::vector<const ::substrait::Expression::FieldReference *> &rightExprs)
-{}
+{
+    std::stack<const ::substrait::Expression *> expressions;
+    expressions.push(&joinExpression);
+    while (!expressions.empty()) {
+        auto visited = expressions.top();
+        expressions.pop();
+        if (visited->rex_type_case() == ::substrait::Expression::RexTypeCase::kScalarFunction) {
+            auto findFunctionResult = SubstraitParser::FindOmniFunction(
+                functionMap, visited->scalar_function().function_reference());
+            const auto &funcName = SubstraitParser::GetNameBeforeDelimiter(findFunctionResult.second);
+            const auto &args = visited->scalar_function().arguments();
+            if (funcName == "AND") {
+                expressions.push(&args[1].value());
+                expressions.push(&args[0].value());
+            } else if (funcName == "EQUAL") {
+                OMNI_CHECK(std::all_of(args.cbegin(), args.cend(), [](const ::substrait::FunctionArgument& arg) {
+                    return arg.value().has_selection();
+                    }), "args is not all selection.");
+                leftExprs.push_back(&args[0].value().selection());
+                rightExprs.push_back(&args[1].value().selection());
+            } else {
+                OMNI_THROW("Substrait Error", "Join condition {} not supported.", funcName);
+            }
+        } else {
+            OMNI_THROW("Substrait Error", "Unable to parse from join expression: {}", joinExpression.DebugString());
+        }
+    }
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WriteRel &writeRel) {}
 
@@ -74,9 +160,134 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SetRel &
     }
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel &joinRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel &joinRel)
+{
+    if (!joinRel.has_left()) {
+        OMNI_THROW("Substrait Error", "Left Rel is expected in JoinRel.");
+    }
+    if (!joinRel.has_right()) {
+        OMNI_THROW("Substrait Error", "Right Rel is expected in JoinRel.");
+    }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel &crossRel) {}
+    auto leftNode = ToOmniPlan(joinRel.left());
+    auto rightNode = ToOmniPlan(joinRel.right());
+
+    // Map join type.
+    omniruntime::JoinType joinType;
+    bool isNullAwareAntiJoin = false;
+    switch (joinRel.type()) {
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_INNER:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_INNER;
+            break;
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_OUTER:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_FULL;
+            break;
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_LEFT;
+            break;
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_RIGHT;
+            break;
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT_SEMI:
+            // Determine the semi join type based on extracted information.
+            if (joinRel.has_advanced_extension() &&
+                SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isExistenceJoin=")) {
+                joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_EXISTENCE;
+            } else {
+                joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_LEFT_SEMI;
+            }
+            break;
+        case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT_ANTI:
+            // Determine the anti join type based on extracted information.
+            if (joinRel.has_advanced_extension() &&
+                SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isNullAwareAntiJoin=")) {
+                isNullAwareAntiJoin = true;
+            }
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_LEFT_ANTI;
+            break;
+        default:
+            OMNI_THROW("Substrait Error", "Unsupported Join type: {}", std::to_string(joinRel.type()));
+    }
+
+    // extract join keys from join expression
+    std::vector<const ::substrait::Expression::FieldReference *> leftExprs;
+    std::vector<const ::substrait::Expression::FieldReference *> rightExprs;
+    ExtractJoinKeys(joinRel.expression(), leftExprs, rightExprs);
+    OMNI_CHECK(leftExprs.size() == rightExprs.size(), "Left expr size must equal to right expr size");
+    size_t numKeys = leftExprs.size();
+
+    std::vector<std::shared_ptr<const FieldExpr>> leftKeys;
+    std::vector<std::shared_ptr<const FieldExpr>> rightKeys;
+    leftKeys.reserve(numKeys);
+    rightKeys.reserve(numKeys);
+    auto inputType = getJoinInputType(leftNode, rightNode);
+    for (size_t i = 0; i < numKeys; ++i) {
+        auto leftKey = dynamic_cast<const FieldExpr *>(
+            exprConverter->ToOmniExpr(*leftExprs[i], leftNode->OutputType()));
+        auto rightKey = dynamic_cast<const FieldExpr *>(
+            exprConverter->ToOmniExpr(*rightExprs[i], rightNode->OutputType()));
+        leftKeys.emplace_back(std::make_shared<const FieldExpr>(leftKey->colVal, leftKey->dataType));
+        rightKeys.emplace_back(std::make_shared<const FieldExpr>(rightKey->colVal, rightKey->dataType));
+    }
+
+    TypedExprPtr filter = nullptr;
+    if (joinRel.has_post_join_filter()) {
+        filter = exprConverter->ToOmniExpr(joinRel.post_join_filter(), inputType);
+    }
+
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType);
+
+    if (joinRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
+        // Create MergeJoinNode node
+        return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, leftKeys, rightKeys,
+            filter, leftNode, rightNode, leftOutputType, rightOutputType);
+    } else {
+        auto isBroadcast = joinRel.has_advanced_extension() &&
+            SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isBHJ=");
+
+        // Create HashJoinNode node
+        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, isNullAwareAntiJoin, !isBroadcast,
+            leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType);
+    }
+}
+
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel &crossRel)
+{
+    if (!crossRel.has_left()) {
+        OMNI_THROW("Substrait Error", "Left Rel is expected in CrossRel.");
+    }
+    if (!crossRel.has_right()) {
+        OMNI_THROW("Substrait Error", "Right Rel is expected in CrossRel.");
+    }
+
+    auto leftNode = ToOmniPlan(crossRel.left());
+    auto rightNode = ToOmniPlan(crossRel.right());
+
+    // Map join type.
+    omniruntime::JoinType joinType;
+    switch (crossRel.type()) {
+        case ::substrait::CrossRel_JoinType::CrossRel_JoinType_JOIN_TYPE_INNER:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_INNER;
+            break;
+        case ::substrait::CrossRel_JoinType::CrossRel_JoinType_JOIN_TYPE_LEFT:
+            joinType = omniruntime::JoinType::OMNI_JOIN_TYPE_LEFT;
+            break;
+        default:
+            OMNI_THROW("Substrait Error", "Unsupported Join type: {}", std::to_string(crossRel.type()));
+    }
+
+    auto inputRowType = getJoinInputType(leftNode, rightNode);
+    TypedExprPtr joinConditions;
+    if (crossRel.has_expression()) {
+        joinConditions = exprConverter->ToOmniExpr(crossRel.expression(), inputRowType);
+    }
+
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType);
+
+    return std::make_shared<NestedLoopJoinNode>(NextPlanNodeId(), joinType, joinConditions,
+        leftNode, rightNode, leftOutputType, rightOutputType);
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::AggregateRel &aggRel) {}
 

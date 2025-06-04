@@ -120,7 +120,18 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       condition: Option[Expression],
       left: SparkPlan,
       right: SparkPlan,
-      isSkewJoin: Boolean): ShuffledHashJoinExecTransformerBase = null
+      isSkewJoin: Boolean): ShuffledHashJoinExecTransformerBase = {
+    OmniShuffledHashJoinExecTransformer(
+      leftKeys, 
+      rightKeys, 
+      joinType, 
+      buildSide, 
+      condition, 
+      left, 
+      right, 
+      isSkewJoin
+    )
+  }
 
   /** Generate BroadcastHashJoinExecTransformer. */
   override def genBroadcastHashJoinExecTransformer(
@@ -131,7 +142,18 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       condition: Option[Expression],
       left: SparkPlan,
       right: SparkPlan,
-      isNullAwareAntiJoin: Boolean): BroadcastHashJoinExecTransformerBase = null
+      isNullAwareAntiJoin: Boolean): BroadcastHashJoinExecTransformerBase = {
+    OmniBroadcastHashJoinExecTransformer(
+      leftKeys, 
+      rightKeys,
+      joinType,
+      buildSide, 
+      condition,
+      left,
+      right,
+      isNullAwareAntiJoin
+    )
+  }
 
   override def genSampleExecTransformer(
       lowerBound: Double,
@@ -149,7 +171,18 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       left: SparkPlan,
       right: SparkPlan,
       isSkewJoin: Boolean,
-      projectList: Seq[NamedExpression]): SortMergeJoinExecTransformerBase = null
+      projectList: Seq[NamedExpression]): SortMergeJoinExecTransformerBase = {
+    OmniSortMergeJoinExecTransformer(
+      leftKeys,
+      rightKeys,
+      joinType,
+      condition,
+      left,
+      right,
+      isSkewJoin,
+      projectList
+    )
+  }
 
   /** Generate CartesianProductExecTransformer. */
   override def genCartesianProductExecTransformer(
@@ -162,7 +195,15 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       right: SparkPlan,
       buildSide: BuildSide,
       joinType: JoinType,
-      condition: Option[Expression]): BroadcastNestedLoopJoinExecTransformer = null
+      condition: Option[Expression]): BroadcastNestedLoopJoinExecTransformer = {
+    OmniBroadcastNestedLoopJoinExecTransformer(
+      left,
+      right,
+      buildSide,
+      joinType,
+      condition
+    )
+  }
 
   /** Generate an expression transformer to transform GetMapValue to Substrait. */
   override def genGetMapValueTransformer(
