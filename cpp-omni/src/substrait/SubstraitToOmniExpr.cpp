@@ -215,14 +215,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             return new LiteralExpr(substraitLit.date(), Date32Type());
         case ::substrait::Expression_Literal::LiteralTypeCase::kTimestamp:
             return new LiteralExpr(substraitLit.timestamp(), TimestampType());
-        case ::substrait::Expression_Literal::LiteralTypeCase::kString:
-        case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar: {
-            auto *stringVal = new std::string(substraitLit.var_char().value());
-            return new LiteralExpr(stringVal, VarcharType(substraitLit.var_char().length()));
-        }
-        case ::substrait::Expression_Literal::LiteralTypeCase::kFixedChar: {
-            auto *stringVal = new std::string(substraitLit.fixed_char().data());
-            return new LiteralExpr(stringVal, CharType(substraitLit.fixed_char().length()));
+        case ::substrait::Expression_Literal::LiteralTypeCase::kString: {
+            auto *stringVal = new std::string(substraitLit.string());
+            return new LiteralExpr(stringVal, VarcharType(stringVal->length()));
         }
         case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
             auto decimal = substraitLit.decimal().value();
