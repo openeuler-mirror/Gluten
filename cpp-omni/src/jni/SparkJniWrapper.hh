@@ -53,7 +53,7 @@ JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_row
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(JNIEnv *env, jobject, jlong splitter_id);
 
-JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
     JNIEnv *env, jobject wrapper, jbyteArray planArray);
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeCreateKernelWithIterator(

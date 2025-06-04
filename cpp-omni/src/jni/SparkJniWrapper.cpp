@@ -234,14 +234,13 @@ inline uint8_t *getByteArrayElementsSafe(JNIEnv *env, jbyteArray array)
     return reinterpret_cast<uint8_t*>(nativeArray);
 }
 
-JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
     JNIEnv *env, jobject wrapper, jbyteArray planArray)
 {
     JNI_FUNC_START
         auto planData = getByteArrayElementsSafe(env, planArray);
         auto planSize = env->GetArrayLength(planArray);
 
-        ::substrait::Plan subPlan;
         CodedInputStream codedStream{planData, planSize};
         codedStream.SetRecursionLimit(100000);
         ::substrait::Plan substraitPlan;
@@ -251,16 +250,16 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrap
         omniruntime::SubstraitToOmniPlanValidator planValidator(pool);
 
         try {
-            auto isSupported = planValidator.Validate(subPlan);
+            auto isSupported = planValidator.Validate(substraitPlan);
             auto logs = planValidator.GetValidateLog();
             std::string concatLog;
             for (int i = 0; i < logs.size(); i++) {
                 concatLog += logs[i] + "@";
             }
             return env->NewObject(infoCls, method, isSupported, env->NewStringUTF(concatLog.c_str()));
-        } catch (std::invalid_argument &e) {
+        } catch (std::exception &e) {
             auto isSupported = false;
-            return env->NewObject(infoCls, method, isSupported, env->NewStringUTF(""));
+            return env->NewObject(infoCls, method, isSupported, env->NewStringUTF(e.what()));
         }
     JNI_FUNC_END(runtimeExceptionClass)
 }

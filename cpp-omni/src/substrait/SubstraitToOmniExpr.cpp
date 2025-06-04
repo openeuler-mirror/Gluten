@@ -123,11 +123,6 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
                 OMNI_THROW("SUBSTRAIT_ERROR:", "The type of args[1] is not equal to LITERAL_E");
             }
             auto literalExpr = static_cast<LiteralExpr *>(secondArg);
-            if (*(literalExpr->stringVal) != "^\\d+$") {
-                Expr::DeleteExprs(args);
-                OMNI_THROW("SUBSTRAIT_ERROR:", "The stringVal of the literalExpr is not equal to '^\\d+$',which is {}",
-                    literalExpr->stringVal);
-            }
         }
         // check the signature matches
         std::vector<DataTypeId> argTypes(args.size());

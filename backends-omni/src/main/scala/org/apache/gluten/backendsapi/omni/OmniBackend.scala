@@ -26,13 +26,18 @@ import org.apache.gluten.extension.columnar.transition.Convention
 import org.apache.gluten.substrait.plan.PlanNode
 import org.apache.gluten.substrait.rel.LocalFilesNode
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
+import org.apache.gluten.validate.NativePlanValidationInfo
+import org.apache.gluten.vectorized.OmniNativePlanEvaluator
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.types._
+import org.apache.spark.task.TaskResources
 import org.apache.spark.util.SerializableConfiguration
+
+import scala.collection.JavaConverters.asScalaBufferConverter
 
 class OmniBackend extends SubstraitBackend {
 //  import OmniBackend._
@@ -105,8 +110,20 @@ class OmniValidatorApi extends ValidatorApi {
 
   /** Validate against Substrait plan node in native backend. */
   override def doNativeValidateWithFailureReason(plan: PlanNode): ValidationResult = {
-    // todo
-    ValidationResult.succeeded
+    TaskResources.runUnsafe {
+      val validator = OmniNativePlanEvaluator.create(BackendsApiManager.getBackendName)
+      asValidationResult(validator.doNativeValidateWithFailureReason(plan.toProtobuf.toByteArray))
+    }
+  }
+
+  private def asValidationResult(info: NativePlanValidationInfo): ValidationResult = {
+    if (info.isSupported == 1) {
+      return ValidationResult.succeeded
+    }
+    ValidationResult.failed(
+      String.format(
+        "Native validation failed: %n%s",
+        info.fallbackInfo.asScala.reduce[String] { case (l, r) => l + "\n" + r }))
   }
 
   /** Validate against ColumnarShuffleExchangeExec. */

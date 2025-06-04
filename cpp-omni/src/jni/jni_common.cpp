@@ -149,7 +149,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
 
     runtimeAwareClass = CreateGlobalClassReference(env, "Lorg/apache/gluten/runtime/RuntimeAware;");
     runtimeAwareCtxHandle = getMethodIdOrError(env, runtimeAwareClass, "rtHandle", "()J");
-    infoCls = env->FindClass("Lorg/apache/gluten/validate/NativePlanValidationInfo;");
+    infoCls = CreateGlobalClassReference(env, "Lorg/apache/gluten/validate/NativePlanValidationInfo;");
     if (infoCls == nullptr) {
         std::string errorMessage = "Unable to CreateGlobalClassReferenceOrError for NativePlanValidationInfo";
         OMNI_THROW("RUNTIME_ERROR", errorMessage);

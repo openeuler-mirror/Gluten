@@ -8,6 +8,7 @@
 #include <re2/re2.h>
 #include <string>
 #include "expression/expr_verifier.h"
+#include "expression/expr_printer.h"
 #include "expression/expressions.h"
 
 namespace omniruntime {
@@ -184,38 +185,7 @@ bool SubstraitToOmniPlanValidator::ValidateScalarFunction(
         if (argument.has_value() && !ValidateExpression(argument.value(), inputType)) {
             return false;
         }
-        params.emplace_back(exprConverter_->ToOmniExpr(argument.value(), inputType));
     }
-
-    const auto &function =
-        SubstraitParser::FindFunctionSpec(planConverter.GetFunctionMap(), scalarFunction.function_reference());
-    const auto &name = SubstraitParser::GetNameBeforeDelimiter(function);
-    std::vector<std::string> types = SubstraitParser::GetSubFunctionTypes(function);
-
-    if (name == "round") {
-        return ValidateRound(scalarFunction, inputType);
-    } else if (name == "extract") {
-        return ValidateExtractExpr(params);
-    } else if (name == "concat") {
-        for (const auto &type : types) {
-            if (type.find("struct") != std::string::npos || type.find("map") != std::string::npos ||
-                type.find("list") != std::string::npos) {
-                LOG_VALIDATION_MSG(type + " is not supported in concat.");
-                return false;
-            }
-        }
-    }
-
-    // Validate regex functions.
-    if (kRegexFunctions.find(name) != kRegexFunctions.end()) {
-        return ValidateRegexExpr(name, scalarFunction);
-    }
-
-    if (kBlackList.find(name) != kBlackList.end()) {
-        LOG_VALIDATION_MSG("Function is not supported: " + name);
-        return false;
-    }
-
     return true;
 }
 
@@ -246,41 +216,7 @@ bool SubstraitToOmniPlanValidator::ValidateCast(
     if (!ValidateExpression(castExpr.input(), inputType)) {
         return false;
     }
-
-    const auto &toType = SubstraitParser::ParseType(castExpr.type());
-    TypedExprPtr input = exprConverter_->ToOmniExpr(castExpr.input(), inputType);
-
-    // Only support cast from date to timestamp
-    if (toType->GetId() == OMNI_TIMESTAMP && input->dataType->GetId() != OMNI_DATE64) {
-        LOG_VALIDATION_MSG("Casting from " + TypeUtil::TypeToStringLog(input->dataType->GetId()) + " to " +
-            TypeUtil::TypeToStringLog(toType->GetId()) + " is not supported.");
-        return false;
-    }
-
-    // Casting from some types is not supported. See CastExpr::applyPeeled.
-    if (input->dataType->GetId() == OMNI_DATE64) {
-        // Only support cast date to varchar & timestamp
-        if (toType->GetId() != OMNI_VARCHAR && toType->GetId() != DataTypeId::OMNI_TIMESTAMP) {
-            LOG_VALIDATION_MSG(
-                "Casting from DATE to " + TypeUtil::TypeToStringLog(toType->GetId()) + " is not supported.");
-            return false;
-        }
-    }
-
-    switch (input->dataType->GetId()) {
-        case OMNI_INT:
-        case OMNI_LONG:
-        case OMNI_DOUBLE:
-        case OMNI_DECIMAL64:
-        case OMNI_DECIMAL128:
-        case OMNI_VARCHAR:
-        case OMNI_CHAR:
-        case OMNI_DATE64:
-            return true;
-        default: {
-            return false;
-        }
-    }
+    return true;
 }
 
 bool SubstraitToOmniPlanValidator::ValidateIfThen(
@@ -836,6 +772,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ProjectRel &proje
     expressions.reserve(projectExprs.size());
     for (const auto &expr : projectExprs) {
         if (!ValidateExpression(expr, rowType)) {
+            LOG_VALIDATION_MSG("substrait validation fail!");
             return false;
         }
         expressions.emplace_back(exprConverter_->ToOmniExpr(expr, rowType));
@@ -845,6 +782,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ProjectRel &proje
     ExprVerifier ev;
     for (const auto &expression : expressions) {
         if (!ev.VisitExpr(*expression)) {
+            LOG_VALIDATION_MSG("OmniExpr validation fail!");
             return false;
         }
     }
@@ -1245,6 +1183,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::Plan &plan)
 
         return false;
     } catch (const OmniException &err) {
+        LOG_VALIDATION_MSG(err.what());
         return false;
     }
 }

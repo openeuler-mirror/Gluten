@@ -28,6 +28,7 @@ EmitInfo getEmitInfo(const ::substrait::RelCommon &relCommon, const PlanNodePtr 
     return emitInfo;
 }
 } // namespace
+
 SortOrderInfo ToSortOrder(const ::substrait::SortField &sortField)
 {
     switch (sortField.direction()) {

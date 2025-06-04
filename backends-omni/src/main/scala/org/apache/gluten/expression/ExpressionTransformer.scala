@@ -16,9 +16,15 @@
  */
 package org.apache.gluten.expression
 
+import org.apache.gluten.expression.ConverterUtils.FunctionConfig
 import org.apache.gluten.substrait.expression._
 import org.apache.spark.sql.catalyst.expressions._
+import org.apache.spark.sql.types.{IntegerType, LongType}
 
+import java.lang.{Long => JLong}
+import java.util.{ArrayList => JArrayList, HashMap => JHashMap}
+
+import scala.language.existentials
 
 case class OmniAliasTransformer(
     substraitExprName: String,
@@ -28,6 +34,41 @@ case class OmniAliasTransformer(
 
   override def doTransform(args: java.lang.Object): ExpressionNode = {
     child.doTransform(args)
+  }
+}
+
+case class OmniHashExpressionTransformer(
+    substraitExprName: String,
+    children: Seq[ExpressionTransformer],
+    original: HashExpression[_])
+  extends ExpressionTransformer {
+
+  override def doTransform(args: java.lang.Object): ExpressionNode = {
+    // As of Spark 3.3, there are 3 kinds of HashExpression.
+    // HiveHash is not supported in native backend and will fail native validation.
+    val (seedNode, seedType) = original match {
+      case XxHash64(_, seed) =>
+        (ExpressionBuilder.makeLongLiteral(seed), LongType)
+      case Murmur3Hash(_, seed) =>
+        (ExpressionBuilder.makeIntLiteral(seed), IntegerType)
+      case HiveHash(_) =>
+        (ExpressionBuilder.makeIntLiteral(0), IntegerType)
+    }
+    val nodes = new JArrayList[ExpressionNode]()
+    // Seed as the final argument
+
+    children.foreach(
+      expression => {
+        nodes.add(expression.doTransform(args))
+      })
+    nodes.add(seedNode)
+    val childrenTypes = seedType +: original.children.map(child => child.dataType)
+    val functionMap = args.asInstanceOf[JHashMap[String, JLong]]
+    val functionName =
+      ConverterUtils.makeFuncName(substraitExprName, childrenTypes, FunctionConfig.OPT)
+    val functionId = ExpressionBuilder.newScalarFunction(functionMap, functionName)
+    val typeNode = ConverterUtils.getTypeNode(original.dataType, original.nullable)
+    ExpressionBuilder.makeScalarFunction(functionId, nodes, typeNode)
   }
 }
 
