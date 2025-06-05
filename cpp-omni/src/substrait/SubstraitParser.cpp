@@ -277,8 +277,12 @@ op::FunctionType SubstraitParser::ParseFunctionType(
         return op::OMNI_AGGREGATION_TYPE_FIRST_IGNORENULL;
     } else if (funcName == "first") {
         return op::OMNI_AGGREGATION_TYPE_FIRST_INCLUDENULL;
+    } else if (funcName == "rank") {
+        return op::OMNI_WINDOW_TYPE_RANK;
+    } else if (funcName == "row_number") {
+        return op::OMNI_WINDOW_TYPE_ROW_NUMBER;
     } else {
-        OMNI_THROW("Substrait Error:", "Unsupported aggregate function: {}", funcName);
+        OMNI_THROW("Substrait Error:", "Unsupported aggregate or window function: {}", funcName);
     }
 }
 
@@ -320,6 +324,8 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"greatest", {FUNCTION_OMNI_EXPR_TYPE, "Greatest"}},
     {"contains", {FUNCTION_OMNI_EXPR_TYPE, "Contains"}},
     {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE, "mm3hash"}},
+    {"rank", {FUNCTION_OMNI_EXPR_TYPE, "rank"}},
+    {"row_number", {FUNCTION_OMNI_EXPR_TYPE, "row_number"}},
     {"count", {FUNCTION_OMNI_EXPR_TYPE, "count"}},
     {"sum", {FUNCTION_OMNI_EXPR_TYPE, "sum"}},
     {"min", {FUNCTION_OMNI_EXPR_TYPE, "min"}},

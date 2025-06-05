@@ -13,6 +13,7 @@
 #include "compute/ResultIterator.h"
 #include "plannode/RowVectorStream.h"
 #include "plannode/planNode.h"
+#include "operator/window/window_frame.h"
 
 namespace omniruntime {
 /// This class is used to convert the Substrait plan into Omni plan.
@@ -177,11 +178,10 @@ private:
         return ToOmniPlan(rel.input());
     }
 
-    // const WindowNode::Frame createWindowFrame(
-    //     const ::substrait::Expression_WindowFunction_Bound& lower_bound,
-    //     const ::substrait::Expression_WindowFunction_Bound& upper_bound,
-    //     const ::substrait::WindowType& type,
-    //     const RowTypePtr& inputType);
+    const WindowFrameInfo createWindowFrameInfo(
+        const ::substrait::Expression_WindowFunction_Bound& lower_bound,
+        const ::substrait::Expression_WindowFunction_Bound& upper_bound,
+        const ::substrait::WindowType& type);
 
     /// The unique identification for each PlanNode.
     int planNodeId = 0;

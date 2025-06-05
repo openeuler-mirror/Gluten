@@ -29,6 +29,7 @@ import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.gluten.validate.NativePlanValidationInfo
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator
 import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution.SparkPlan
@@ -38,6 +39,7 @@ import org.apache.spark.task.TaskResources
 import org.apache.spark.util.SerializableConfiguration
 
 import scala.collection.JavaConverters.asScalaBufferConverter
+import scala.collection.Seq
 
 class OmniBackend extends SubstraitBackend {
 //  import OmniBackend._
@@ -105,6 +107,8 @@ object OmniBackendSettings extends BackendSettingsApi {
   override def supportSortExec(): Boolean = true
 
   override def supportExpandExec(): Boolean = true
+
+  override def supportWindowExec(windowFunctions: Seq[NamedExpression]): Boolean = true
 
 }
 

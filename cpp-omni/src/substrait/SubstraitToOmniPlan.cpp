@@ -174,7 +174,111 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRe
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::GenerateRel &generateRel) {}
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRel &windowRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRel &windowRel)
+{
+    auto childNode = ConvertSingleInput<::substrait::WindowRel>(windowRel);
+    std::vector<int32_t> windowFunctionTypes;
+    std::vector<DataTypePtr> windowFunctionReturnTypesVec;
+    std::vector<DataTypePtr> allTypesVec;
+    auto sourceTypesVec = childNode->OutputType()->Get();
+    allTypesVec.insert(allTypesVec.end(), sourceTypesVec.begin(), sourceTypesVec.end());
+    std::vector<int32_t> argumentChannels;
+
+    std::vector<int32_t> windowFrameTypes;
+    std::vector<int32_t> windowFrameStartTypes;
+    std::vector<int32_t> windowFrameStartChannels;
+    std::vector<int32_t> windowFrameEndTypes;
+    std::vector<int32_t> windowFrameEndChannels;
+
+    std::vector<op::WindowFrameInfo> windowFrameInfos;
+
+    for (const auto& smea : windowRel.measures()) {
+        const auto& windowFunction = smea.measure();
+        std::vector<substrait::Expression> expressionNodes;
+        for (const auto& arg : windowFunction.arguments()) {
+            expressionNodes.emplace_back(arg.value());
+            auto expression = exprConverter->ToOmniExpr(arg.value(), childNode->OutputType());
+            auto fieldExpr = dynamic_cast<const FieldExpr *>(expression);
+            argumentChannels.emplace_back(fieldExpr->colVal);
+        }
+        auto funcName = SubstraitParser::FindOmniFunction(functionMap, windowFunction.function_reference());
+        op::FunctionType functionType = SubstraitParser::ParseFunctionType(funcName.second, expressionNodes, false);
+        windowFunctionTypes.push_back(functionType);
+        auto windowFunctionReturnType = SubstraitParser::ParseType(windowFunction.output_type());
+        windowFunctionReturnTypesVec.push_back(windowFunctionReturnType);
+        allTypesVec.push_back(windowFunctionReturnType);
+        auto type = windowFunction.window_type();
+        auto lowerBound = windowFunction.lower_bound();
+        auto upperBound = windowFunction.upper_bound();
+        windowFrameInfos.push_back(std::move(createWindowFrameInfo(lowerBound, upperBound, type)));
+    }
+    for (auto& windowFrameInfo : windowFrameInfos) {
+        windowFrameTypes.push_back(windowFrameInfo.GetType());
+        windowFrameStartTypes.push_back(windowFrameInfo.GetStartType());
+        windowFrameStartChannels.push_back(windowFrameInfo.GetStartChannel());
+        windowFrameEndTypes.push_back(windowFrameInfo.GetEndType());
+        windowFrameEndChannels.push_back(windowFrameInfo.GetEndChannel());
+    }
+    auto windowFunctionReturnTypes = std::make_shared<DataTypes>(windowFunctionReturnTypesVec);
+    auto allTypes = std::make_shared<DataTypes>(allTypesVec);
+    std::vector<int32_t> partitionCols;
+    const auto& partitions = windowRel.partition_expressions();
+    for (const auto& partition : partitions) {
+        auto expression = exprConverter->ToOmniExpr(partition, childNode->OutputType());
+        auto fieldExpr = dynamic_cast<const FieldExpr *>(expression);
+        partitionCols.emplace_back(fieldExpr->colVal);
+    }
+    std::vector<int32_t> preGroupedCols;
+    int32_t preSortedChannelPreFix = 0;
+    int32_t expectedPositionsCount = 10000;
+    auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(windowRel.sorts(), childNode->OutputType());
+    return std::make_shared<WindowNode>(NextPlanNodeId(), windowFunctionTypes, partitionCols, preGroupedCols,
+        sortingKeys, sortingOrders, sortNullFirsts, preSortedChannelPreFix, expectedPositionsCount,
+        windowFunctionReturnTypes, allTypes, argumentChannels, windowFrameTypes, windowFrameStartTypes,
+        windowFrameStartChannels, windowFrameEndTypes, windowFrameEndChannels, childNode);
+}
+
+const WindowFrameInfo SubstraitToOmniPlanConverter::createWindowFrameInfo(
+    const ::substrait::Expression_WindowFunction_Bound& lower_bound,
+    const ::substrait::Expression_WindowFunction_Bound& upper_bound,
+    const ::substrait::WindowType& type)
+{
+    op::FrameType frameType;
+    op::FrameBoundType frameStartType;
+    int32_t frameStartCol;
+    op::FrameBoundType frameEndType;
+    int32_t frameEndCol;
+    switch (type) {
+        case ::substrait::WindowType::ROWS:
+            frameType = op::OMNI_FRAME_TYPE_ROWS;
+            break;
+        case ::substrait::WindowType::RANGE:
+            frameType = op::OMNI_FRAME_TYPE_RANGE;
+            break;
+        default:
+            OMNI_THROW("Substrait Error", "Unsupported WindowRel WindowType: " + std::to_string(type));
+    }
+    auto boundTypeConversion = [&](::substrait::Expression_WindowFunction_Bound boundType)
+        -> std::tuple<op::FrameBoundType, int32_t> {
+        if (boundType.has_current_row()) {
+            return std::make_tuple(op::OMNI_FRAME_BOUND_CURRENT_ROW, -1);
+        } else if (boundType.has_unbounded_following()) {
+            return std::make_tuple(op::OMNI_FRAME_BOUND_UNBOUNDED_FOLLOWING, -1);
+        } else if (boundType.has_unbounded_preceding()) {
+            return std::make_tuple(op::OMNI_FRAME_BOUND_UNBOUNDED_PRECEDING, -1);
+        } else if (boundType.has_following()) {
+            OMNI_THROW("Substrait Error", "The BoundType is not supported: Bound Type: N FOLLOWING");
+        } else if (boundType.has_preceding()) {
+            OMNI_THROW("Substrait Error", "The BoundType is not supported: Bound Type: N PRECEDING");
+        } else {
+            OMNI_THROW("Substrait Error", "Unknown or unset bound type.");
+        }
+    };
+    std::tie(frameStartType, frameStartCol) = boundTypeConversion(lower_bound);
+    std::tie(frameEndType, frameEndCol) = boundTypeConversion(upper_bound);
+    op::WindowFrameInfo frame(frameType, frameStartType, frameStartCol, frameEndType, frameEndCol);
+    return frame;
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowGroupLimitRel &windowGroupLimitRel) {}
 
