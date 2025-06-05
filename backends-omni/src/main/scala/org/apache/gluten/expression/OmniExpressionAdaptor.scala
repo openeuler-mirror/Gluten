@@ -357,32 +357,31 @@ object OmniExpressionAdaptor extends Logging {
           )
 
 //      // Cast
-//      case CastTypeShim(cast) =>
-//        ShimUtil.unsupportedCastCheck(expr, cast)
-//        cast.child.dataType match {
-//          case NullType =>
-//            // cast(null as xx)的情况，转化为对应的类型的literal下推到omni进行运算
-//            new JsonObject().put("exprType", "LITERAL")
-//              .addOmniExpJsonType("dataType", cast.dataType)
-//              .put("isNull", true)
-//          case _ =>
-//            cast.dataType match {
-//              case StringType =>
-//                new JsonObject().put("exprType", "FUNCTION")
-//                  .addOmniExpJsonType("returnType", cast.dataType)
-//                  .put("width", 50)
-//                  .put("function_name", "CAST")
-//                  .put("arguments", new JsonArray().put(
-//                    rewriteToOmniJsonExpressionLiteralJsonObject(cast.child, exprsIndexMap)))
-//
-//              case _ =>
-//                new JsonObject().put("exprType", "FUNCTION")
-//                  .addOmniExpJsonType("returnType", cast.dataType)
-//                  .put("function_name", "CAST")
-//                  .put("arguments", new JsonArray().put(
-//                    rewriteToOmniJsonExpressionLiteralJsonObject(cast.child, exprsIndexMap)))
-//            }
-//        }
+      case cast: Cast =>
+        cast.child.dataType match {
+          case NullType =>
+            // cast(null as xx)的情况，转化为对应的类型的literal下推到omni进行运算
+            new JsonObject().put("exprType", "LITERAL")
+              .addOmniExpJsonType("dataType", cast.dataType)
+              .put("isNull", true)
+          case _ =>
+            cast.dataType match {
+              case StringType =>
+                new JsonObject().put("exprType", "FUNCTION")
+                  .addOmniExpJsonType("returnType", cast.dataType)
+                  .put("width", 50)
+                  .put("function_name", "CAST")
+                  .put("arguments", new JsonArray().put(
+                    rewriteToOmniJsonExpressionLiteralJsonObject(cast.child, exprsIndexMap)))
+
+              case _ =>
+                new JsonObject().put("exprType", "FUNCTION")
+                  .addOmniExpJsonType("returnType", cast.dataType)
+                  .put("function_name", "CAST")
+                  .put("arguments", new JsonArray().put(
+                    rewriteToOmniJsonExpressionLiteralJsonObject(cast.child, exprsIndexMap)))
+            }
+        }
 
       // Abs
       case abs: Abs =>
