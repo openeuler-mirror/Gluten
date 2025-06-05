@@ -3,10 +3,10 @@
 //
 
 #include "SubstraitToOmniPlan.h"
-#include <expression/expressions.h>
-#include <vector>
-#include <stack>
 #include <algorithm>
+#include <expression/expressions.h>
+#include <stack>
+#include <vector>
 
 namespace omniruntime {
 namespace {
@@ -290,7 +290,122 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel
         leftNode, rightNode, leftOutputType, rightOutputType);
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::AggregateRel &aggRel) {}
+std::vector<uint32_t> getDefaultMaskChannel(const std::vector<uint32_t>& aggFuncTypes)
+{
+    if (aggFuncTypes.empty()) {
+        return {};
+    }
+    return std::vector<uint32_t>(aggFuncTypes.size(), static_cast<uint32_t>(-1));
+}
+
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::AggregateRel &aggRel)
+{
+    auto childNode = ConvertSingleInput<::substrait::AggregateRel>(aggRel);
+    const auto &sourceDataTypes = childNode->OutputType();
+    std::vector<TypedExprPtr> aggFilterExprs;
+    std::vector<DataTypesPtr> aggOutputTypes;
+    std::vector<uint32_t> aggFuncTypes;
+    std::vector<uint32_t> maskColumns;
+    std::vector<bool> inputRaws;
+    std::vector<bool> outputPartial;
+    std::vector<TypedExprPtr> groupingExprs;
+    uint32_t groupByNum = 0;
+
+    for (const auto &grouping : aggRel.groupings()) {
+        for (const auto &groupingExpr : grouping.grouping_expressions()) {
+            groupingExprs.emplace_back(exprConverter->ToOmniExpr(groupingExpr, sourceDataTypes));
+            groupByNum++;
+        }
+    }
+
+    for (const auto &measure : aggRel.measures()) {
+        ::substrait::Expression substraitFilter = measure.filter();
+        if (measure.has_filter()) {
+            if (substraitFilter.ByteSizeLong() > 0) {
+                auto omniFilter = exprConverter->ToOmniExpr(substraitFilter, sourceDataTypes);
+                aggFilterExprs.emplace_back(omniFilter);
+            }
+        }
+
+        const auto &aggFunction = measure.measure();
+        auto baseFuncName = SubstraitParser::FindOmniFunction(functionMap, aggFunction.function_reference());
+        std::vector<substrait::Expression> expressionNodes;
+        for (const auto &arg : aggFunction.arguments()) {
+            auto argValue = arg.value();
+            expressionNodes.emplace_back(argValue);
+        }
+        const auto &mode = aggFunction.phase();
+
+        switch (mode) {
+            case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE: { // Partial
+                auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
+                aggOutputTypes.emplace_back(substraitOutTypes);
+                aggFuncTypes.emplace_back(
+                    SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, true));
+                inputRaws.emplace_back(true);
+                outputPartial.emplace_back(true);
+                break;
+            }
+            case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE: { // PartialMerge
+                auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
+                aggOutputTypes.emplace_back(substraitOutTypes);
+                aggFuncTypes.emplace_back(
+                    SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, false));
+                inputRaws.emplace_back(false);
+                outputPartial.emplace_back(true);
+                break;
+            }
+            case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT: { // Complete
+                auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
+                std::vector<DataTypePtr> dataTypes = {substraitOutType};
+                auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));
+                aggOutputTypes.emplace_back(dataTypesPtr);
+                aggFuncTypes.emplace_back(
+                    SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, true));
+                inputRaws.emplace_back(true);
+                outputPartial.emplace_back(false);
+                break;
+            }
+            case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT: { // Final
+                auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
+                std::vector<DataTypePtr> dataTypes = {substraitOutType};
+                auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));
+                aggOutputTypes.emplace_back(dataTypesPtr);
+                aggFuncTypes.emplace_back(
+                    SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, false));
+                inputRaws.emplace_back(false);
+                outputPartial.emplace_back(false);
+                break;
+            }
+            default:
+                OMNI_THROW("SUBSTRAIT_ERROR:", "Unexpected aggregation phase.");
+        }
+
+        std::vector<std::vector<TypedExprPtr>> aggsKeys;
+        aggsKeys.resize(aggRel.measures().size());
+        for (const auto &measure : aggRel.measures()) {
+            int aggFunIndex = 0;
+            const auto &aggFunction = measure.measure();
+            for (const auto &arg : aggFunction.arguments()) {
+                auto argValue = arg.value();
+                auto tempExpr = exprConverter->ToOmniExpr(argValue, sourceDataTypes);
+                aggsKeys[aggFunIndex].emplace_back(tempExpr);
+            }
+            aggFunIndex++;
+        }
+
+        bool isStatisticalAggregate = false;
+        maskColumns = getDefaultMaskChannel(aggFuncTypes);
+        std::vector<DataTypes> outPutDataTypes;
+        for (const auto &outputType : aggOutputTypes) {
+            outPutDataTypes.emplace_back(*outputType);
+        }
+
+        return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
+            outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial,
+            isStatisticalAggregate, childNode);
+    }
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectRel &projectRel)
 {

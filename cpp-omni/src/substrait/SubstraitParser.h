@@ -15,6 +15,7 @@
 #include "type/data_types.h"
 #include "util/omni_exception.h"
 
+#include "operator/util/function_type.h"
 #include "util/type_util.h"
 
 namespace omniruntime {
@@ -91,6 +92,11 @@ public:
     // Get values for the different supported types.
     template <typename T>
     static T GetLiteralValue(const ::substrait::Expression::Literal & /* literal */);
+
+    static type::DataTypesPtr ParseStructType(const ::substrait::Type &substraitType);
+
+    static op::FunctionType ParseFunctionType(
+        const std::string &funcName, std::vector<substrait::Expression> &expressionNodes, bool isMergeCount);
 
 private:
     /// A map used for mapping Substrait function keywords into Omni functions'

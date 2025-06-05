@@ -234,6 +234,54 @@ std::string SubstraitParser::GetLiteralValue(const ::substrait::Expression::Lite
     }
 }
 
+type::DataTypesPtr SubstraitParser::ParseStructType(const ::substrait::Type &substraitType)
+{
+    const auto &substraitStruct = substraitType.struct_();
+    const auto &structTypes = substraitStruct.types();
+    std::vector<type::DataTypePtr> types;
+    for (int i = 0; i < structTypes.size(); i++) {
+        types.emplace_back(ParseType(structTypes[i]));
+    }
+    return std::make_shared<type::DataTypes>(std::move(types));
+}
+
+op::FunctionType SubstraitParser::ParseFunctionType(
+    const std::string &funcName, std::vector<substrait::Expression> &expressionNodes, bool isMergeCount)
+{
+    if (funcName.empty()) {
+        OMNI_THROW("Substrait Error:", "parse function type failed as func name is NULL");
+    }
+
+    if (funcName == "sum") {
+        return op::OMNI_AGGREGATION_TYPE_SUM;
+    } else if (funcName == "max") {
+        return op::OMNI_AGGREGATION_TYPE_MAX;
+    } else if (funcName == "avg") {
+        return op::OMNI_AGGREGATION_TYPE_AVG;
+    } else if (funcName == "min") {
+        return op::OMNI_AGGREGATION_TYPE_MIN;
+    } else if (funcName == "count") {
+        if (expressionNodes.empty()) {
+            OMNI_THROW("Substrait Error:", "Unsupported aggregate function without expressions", funcName);
+        }
+        substrait::Expression firstExpNode = expressionNodes.front();
+        if (firstExpNode.rex_type_case() == ::substrait::Expression::RexTypeCase::kLiteral) {
+            if (isMergeCount) {
+                return op::OMNI_AGGREGATION_TYPE_COUNT_COLUMN;
+            }
+            return op::OMNI_AGGREGATION_TYPE_COUNT_ALL;
+        } else {
+            return op::OMNI_AGGREGATION_TYPE_COUNT_COLUMN;
+        }
+    } else if (funcName == "first_ignore_null") {
+        return op::OMNI_AGGREGATION_TYPE_FIRST_IGNORENULL;
+    } else if (funcName == "first") {
+        return op::OMNI_AGGREGATION_TYPE_FIRST_INCLUDENULL;
+    } else {
+        OMNI_THROW("Substrait Error:", "Unsupported aggregate function: {}", funcName);
+    }
+}
+
 std::unordered_map<std::string, std::pair<SubstraitToOmniExprType, std::string>>
 SubstraitParser::substraitOmniFunctionMap = {
     {"is_not_null", {IS_NOT_NULL_OMNI_EXPR_TYPE, "IS_NOT_NULL"}},
@@ -271,5 +319,6 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"strpos", {FUNCTION_OMNI_EXPR_TYPE, "instr"}},
     {"greatest", {FUNCTION_OMNI_EXPR_TYPE, "Greatest"}},
     {"contains", {FUNCTION_OMNI_EXPR_TYPE, "Contains"}},
-    {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE, "mm3hash"}}};
+    {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE, "mm3hash"}},
+    {"count", {COALESCE_OMNI_EXPR_TYPE, "count"}}};
 } // namespace omniruntime
