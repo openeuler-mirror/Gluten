@@ -243,6 +243,17 @@ public class VectorTransferUtils {
           doubleVec.put(values, 0, 0, size);
         }
         return doubleVec;
+      case "TimestampTypeNode":
+        LongVec timestampVec = new LongVec(size);
+        if (value == null) {
+          byte[] nulls = new byte[size];
+          Arrays.fill(nulls, (byte) 1);
+          timestampVec.setNulls(0, nulls, 0, size);
+        } else {
+          long[] values = new long[size];
+          Arrays.fill(values, Long.parseLong(value));
+          timestampVec.put(values, 0, 0, size);
+        }
       default:
         throw new RuntimeException("Not supported partition type: " + simpleName);
     }

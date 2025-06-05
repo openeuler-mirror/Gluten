@@ -223,12 +223,12 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             auto decimal = substraitLit.decimal().value();
             auto precision = substraitLit.decimal().precision();
             auto scale = substraitLit.decimal().scale();
+            int128_t decimalValue;
+            memcpy_s(&decimalValue, sizeof(int128_t), decimal.c_str(), sizeof(int128_t));
             if (precision <= DECIMAL64_DEFAULT_PRECISION) {
-                int128_t decimalValue;
-                memcpy_s(&decimalValue, sizeof(int128_t), decimal.c_str(), sizeof(int128_t));
                 return new LiteralExpr(static_cast<int64_t>(decimalValue), Decimal64Type(precision, scale));
             } else {
-                auto *dec128String = new std::string(decimal);
+                auto *dec128String = new std::string(Uint128ToStr(decimalValue));
                 return new LiteralExpr(dec128String, Decimal128Type(precision, scale));
             }
         }

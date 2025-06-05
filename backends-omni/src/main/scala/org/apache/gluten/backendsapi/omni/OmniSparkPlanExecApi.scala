@@ -19,7 +19,7 @@ package org.apache.gluten.backendsapi.omni
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.{ExpressionTransformer, OmniAliasTransformer, OmniHashExpressionTransformer}
+import org.apache.gluten.expression.{ExpressionTransformer, GenericExpressionTransformer, LiteralTransformer, OmniAliasTransformer, OmniHashExpressionTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
 
@@ -385,7 +385,12 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       substraitExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: Like): ExpressionTransformer = null
+      original: Like): ExpressionTransformer = {
+    GenericExpressionTransformer(
+      substraitExprName,
+      Seq(left, right, LiteralTransformer(original.escapeChar)),
+      original)
+  }
 
   override def genDateDiffTransformer(
       substraitExprName: String,
