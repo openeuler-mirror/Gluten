@@ -104,6 +104,8 @@ object OmniBackendSettings extends BackendSettingsApi {
 
   override def supportSortExec(): Boolean = true
 
+  override def supportExpandExec(): Boolean = true
+
 }
 
 class OmniValidatorApi extends ValidatorApi {

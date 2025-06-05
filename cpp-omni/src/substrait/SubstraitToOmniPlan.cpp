@@ -137,7 +137,40 @@ void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WriteRel &writeRel) {}
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRel &expandRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRel &expandRel)
+{
+    PlanNodePtr childNode;
+    if (expandRel.has_input()) {
+        childNode = ToOmniPlan(expandRel.input());
+    } else {
+        OMNI_THROW("Substrait error:", "Child Rel is expected in ExpandRel.");
+    }
+
+    const auto& inputType = childNode->OutputType();
+
+    std::vector<std::vector<TypedExprPtr>> projectSetExprs;
+    projectSetExprs.reserve(expandRel.fields_size());
+
+    for (const auto& projections : expandRel.fields()) {
+        std::vector<TypedExprPtr> projectExprs;
+        projectExprs.reserve(projections.switching_field().duplicates_size());
+
+        for (const auto& projectExpr : projections.switching_field().duplicates()) {
+            if (projectExpr.has_selection()) {
+                auto expression = exprConverter->ToOmniExpr(projectExpr.selection(), inputType);
+                projectExprs.emplace_back(expression);
+            } else if (projectExpr.has_literal()) {
+                auto expression = exprConverter->ToOmniExpr(projectExpr.literal());
+                projectExprs.emplace_back(expression);
+            } else {
+                OMNI_THROW("Substrait error:", "The project in Expand Operator only support field or literal.");
+            }
+        }
+        projectSetExprs.emplace_back(projectExprs);
+    }
+
+    return std::make_shared<ExpandNode>(NextPlanNodeId(), std::move(projectSetExprs), childNode);
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::GenerateRel &generateRel) {}
 
