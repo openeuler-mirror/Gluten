@@ -33,6 +33,7 @@ jclass serializedColumnarBatchIteratorClass;
 jclass vecBatchCls;
 jclass infoCls;
 jclass runtimeAwareClass;
+jclass metricsBuilderClass;
 
 jmethodID jsonMethodInt;
 jmethodID jsonMethodLong;
@@ -50,6 +51,7 @@ jmethodID serializedColumnarBatchIteratorNext;
 jmethodID vecBatchInitMethodId;
 jmethodID method;
 jmethodID runtimeAwareCtxHandle;
+jmethodID metricsBuilderConstructor;
 
 static jint JNI_VERSION = JNI_VERSION_1_8;
 
@@ -123,6 +125,14 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     }
 
     runtimeExceptionClass = CreateGlobalClassReference(env, "Ljava/lang/RuntimeException;");
+
+    metricsBuilderClass = createGlobalClassReferenceOrError(env, "Lorg/apache/gluten/metrics/Metrics;");
+
+    metricsBuilderConstructor = getMethodIdOrError(
+        env,
+        metricsBuilderClass,
+        "<init>",
+        "([J[J[J[J[J[J[J[J[J[JJ[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J)V");
 
     splitResultClass =
         CreateGlobalClassReference(env, "Lcom/huawei/boostkit/spark/vectorized/SplitResult;");

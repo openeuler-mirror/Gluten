@@ -139,6 +139,29 @@ const std::string kGlogSeverityLevel = "spark.gluten.sql.columnar.backend.omni.g
 const uint32_t kGlogSeverityLevelDefault = 1;
 const std::string KSpillDir = "spill_dir";
 
+// metrics
+const std::string kDynamicFiltersProduced = "dynamicFiltersProduced";
+const std::string kDynamicFiltersAccepted = "dynamicFiltersAccepted";
+const std::string kReplacedWithDynamicFilterRows = "replacedWithDynamicFilterRows";
+const std::string kFlushRowCount = "flushRowCount";
+const std::string kLoadedToValueHook = "loadedToValueHook";
+const std::string kTotalScanTime = "totalScanTime";
+const std::string kSkippedSplits = "skippedSplits";
+const std::string kProcessedSplits = "processedSplits";
+const std::string kSkippedStrides = "skippedStrides";
+const std::string kProcessedStrides = "processedStrides";
+const std::string kRemainingFilterTime = "totalRemainingFilterTime";
+const std::string kIoWaitTime = "ioWaitWallNanos";
+const std::string kStorageReadBytes = "storageReadBytes";
+const std::string kLocalReadBytes = "localReadBytes";
+const std::string kRamReadBytes = "ramReadBytes";
+const std::string kPreloadSplits = "readyPreloadedSplits";
+const std::string kNumWrittenFiles = "numWrittenFiles";
+const std::string kWriteIOTime = "writeIOTime";
+
+// others
+const std::string kHiveDefaultPartition = "__HIVE_DEFAULT_PARTITION__";
+
 inline std::unordered_map<std::string, std::string> ParseConfMap(const uint8_t *planData, const int32_t planDataLength)
 {
     std::unordered_map<std::string, std::string> sparkConfs;

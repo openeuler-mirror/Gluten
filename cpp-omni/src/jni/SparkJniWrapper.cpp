@@ -23,12 +23,12 @@
 #include "io/SparkFile.hh"
 #include "io/ColumnWriter.hh"
 #include "jni_common.h"
-#include "SparkJniWrapper.hh"
 #include "compute/OmniPlanConverter.h"
 #include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
 #include "compute/Runtime.h"
 #include "config/OmniConfig.h"
+#include "SparkJniWrapper.hh"
 
 using namespace spark;
 using namespace google::protobuf::io;
@@ -416,4 +416,57 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIte
         }
         delete iter;
     JNI_FUNC_END_VOID(runtimeExceptionClass)
+}
+
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniWrapper_nativeFetchMetrics(
+    JNIEnv* env,
+    jobject wrapper,
+    jlong iterHandle)
+{
+    JNI_FUNC_START
+        const auto rawIter = reinterpret_cast<omniruntime::ResultIterator *>(iterHandle);
+        auto  baseColumnIter = rawIter->GetInputIter();
+        int64_t exportNanos = rawIter->GetExportNanos();
+        const auto iter = reinterpret_cast<omniruntime::WholeStageResultIterator *>(baseColumnIter);
+        auto metrics = iter->getMetrics(exportNanos);
+        unsigned int numMetrics = 0;
+        if (metrics) {
+            numMetrics = metrics->numMetrics;
+        }
+
+        jlongArray longArray[omniruntime::OmniMetrics::kNum];
+        for (auto i = static_cast<int>(omniruntime::OmniMetrics::kBegin);
+            i != static_cast<int>(omniruntime::OmniMetrics::kEnd); ++i) {
+            longArray[i] = env->NewLongArray(numMetrics);
+            if (metrics) {
+                env->SetLongArrayRegion(longArray[i], 0, numMetrics, metrics->get((omniruntime::OmniMetrics::TYPE)i));
+            }
+        }
+        return env->NewObject(
+            metricsBuilderClass, metricsBuilderConstructor,
+            longArray[omniruntime::OmniMetrics::kInputRows], longArray[omniruntime::OmniMetrics::kInputVectors],
+            longArray[omniruntime::OmniMetrics::kInputBytes], longArray[omniruntime::OmniMetrics::kRawInputRows],
+            longArray[omniruntime::OmniMetrics::kRawInputBytes], longArray[omniruntime::OmniMetrics::kOutputRows],
+            longArray[omniruntime::OmniMetrics::kOutputVectors], longArray[omniruntime::OmniMetrics::kOutputBytes],
+            longArray[omniruntime::OmniMetrics::kCpuCount], longArray[omniruntime::OmniMetrics::kWallNanos],
+            metrics ? metrics->omniToArrow : -1, longArray[omniruntime::OmniMetrics::kPeakMemoryBytes],
+            longArray[omniruntime::OmniMetrics::kNumMemoryAllocations],
+            longArray[omniruntime::OmniMetrics::kSpilledInputBytes], longArray[omniruntime::OmniMetrics::kSpilledBytes],
+            longArray[omniruntime::OmniMetrics::kSpilledRows], longArray[omniruntime::OmniMetrics::kSpilledPartitions],
+            longArray[omniruntime::OmniMetrics::kSpilledFiles],
+            longArray[omniruntime::OmniMetrics::kNumDynamicFiltersProduced],
+            longArray[omniruntime::OmniMetrics::kNumDynamicFiltersAccepted],
+            longArray[omniruntime::OmniMetrics::kNumReplacedWithDynamicFilterRows],
+            longArray[omniruntime::OmniMetrics::kFlushRowCount],
+            longArray[omniruntime::OmniMetrics::kLoadedToValueHook], longArray[omniruntime::OmniMetrics::kScanTime],
+            longArray[omniruntime::OmniMetrics::kSkippedSplits], longArray[omniruntime::OmniMetrics::kProcessedSplits],
+            longArray[omniruntime::OmniMetrics::kSkippedStrides],
+            longArray[omniruntime::OmniMetrics::kProcessedStrides],
+            longArray[omniruntime::OmniMetrics::kRemainingFilterTime], longArray[omniruntime::OmniMetrics::kIoWaitTime],
+            longArray[omniruntime::OmniMetrics::kStorageReadBytes],
+            longArray[omniruntime::OmniMetrics::kLocalReadBytes], longArray[omniruntime::OmniMetrics::kRamReadBytes],
+            longArray[omniruntime::OmniMetrics::kPreloadSplits],
+            longArray[omniruntime::OmniMetrics::kPhysicalWrittenBytes],
+            longArray[omniruntime::OmniMetrics::kWriteIOTime], longArray[omniruntime::OmniMetrics::kNumWrittenFiles]);
+    JNI_FUNC_END(runtimeExceptionClass)
 }

@@ -78,6 +78,10 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_cre
 JNIEXPORT void JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_releaseRuntime(JNIEnv *env, jclass,
     jlong ctxHandle);
 
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniWrapper_nativeFetchMetrics(
+    JNIEnv* env,
+    jobject wrapper,
+    jlong iterHandle);
 #ifdef __cplusplus
 }
 #endif

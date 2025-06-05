@@ -22,9 +22,12 @@
 #include <optional>
 #include <memory>
 #include "compute/task.h"
+#include "compute/plannode_stats.h"
+#include "common/debug.h"
 #include "plannode/planFragment.h"
 #include "operator/config/operator_config.h"
 #include "memory/memory_manager.h"
+#include "metrics/omni_metrics.h"
 #include "compute/ColumnarBatchIterator.h"
 #include "util/config/ConfigBase.h"
 
@@ -49,6 +52,16 @@ public:
         return omniPlan_.get();
     }
 
+    omniruntime::OmniMetrics* getMetrics(int64_t exportNanos)
+    {
+        LogsDebug("get Metrics and exportNanos = %d", exportNanos);
+        CollectMetrics();
+        if (metrics_) {
+            metrics_->omniToArrow = exportNanos;
+        }
+        return metrics_.get();
+    }
+
 private:
     /// Get the Spark confs to Velox query context.
     std::unordered_map<std::string, std::string> GetQueryContextConf(const std::string &spillDir) const;
@@ -71,5 +84,15 @@ private:
     std::vector<PlanNodeId> scanNodeIds_;
     std::vector<PlanNodeId> streamIds_;
     bool noMoreSplits_ = false;
+    std::unique_ptr<omniruntime::OmniMetrics> metrics_{};
+    /// Get all the children plan node ids with postorder traversal.
+    void getOrderedNodeIds(
+        const std::shared_ptr<const omniruntime::PlanNode> &,
+        std::vector<omniruntime::PlanNodeId> &nodeIds);
+
+    void buildMetricsForNative(const struct omniruntime::compute::PlanNodeStats& stats,
+        int metricIndex);
+    /// Collect omni metrics.
+    void CollectMetrics();
 };
 }

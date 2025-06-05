@@ -1,26 +1,13 @@
-/**
- * Copyright (C) 2025-2025. Huawei Technologies Co., Ltd. All rights reserved.
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  */
 
 #include "WholeStageResultIterator.h"
 #include "compute/reason.h"
 #include "util/config/QueryConfig.h"
 #include "config/OmniConfig.h"
+#include "compute/plannode_stats.h"
+#include "Runtime.h"
 
 namespace omniruntime {
 std::string BoolToString(const bool value)
@@ -41,6 +28,18 @@ WholeStageResultIterator::WholeStageResultIterator(MemoryManager *memoryManager,
     std::unordered_set<PlanNodeId> emptySet;
     PlanFragment planFragment{planNode, ExecutionStrategy::K_UNGROUPED, 1, emptySet};
     task_ = std::make_shared<OmniTask>(planFragment, std::move(queryConfig));
+    getOrderedNodeIds(omniPlan_, orderedNodeIds_);
+}
+
+void WholeStageResultIterator::getOrderedNodeIds(const std::shared_ptr<const PlanNode>& planNode,
+                                                 std::vector<PlanNodeId>& nodeIds)
+{
+    const auto& sourceNodes = planNode->Sources();
+    for (const auto& sourceNode : sourceNodes) {
+        // Post-order traversal.
+        getOrderedNodeIds(sourceNode, nodeIds);
+    }
+    nodeIds.emplace_back(planNode->Id());
 }
 
 VectorBatch *WholeStageResultIterator::Next()
@@ -54,7 +53,8 @@ VectorBatch *WholeStageResultIterator::Next()
             vectorBatch = out;
             break;
         }
-        // Omni suggested to wait. This might be because another thread (e.g., background io thread) is spilling the task.
+        // Omni suggested to wait.
+        // This might be because another thread (e.g., background io thread) is spilling the task.
         OMNI_CHECK(out == nullptr, "Expected to wait but still got non-null output from Omni task");
         future.wait();
     }
@@ -111,5 +111,82 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         throw std::runtime_error("Invalid conf arg: " + errDetails);
     }
     return configs;
+}
+
+void WholeStageResultIterator::CollectMetrics()
+{
+    if (metrics_) {
+        // The metrics has already been created.
+        LogsInfo("The metrics has already been created..");
+        return;
+    }
+    LogsInfo("start get taskstates.");
+    const auto& taskStats = task_->GetTaskStats();
+    if (taskStats.executionStartTimeMs == 0) {
+        LogsWarn("Skip collect task metrics since task did not call next().");
+        return;
+    }
+    auto planStats = omniruntime::compute::ToPlanStats(taskStats);
+    int statsNum = 0;
+    for (size_t idx = 0; idx < orderedNodeIds_.size(); idx++) {
+        const auto& nodeId = orderedNodeIds_[idx];
+        if (planStats.find(nodeId) == planStats.end()) {
+            if (omittedNodeIds_.find(nodeId) == omittedNodeIds_.end()) {
+                LogsWarn("Not found node id: %d", nodeId);
+                throw std::runtime_error("Node id cannot be found in plan status.");
+            }
+            // Special handing for Filter over Project case. Filter metrics areomitted.
+            statsNum += 1;
+            continue;
+        }
+        statsNum += planStats.at(nodeId).operatorStats.size();
+    }
+    LogsDebug("statsNum is %d.", statsNum);
+    metrics_ = std::make_unique<omniruntime::OmniMetrics>(statsNum);
+    int metricIndex = 0;
+    for (size_t idx = 0; idx < orderedNodeIds_.size(); idx++) {
+        const auto& nodeId = orderedNodeIds_[idx];
+        if (planStats.find(nodeId) == planStats.end()) {
+            metrics_->get(omniruntime::OmniMetrics::kOutputRows)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kOutputVectors)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kOutputBytes)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kWallNanos)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kPeakMemoryBytes)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kNumMemoryAllocations)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kInputVectors)[metricIndex] = 0;
+            metricIndex += 1;
+            LogsWarn("no nodeId %d in planState and continue.", nodeId);
+            continue;
+        }
+        const auto& stats = planStats.at(nodeId);
+        buildMetricsForNative(stats, metricIndex);
+    }
+}
+
+void WholeStageResultIterator::buildMetricsForNative(
+    const omniruntime::compute::PlanNodeStats& stats, int metricIndex)
+{
+    for (const auto& entry : stats.operatorStats) {
+        const auto& second = entry.second;
+        metrics_->get(omniruntime::OmniMetrics::kInputRows)[metricIndex] = second->inputRows;
+        metrics_->get(omniruntime::OmniMetrics::kInputVectors)[metricIndex] = second->inputVectors;
+        metrics_->get(omniruntime::OmniMetrics::kInputBytes)[metricIndex] = second->inputBytes;
+        metrics_->get(omniruntime::OmniMetrics::kRawInputRows)[metricIndex] = second->rawInputRows;
+        metrics_->get(omniruntime::OmniMetrics::kRawInputBytes)[metricIndex] = second->rawInputBytes;
+        metrics_->get(omniruntime::OmniMetrics::kOutputRows)[metricIndex] = second->outputRows;
+        metrics_->get(omniruntime::OmniMetrics::kOutputVectors)[metricIndex] = second->outputVectors;
+        metrics_->get(omniruntime::OmniMetrics::kOutputBytes)[metricIndex] = second->outputBytes;
+        metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = second->cpuWallTiming.count;
+        metrics_->get(omniruntime::OmniMetrics::kWallNanos)[metricIndex] = second->cpuWallTiming.wallNanos;
+        metrics_->get(omniruntime::OmniMetrics::kPeakMemoryBytes)[metricIndex] = second->peakMemoryBytes;
+        metrics_->get(omniruntime::OmniMetrics::kNumMemoryAllocations)[metricIndex] = second->numMemoryAllocations;
+        metrics_->get(omniruntime::OmniMetrics::kSpilledInputBytes)[metricIndex] = second->spilledInputBytes;
+        metrics_->get(omniruntime::OmniMetrics::kSpilledBytes)[metricIndex] = second->spilledBytes;
+        metrics_->get(omniruntime::OmniMetrics::kSpilledRows)[metricIndex] = second->spilledRows;
+        metrics_->get(omniruntime::OmniMetrics::kSpilledPartitions)[metricIndex] = second->spilledPartitions;
+        metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
+        metricIndex += 1;
+    }
 }
 }
