@@ -17,7 +17,6 @@
 package org.apache.gluten.execution
 
 import org.apache.gluten.backendsapi.BackendsApiManager
-import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
@@ -119,6 +118,31 @@ case class OmniHashAggregateExecTransformer(
     }
   }
 
+  protected def checkAggFuncSupport(aggFunc: AggregateFunction,
+                                             mode: AggregateMode): Boolean = {
+    val alwaysSupported = Set(
+     classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
+     classOf[Average], classOf[First], classOf[StddevSamp]
+    )
+
+    var completeOnlySupported = Set(
+     classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
+     classOf[Average], classOf[First]
+    )
+
+    val supported = mode match {
+     case Final | PartialMerge | Partial => alwaysSupported
+     case Complete => completeOnlySupported
+     case other => Set.empty[Class[_]]
+    }
+
+    if (supported.exists(_.isInstance(aggFunc))) {
+       true
+    } else {
+       false
+    }
+  }
+
   override protected def doValidateInternal(): ValidationResult = {
     val substraitContext = new SubstraitContext
     val operatorId = substraitContext.nextOperatorId(this.nodeName)
@@ -164,12 +188,20 @@ case class OmniHashAggregateExecTransformer(
     aggregateExpressions.foreach {
       expr =>
         if (!checkAggFuncModeSupport(expr.aggregateFunction, expr.mode)) {
-          throw new GlutenNotSupportException(
+          return ValidationResult.failed(
             s"Unsupported aggregate mode: ${expr.mode} for ${expr.aggregateFunction.prettyName}")
         }
     }
-    //    doNativeValidation(substraitContext, relNode)
-    ValidationResult.succeeded
+
+    aggregateExpressions.foreach {
+       expr =>
+         if (!checkAggFuncSupport(expr.aggregateFunction, expr.mode)) {
+           return ValidationResult.failed(
+             s"Unsupported aggregate function: ${expr.mode} for ${expr.aggregateFunction.prettyName}")
+         }
+    }
+
+    doNativeValidation(substraitContext, relNode)
   }
 
   protected override def checkType(dataType: DataType): Boolean = {

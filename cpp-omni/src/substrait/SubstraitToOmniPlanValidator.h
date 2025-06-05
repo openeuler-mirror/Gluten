@@ -95,9 +95,6 @@ private:
     /// Flattens a Omni type with single level of nesting into a std::vector of child types.
     bool FlattenSingleLevel(const DataTypePtr &type, std::vector<DataTypePtr> &out);
 
-    /// Validate aggregate rel.
-    bool ValidateAggRelFunctionType(const ::substrait::AggregateRel &substraitAgg);
-
     /// Validate the round scalar function.
     bool ValidateRound(const ::substrait::Expression::ScalarFunction &scalarFunction, const DataTypesPtr &inputType);
 

@@ -320,5 +320,11 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"greatest", {FUNCTION_OMNI_EXPR_TYPE, "Greatest"}},
     {"contains", {FUNCTION_OMNI_EXPR_TYPE, "Contains"}},
     {"murmur3hash", {FUNCTION_OMNI_EXPR_TYPE, "mm3hash"}},
-    {"count", {COALESCE_OMNI_EXPR_TYPE, "count"}}};
+    {"count", {FUNCTION_OMNI_EXPR_TYPE, "count"}},
+    {"sum", {FUNCTION_OMNI_EXPR_TYPE, "sum"}},
+    {"min", {FUNCTION_OMNI_EXPR_TYPE, "min"}},
+    {"max", {FUNCTION_OMNI_EXPR_TYPE, "max"}},
+    {"avg", {FUNCTION_OMNI_EXPR_TYPE, "avg"}},
+    {"first", {FUNCTION_OMNI_EXPR_TYPE, "first"}},
+    {"first_ignore_null", {FUNCTION_OMNI_EXPR_TYPE, "first_ignore_null"}}};
 } // namespace omniruntime
