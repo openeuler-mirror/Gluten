@@ -941,7 +941,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::CrossRel &crossRe
     const auto &extension = crossRel.advanced_extension();
     DataTypePtr inputRowType;
     std::vector<DataTypePtr> types;
-    if (!ParseOmniType(extension, inputRowType)) {
+    if (!ParseOmniType(extension, inputRowType) || !FlattenSingleLevel(inputRowType, types)) {
         LogValidateMsg("Native validation failed due to: Validation failed for "
                        "input types in CrossRel");
         return false;
