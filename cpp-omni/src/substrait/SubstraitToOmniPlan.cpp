@@ -380,31 +380,31 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             default:
                 OMNI_THROW("SUBSTRAIT_ERROR:", "Unexpected aggregation phase.");
         }
-
-        std::vector<std::vector<TypedExprPtr>> aggsKeys;
-        aggsKeys.resize(aggRel.measures().size());
-        for (const auto &measure : aggRel.measures()) {
-            int aggFunIndex = 0;
-            const auto &aggFunction = measure.measure();
-            for (const auto &arg : aggFunction.arguments()) {
-                auto argValue = arg.value();
-                auto tempExpr = exprConverter->ToOmniExpr(argValue, sourceDataTypes);
-                aggsKeys[aggFunIndex].emplace_back(tempExpr);
-            }
-            aggFunIndex++;
-        }
-
-        bool isStatisticalAggregate = false;
-        maskColumns = getDefaultMaskChannel(aggFuncTypes);
-        std::vector<DataTypes> outPutDataTypes;
-        for (const auto &outputType : aggOutputTypes) {
-            outPutDataTypes.emplace_back(*outputType);
-        }
-
-        return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
-            outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial,
-            isStatisticalAggregate, childNode);
     }
+
+    std::vector<std::vector<TypedExprPtr>> aggsKeys;
+    aggsKeys.resize(aggRel.measures().size());
+    for (const auto &measure : aggRel.measures()) {
+        int aggFunIndex = 0;
+        const auto &aggFunction = measure.measure();
+        for (const auto &arg : aggFunction.arguments()) {
+            auto argValue = arg.value();
+            auto tempExpr = exprConverter->ToOmniExpr(argValue, sourceDataTypes);
+            aggsKeys[aggFunIndex].emplace_back(tempExpr);
+        }
+        aggFunIndex++;
+    }
+
+    bool isStatisticalAggregate = false;
+    maskColumns = getDefaultMaskChannel(aggFuncTypes);
+    std::vector<DataTypes> outPutDataTypes;
+    for (const auto &outputType : aggOutputTypes) {
+        outPutDataTypes.emplace_back(*outputType);
+    }
+
+    return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
+        outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial, isStatisticalAggregate,
+        childNode);
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectRel &projectRel)
