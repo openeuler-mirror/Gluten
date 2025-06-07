@@ -521,8 +521,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
 
     std::vector<std::vector<TypedExprPtr>> aggsKeys;
     aggsKeys.resize(aggRel.measures().size());
+    int aggFunIndex = 0;
     for (const auto &measure : aggRel.measures()) {
-        int aggFunIndex = 0;
         const auto &aggFunction = measure.measure();
         for (const auto &arg : aggFunction.arguments()) {
             auto argValue = arg.value();
