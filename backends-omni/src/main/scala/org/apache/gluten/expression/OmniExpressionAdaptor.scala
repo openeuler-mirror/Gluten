@@ -383,6 +383,9 @@ object OmniExpressionAdaptor extends Logging {
             }
         }
 
+      case promotePrecision: PromotePrecision =>
+        rewriteToOmniJsonExpressionLiteralJsonObject(promotePrecision.child, exprsIndexMap, promotePrecision.child.dataType)
+
       // Abs
       case abs: Abs =>
         new JsonObject()
