@@ -17,7 +17,7 @@
 package org.apache.gluten.execution
 
 import org.apache.gluten.expression.ConverterUtils
-import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, AggregateFunction, AggregateMode, CollectList, CollectSet, Final, Partial, Complete, PartialMerge}
 
 import scala.collection.mutable.ListBuffer
@@ -67,9 +67,9 @@ case class OmniHashAggregateExecPullOutBaseHelper(
             throw new UnsupportedOperationException(s"Unsupported aggregate mode: $other.")
         }
     }
-    
+
     private def checkAggFuncModeSupport(
-                                        aggFunc: aggregateFunction,
+                                        aggFunc: AggregateFunction,
                                         mode: AggregateMode): Boolean = {
      aggFunc match {
         case _: CollectList | _: CollectSet =>
