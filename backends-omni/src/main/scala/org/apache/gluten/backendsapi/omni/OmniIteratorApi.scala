@@ -20,7 +20,7 @@ import org.apache.gluten.backendsapi.{BackendsApiManager, IteratorApi}
 import org.apache.gluten.config.GlutenNumaBindingInfo
 import org.apache.gluten.execution._
 import org.apache.gluten.iterator.Iterators
-import org.apache.gluten.metrics.IMetrics
+import org.apache.gluten.metrics.{IMetrics, OmniIteratorMetricsJniWrapper}
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.plan.PlanNode
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
@@ -234,12 +234,12 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
       BackendsApiManager.getSparkPlanExecApiInstance.rewriteSpillPath(spillDirPath),
       rootNode.getOutputSchema()
     )
-
+  val itrMetrics = OmniIteratorMetricsJniWrapper.create()
   Iterators
     .wrap(nativeResultIterator.asScala)
     .protectInvocationFlow()
     .recycleIterator {
-//      updateNativeMetrics(_)
+      updateNativeMetrics(itrMetrics.fetch(nativeResultIterator))
       nativeResultIterator.close()
     }
 //    .recyclePayload(batch => batch.close())

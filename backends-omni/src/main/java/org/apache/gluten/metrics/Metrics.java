@@ -241,6 +241,154 @@ public class Metrics implements IMetrics {
         this.numWrittenFiles = numWrittenFiles;
     }
 
+    public long[] getInputRows() {
+        return inputRows;
+    }
+
+    public long[] getInputVectors() {
+        return inputVectors;
+    }
+
+    public long[] getInputBytes() {
+        return inputBytes;
+    }
+
+    public long[] getRawInputRows() {
+        return rawInputRows;
+    }
+
+    public long[] getRawInputBytes() {
+        return rawInputBytes;
+    }
+
+    public long[] getOutputRows() {
+        return outputRows;
+    }
+
+    public long[] getOutputVectors() {
+        return outputVectors;
+    }
+
+    public long[] getOutputBytes() {
+        return outputBytes;
+    }
+
+    public long[] getCpuCount() {
+        return cpuCount;
+    }
+
+    public long[] getWallNanos() {
+        return wallNanos;
+    }
+
+    public long[] getScanTime() {
+        return scanTime;
+    }
+
+    public long[] getPeakMemoryBytes() {
+        return peakMemoryBytes;
+    }
+
+    public long[] getNumMemoryAllocations() {
+        return numMemoryAllocations;
+    }
+
+    public long[] getSpilledInputBytes() {
+        return spilledInputBytes;
+    }
+
+    public long[] getSpilledBytes() {
+        return spilledBytes;
+    }
+
+    public long[] getSpilledRows() {
+        return spilledRows;
+    }
+
+    public long[] getSpilledPartitions() {
+        return spilledPartitions;
+    }
+
+    public long[] getSpilledFiles() {
+        return spilledFiles;
+    }
+
+    public long[] getNumDynamicFiltersProduced() {
+        return numDynamicFiltersProduced;
+    }
+
+    public long[] getNumDynamicFiltersAccepted() {
+        return numDynamicFiltersAccepted;
+    }
+
+    public long[] getNumReplacedWithDynamicFilterRows() {
+        return numReplacedWithDynamicFilterRows;
+    }
+
+    public long[] getFlushRowCount() {
+        return flushRowCount;
+    }
+
+    public long[] getLoadedToValueHook() {
+        return loadedToValueHook;
+    }
+
+    public long[] getSkippedSplits() {
+        return skippedSplits;
+    }
+
+    public long[] getProcessedSplits() {
+        return processedSplits;
+    }
+
+    public long[] getSkippedStrides() {
+        return skippedStrides;
+    }
+
+    public long[] getProcessedStrides() {
+        return processedStrides;
+    }
+
+    public long[] getRemainingFilterTime() {
+        return remainingFilterTime;
+    }
+
+    public long[] getIoWaitTime() {
+        return ioWaitTime;
+    }
+
+    public long[] getStorageReadBytes() {
+        return storageReadBytes;
+    }
+
+    public long[] getLocalReadBytes() {
+        return localReadBytes;
+    }
+
+    public long[] getRamReadBytes() {
+        return ramReadBytes;
+    }
+
+    public long[] getPreloadSplits() {
+        return preloadSplits;
+    }
+
+    public long[] getPhysicalWrittenBytes() {
+        return physicalWrittenBytes;
+    }
+
+    public long[] getWriteIOTime() {
+        return writeIOTime;
+    }
+
+    public long[] getNumWrittenFiles() {
+        return numWrittenFiles;
+    }
+
+    public SingleMetric getSingleMetric() {
+        return singleMetric;
+    }
+
     /**
      * generate OperatorMetrics
      *

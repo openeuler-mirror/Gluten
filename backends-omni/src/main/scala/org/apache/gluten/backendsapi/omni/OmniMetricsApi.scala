@@ -44,7 +44,9 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       child: SparkPlan,
       relMap: JMap[JLong, JList[JLong]],
       joinParamsMap: JMap[JLong, JoinParams],
-      aggParamsMap: JMap[JLong, AggregationParams]): IMetrics => Unit = { _ => Unit }
+      aggParamsMap: JMap[JLong, AggregationParams]): IMetrics => Unit = {
+    OmniMetricsUtil.genMetricsUpdatingFunction(child, relMap, joinParamsMap, aggParamsMap);
+  }
 
   override def genBatchScanTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
     Map.empty
@@ -157,7 +159,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
   }
 
   override def genSortTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
-    new MockMetricsUpdater()
+    new OmniSortMetricsUpdater(metrics)
 
   override def genSortMergeJoinTransformerMetrics(
       sparkContext: SparkContext): Map[String, SQLMetric] = Map(
