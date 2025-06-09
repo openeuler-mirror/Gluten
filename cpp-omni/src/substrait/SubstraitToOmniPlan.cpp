@@ -101,7 +101,10 @@ std::tuple<DataTypesPtr, DataTypesPtr> getJoinOutputType(const PlanNodePtr& left
     OMNI_THROW("Substrait Error", "Output should include left or right columns.");
 }
 
-std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id) {}
+std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id)
+{
+    return SubstraitParser::FindFunctionSpec(functionMap, id);
+}
 
 void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression &joinExpression,
     std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
