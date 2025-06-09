@@ -97,7 +97,8 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   /** Generate HashAggregateExecPullOutHelper */
   override def genHashAggregateExecPullOutHelper(
       aggregateExpressions: Seq[AggregateExpression],
-      aggregateAttributes: Seq[Attribute]): HashAggregateExecPullOutBaseHelper = null
+      aggregateAttributes: Seq[Attribute]): HashAggregateExecPullOutBaseHelper =
+      OmniHashAggregateExecPullOutBaseHelper(aggregateExpressions, aggregateAttributes)
 
   override def genColumnarShuffleExchange(shuffle: ShuffleExchangeExec): SparkPlan = {
     val child = shuffle.child
