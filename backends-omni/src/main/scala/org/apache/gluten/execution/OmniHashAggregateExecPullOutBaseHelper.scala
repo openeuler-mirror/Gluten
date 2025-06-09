@@ -66,7 +66,8 @@ case class OmniHashAggregateExecPullOutBaseHelper(
           case other =>
             throw new UnsupportedOperationException(s"Unsupported aggregate mode: $other.")
         }
-
+    }
+    
     private def checkAggFuncModeSupport(
                                         aggFunc: aggregateFunction,
                                         mode: AggregateMode): Boolean = {
