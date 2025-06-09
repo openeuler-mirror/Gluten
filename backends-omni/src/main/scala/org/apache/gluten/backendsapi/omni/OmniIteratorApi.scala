@@ -239,7 +239,7 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
     .wrap(nativeResultIterator.asScala)
     .protectInvocationFlow()
     .recycleIterator {
-      updateNativeMetrics(itrMetrics.fetch(nativeResultIterator))
+//      updateNativeMetrics(itrMetrics.fetch(nativeResultIterator))
       nativeResultIterator.close()
     }
 //    .recyclePayload(batch => batch.close())
