@@ -110,6 +110,7 @@ object OmniBackendSettings extends BackendSettingsApi {
 
   override def supportWindowExec(windowFunctions: Seq[NamedExpression]): Boolean = true
 
+  override def transformCheckOverflow: Boolean = false
 }
 
 class OmniValidatorApi extends ValidatorApi {
