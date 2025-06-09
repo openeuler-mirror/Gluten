@@ -22,8 +22,8 @@ import org.apache.gluten.expression.ConverterUtils
 import org.apache.gluten.vectorized.VectorTransferUtils
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeProjection}
-import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
-import org.apache.spark.sql.execution.joins.BuildSideRelation
+import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, IdentityBroadcastMode}
+import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 import scala.collection.JavaConverters.asScalaIteratorConverter
@@ -34,6 +34,13 @@ case class OmniColumnarBuildSideRelation(
     output: Seq[Attribute],
     batches: Array[Array[Byte]])
   extends BuildSideRelation {
+
+  private def transformProjection: UnsafeProjection = {
+    mode match {
+      case HashedRelationBroadcastMode(k, _) => UnsafeProjection.create(k)
+      case IdentityBroadcastMode => UnsafeProjection.create(output, output)
+    }
+  }
 
   override def deserialized: Iterator[ColumnarBatch] = {
 
@@ -86,6 +93,7 @@ case class OmniColumnarBuildSideRelation(
             columnarBatch
               .rowIterator()
               .asScala
+              .map(transformProjection)
               .map(proj)
               .map(_.copy())
               .foreach(retRows.append(_))

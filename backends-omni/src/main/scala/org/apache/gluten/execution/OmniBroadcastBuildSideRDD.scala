@@ -14,7 +14,8 @@ case class OmniBroadcastBuildSideRDD(
     val relation = broadcasted.value.asReadOnlyCopy()
     Iterators
       .wrap(relation.deserialized)
-      .recyclePayload(batch => batch.close())
+      // FIXME if need close? 
+      //.recyclePayload(batch => batch.close())
       .create()
   }
 }
