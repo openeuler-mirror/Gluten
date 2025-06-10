@@ -119,10 +119,6 @@ std::vector<std::string> SubstraitParser::GetSubFunctionTypes(const std::string 
     return types;
 }
 
-bool SubstraitParser::ParseReferenceSegment(
-    const ::substrait::Expression::ReferenceSegment &refSegment, uint32_t &fieldIndex)
-{}
-
 std::string SubstraitParser::MakeNodeName(int nodeId, int colIdx)
 {
     std::string result = "n" + std::to_string(nodeId) + "_" + std::to_string(colIdx);

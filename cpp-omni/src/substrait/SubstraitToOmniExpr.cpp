@@ -291,15 +291,6 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     return new IfExpr(cond, trueExpr, falseExpr);
 }
 
-std::shared_ptr<const LiteralExpr> SubstraitOmniExprConverter::literalsToConstantExpr(
-    const std::vector<::substrait::Expression::Literal> &literals)
-{}
-
-/// Create expression for lambda.
-std::shared_ptr<const Expr> SubstraitOmniExprConverter::toLambdaExpr(
-    const ::substrait::Expression::ScalarFunction &substraitFunc, const DataTypesPtr &inputType)
-{}
-
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const substrait::Expression &substraitExpr, const DataTypesPtr &inputType)
 {

@@ -30,14 +30,8 @@ public:
     /// Used to convert Substrait ExpandRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::ExpandRel &expandRel);
 
-    /// Used to convert Substrait GenerateRel into Omni PlanNode.
-    PlanNodePtr ToOmniPlan(const ::substrait::GenerateRel &generateRel);
-
     /// Used to convert Substrait WindowRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::WindowRel &windowRel);
-
-    /// Used to convert Substrait WindowGroupLimitRel into Omni PlanNode.
-    PlanNodePtr ToOmniPlan(const ::substrait::WindowGroupLimitRel &windowGroupLimitRel);
 
     /// Used to convert Substrait SetRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::SetRel &setRel);

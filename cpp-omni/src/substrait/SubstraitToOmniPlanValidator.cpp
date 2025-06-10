@@ -561,82 +561,6 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
     return true;
 }
 
-bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowGroupLimitRel &windowGroupLimitRel)
-{
-    if (windowGroupLimitRel.has_input() && !Validate(windowGroupLimitRel.input())) {
-        LOG_VALIDATION_MSG("WindowGroupLimitRel input fails to Validate.");
-        return false;
-    }
-
-    // Get and Validate the input types from extension.
-    if (!windowGroupLimitRel.has_advanced_extension()) {
-        LOG_VALIDATION_MSG("Input types are expected in WindowGroupLimitRel.");
-        return false;
-    }
-    const auto &extension = windowGroupLimitRel.advanced_extension();
-    DataTypePtr inputRowType;
-    std::vector<DataTypePtr> types;
-    if (!ParseOmniType(extension, inputRowType) || !FlattenSingleLevel(inputRowType, types)) {
-        LOG_VALIDATION_MSG("Validation failed for input types in WindowGroupLimitRel.");
-        return false;
-    }
-    auto rowType = std::make_shared<DataTypes>(std::move(types));
-    // Validate groupby expression
-    const auto &groupByExprs = windowGroupLimitRel.partition_expressions();
-    std::vector<TypedExprPtr> expressions;
-    expressions.reserve(groupByExprs.size());
-    for (const auto &expr : groupByExprs) {
-        auto expression = exprConverter_->ToOmniExpr(expr, rowType);
-        auto exprField = dynamic_cast<const FieldExpr *>(expression);
-        if (exprField == nullptr) {
-            LOG_VALIDATION_MSG("Only field is supported for partition key in Window "
-                               "Group Limit Operator!");
-            return false;
-        } else {
-            expressions.emplace_back(expression);
-        }
-    }
-    // Try to compile the expressions. If there is any unregistered function or
-    // mismatched type, exception will be thrown.
-    ExprVerifier ev;
-    for (const auto &expression : expressions) {
-        if (!ev.VisitExpr(*expression)) {
-            return false;
-        }
-    }
-    // Validate Sort expression
-    const auto &sorts = windowGroupLimitRel.sorts();
-    for (const auto &sort : sorts) {
-        switch (sort.direction()) {
-            case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
-            case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
-            case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
-            case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
-                break;
-            default:
-                LOG_VALIDATION_MSG(
-                    "in windowGroupLimitRel, unsupported Sort direction " + std::to_string(sort.direction()));
-                return false;
-        }
-
-        if (sort.has_expr()) {
-            auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
-            auto exprField = dynamic_cast<const FieldExpr *>(expression);
-            if (!exprField) {
-                LOG_VALIDATION_MSG("in windowGroupLimitRel, the sorting key in Sort "
-                                   "Operator only support field.");
-                return false;
-            }
-            ExprVerifier ev;
-            if (!ev.VisitExpr(*expression)) {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 bool SubstraitToOmniPlanValidator::Validate(const ::substrait::SetRel &setRel)
 {
     switch (setRel.op()) {
@@ -1029,8 +953,6 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::Rel &rel)
         return Validate(rel.window());
     } else if (rel.has_write()) {
         return Validate(rel.write());
-    } else if (rel.has_windowgrouplimit()) {
-        return Validate(rel.windowgrouplimit());
     } else if (rel.has_set()) {
         return Validate(rel.set());
     } else {

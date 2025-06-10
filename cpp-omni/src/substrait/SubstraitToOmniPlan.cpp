@@ -138,7 +138,10 @@ void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression
     }
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WriteRel &writeRel) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WriteRel &writeRel)
+{
+    return nullptr;
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRel &expandRel)
 {
@@ -174,8 +177,6 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRe
 
     return std::make_shared<ExpandNode>(NextPlanNodeId(), std::move(projectSetExprs), childNode);
 }
-
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::GenerateRel &generateRel) {}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRel &windowRel)
 {
@@ -282,8 +283,6 @@ const WindowFrameInfo SubstraitToOmniPlanConverter::createWindowFrameInfo(
     op::WindowFrameInfo frame(frameType, frameStartType, frameStartCol, frameEndType, frameEndCol);
     return frame;
 }
-
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowGroupLimitRel &windowGroupLimitRel) {}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SetRel &setRel)
 {
@@ -610,7 +609,10 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel 
         NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, static_cast<int32_t>(topNRel.n()), childNode);
 }
 
-PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel &readRel, const DataTypesPtr &type) {}
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel &readRel, const DataTypesPtr &type)
+{
+    return nullptr;
+}
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel &readRel)
 {
@@ -620,6 +622,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel 
     if (streamIdx >= 0) {
         return ConstructValueStreamNode(readRel, streamIdx);
     }
+    OMNI_THROW("error", "Scan not supported for Rel.");
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
@@ -757,8 +760,6 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Rel &rel
         return ToOmniPlan(rel.sort());
     } else if (rel.has_expand()) {
         return ToOmniPlan(rel.expand());
-    } else if (rel.has_generate()) {
-        return ToOmniPlan(rel.generate());
     } else if (rel.has_fetch()) {
         return ToOmniPlan(rel.fetch());
     } else if (rel.has_top_n()) {
@@ -767,8 +768,6 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Rel &rel
         return ToOmniPlan(rel.window());
     } else if (rel.has_write()) {
         return ToOmniPlan(rel.write());
-    } else if (rel.has_windowgrouplimit()) {
-        return ToOmniPlan(rel.windowgrouplimit());
     } else if (rel.has_set()) {
         return ToOmniPlan(rel.set());
     } else {

@@ -55,15 +55,6 @@ public:
     /// Convert Substrait IfThen into switch or if expression.
     TypedExprPtr ToOmniExpr(const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType);
 
-    /// Wrap a constant vector from literals with an array vector inside to create
-    /// the constant expression.
-    std::shared_ptr<const LiteralExpr> literalsToConstantExpr(
-        const std::vector<::substrait::Expression::Literal> &literals);
-
-    /// Create expression for lambda.
-    std::shared_ptr<const Expr> toLambdaExpr(
-        const ::substrait::Expression::ScalarFunction &substraitFunc, const DataTypesPtr &inputType);
-
 private:
     /// Memory pool.
     // memory::MemoryPool* pool_;

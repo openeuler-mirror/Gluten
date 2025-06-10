@@ -46,11 +46,6 @@ public:
     /// Parse Substrait Type to Omni type.
     static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false);
 
-    /// Parse Substrait ReferenceSegment and extract the field index. Return false if the segment is not a valid
-    /// unnested field.
-    static bool ParseReferenceSegment(
-        const ::substrait::Expression::ReferenceSegment &refSegment, uint32_t &fieldIndex);
-
     /// Make names in the format of {prefix}_{index}.
     static std::vector<std::string> MakeNames(const std::string &prefix, int size);
 
