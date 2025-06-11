@@ -531,6 +531,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarMergedBatchThreshold: Int = conf.getConf(COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD)
 
   def enableColumnarAQEShuffle: Boolean = conf.getConf(COLUMNAR_OMNI_AQE_SHUFFLE_MERGE)
+
+  def enableJoinReorderEnhance: Boolean = conf.getConf(ENABLE_JOIN_REORDER_ENHANCE)
 }
 
 object GlutenConfig {
