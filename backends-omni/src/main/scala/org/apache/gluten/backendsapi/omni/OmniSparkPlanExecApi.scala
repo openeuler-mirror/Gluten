@@ -34,7 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
-import org.apache.spark.sql.execution.{ColumnarShuffleExchangeExec, ColumnarWriteFilesExec, GenerateExec, SparkPlan}
+import org.apache.spark.sql.execution.{OmniColumnarShuffleExchangeExec, ColumnarWriteFilesExec, GenerateExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
@@ -102,7 +102,10 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
 
   override def genColumnarShuffleExchange(shuffle: ShuffleExchangeExec): SparkPlan = {
     val child = shuffle.child
-    val newShuffle = ColumnarShuffleExchangeExec(shuffle, child, shuffle.output)
+    val columnarConf = GlutenConfig.get
+    val isRowShuffle = columnarConf.enableOmniRowShuffle &&
+      shuffle.output.length > columnarConf.omniRowShuffleColumnsThreshold
+    val newShuffle = OmniColumnarShuffleExchangeExec(shuffle, child, shuffle.output, isRowShuffle)
     val validationResult = newShuffle.doValidate()
     if (validationResult.ok()) {
       newShuffle

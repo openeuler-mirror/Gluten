@@ -251,7 +251,7 @@ case class OmniAQEShuffleReadExec(
     shuffleStage match {
       case Some(stage) =>
         sendDriverMetrics()
-        val rdd = stage.shuffle.asInstanceOf[ColumnarShuffleExchangeExec].getShuffleRDD(partitionSpecs.toArray)
+        val rdd = stage.shuffle.asInstanceOf[OmniColumnarShuffleExchangeExec].getShuffleRDD(partitionSpecs.toArray)
         if (enableShuffleBatchMerge) {
           rdd.mapPartitionsWithIndexInternal { (index,iter) =>
             val mergeIterator = new MergeIterator(iter,
