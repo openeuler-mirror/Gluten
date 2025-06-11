@@ -342,5 +342,8 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"max", {FUNCTION_OMNI_EXPR_TYPE, "max"}},
     {"avg", {FUNCTION_OMNI_EXPR_TYPE, "avg"}},
     {"first", {FUNCTION_OMNI_EXPR_TYPE, "first"}},
+    {"make_decimal", {FUNCTION_OMNI_EXPR_TYPE, "make_decimal"}},
+    {"unix_timestamp", {FUNCTION_OMNI_EXPR_TYPE, "unix_timestamp"}},
+    {"from_unixtime", {FUNCTION_OMNI_EXPR_TYPE, "from_unixtime"}},
     {"first_ignore_null", {FUNCTION_OMNI_EXPR_TYPE, "first_ignore_null"}}};
 } // namespace omniruntime
