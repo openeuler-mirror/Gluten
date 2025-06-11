@@ -1,9 +1,10 @@
 package org.apache.gluten.execution
 
+import com.google.protobuf.{Any, StringValue}
 import io.substrait.proto.JoinRel
-import org.apache.gluten.extension.ValidationResult
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.optimizer.BuildSide
+import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.execution.SparkPlan
 
@@ -32,35 +33,55 @@ case class OmniShuffledHashJoinExecTransformer(
     case FullOuter => 
       JoinRel.JoinType.JOIN_TYPE_OUTER
     case LeftOuter =>
-      if (needSwitchChildren) {
-        JoinRel.JoinType.JOIN_TYPE_RIGHT
-      } else {
-        JoinRel.JoinType.JOIN_TYPE_LEFT
-      }
+      JoinRel.JoinType.JOIN_TYPE_LEFT
     case RightOuter =>
-      if (needSwitchChildren) {
-        JoinRel.JoinType.JOIN_TYPE_LEFT
-      } else {
-        JoinRel.JoinType.JOIN_TYPE_RIGHT
-      }
+      JoinRel.JoinType.JOIN_TYPE_RIGHT
     case LeftSemi | ExistenceJoin(_) =>
-      if (needSwitchChildren) {
-        JoinRel.JoinType.JOIN_TYPE_RIGHT_SEMI
-      } else {
-        JoinRel.JoinType.JOIN_TYPE_LEFT_SEMI
-      }
+      JoinRel.JoinType.JOIN_TYPE_LEFT_SEMI
     case LeftAnti =>
       JoinRel.JoinType.JOIN_TYPE_LEFT_ANTI
     case _ =>
       JoinRel.JoinType.UNRECOGNIZED
   }
 
-  override protected def doValidateInternal(): ValidationResult = {
-    if (joinType == LeftSemi || joinType == LeftAnti) {
-      return ValidationResult.failed(s"LeftSemi and LeftAnti is not supported in OmniShuffledHashJoinExecTransformer")
-    }
+  private lazy val isBuildLeft: Int = buildSide match {
+    case BuildLeft => 1
+    case BuildRight => 0
+  }
 
-    super.doValidateInternal();
+  override def genJoinParameters(): Any = {
+    val (isBHJ, isNullAwareAntiJoin, buildHashTableId) = genJoinParametersInternal()
+    // Start with "JoinParameters:"
+    val joinParametersStr = new StringBuffer("JoinParameters:")
+    // isBHJ: 0 for SHJ, 1 for BHJ
+    // isNullAwareAntiJoin: 0 for false, 1 for true
+    // buildHashTableId: the unique id for the hash table of build plan
+    // isBuildLeft: 0 for BuildLeft, 1 for BuildRight
+    joinParametersStr
+      .append("isBHJ=")
+      .append(isBHJ)
+      .append("\n")
+      .append("isNullAwareAntiJoin=")
+      .append(isNullAwareAntiJoin)
+      .append("\n")
+      .append("buildHashTableId=")
+      .append(buildHashTableId)
+      .append("\n")
+      .append("isBuildLeft=")
+      .append(isBuildLeft)
+      .append("\n")
+      .append("isExistenceJoin=")
+      .append(if (joinType.isInstanceOf[ExistenceJoin]) 1 else 0)
+      .append("\n")
+    val message = StringValue
+      .newBuilder()
+      .setValue(joinParametersStr.toString)
+      .build()
+    BackendsApiManager.getTransformerApiInstance.packPBMessage(message)
+  }
+
+  override def genJoinParametersInternal(): (Int, Int, String) = {
+    (0, 0, "")
   }
 
   override protected def withNewChildrenInternal(newLeft: SparkPlan, newRight: SparkPlan): SparkPlan = 

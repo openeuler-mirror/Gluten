@@ -3,10 +3,10 @@
 //
 
 #include "SubstraitToOmniPlan.h"
-#include <algorithm>
 #include <expression/expressions.h>
-#include <stack>
 #include <vector>
+#include <stack>
+#include <algorithm>
 
 namespace omniruntime {
 namespace {
@@ -28,7 +28,6 @@ EmitInfo getEmitInfo(const ::substrait::RelCommon &relCommon, const PlanNodePtr 
     return emitInfo;
 }
 } // namespace
-
 SortOrderInfo ToSortOrder(const ::substrait::SortField &sortField)
 {
     switch (sortField.direction()) {
@@ -67,35 +66,23 @@ DataTypesPtr getJoinInputType(const PlanNodePtr& leftNode, const PlanNodePtr& ri
 /// @param leftNode the plan node of left side.
 /// @param rightNode the plan node of right side.
 /// @param joinType the join type.
+/// @param buildSide the build side.
 /// @return the output type.
 std::tuple<DataTypesPtr, DataTypesPtr> getJoinOutputType(const PlanNodePtr& leftNode,
-    const PlanNodePtr& rightNode, const JoinType& joinType)
+    const PlanNodePtr& rightNode, const JoinType& joinType, const omniruntime::op::BuildSide& buildSide)
 {
     // Decide output type.
-    // Output of right semi join cannot include columns from the left side.
-    // velox: !(core::isRightSemiFilterJoin(joinType) || core::isRightSemiProjectJoin(joinType))
-    bool outputMayIncludeLeftColumns = true;
-
-    // Output of left semi and anti joins cannot include columns from the right side.
-    bool outputMayIncludeRightColumns = !(joinType == JoinType::OMNI_JOIN_TYPE_LEFT_SEMI ||
-        joinType == JoinType::OMNI_JOIN_TYPE_EXISTENCE || joinType == JoinType::OMNI_JOIN_TYPE_LEFT_ANTI);
-
-    if (outputMayIncludeLeftColumns && outputMayIncludeRightColumns) {
-        return {leftNode->OutputType(), rightNode->OutputType()};
-    }
-
-    if (outputMayIncludeLeftColumns) {
-        if (joinType == JoinType::OMNI_JOIN_TYPE_EXISTENCE) {
-            std::vector<DataTypePtr> outputTypes = leftNode->OutputType()->Get();
-            outputTypes.emplace_back(BooleanDataType::Instance());
-            return {std::make_shared<DataTypes>(std::move(outputTypes)), std::make_shared<DataTypes>()};
-        } else {
-            return {leftNode->OutputType(), std::make_shared<DataTypes>()};
-        }
-    }
-
-    if (outputMayIncludeRightColumns) {
-        return {std::make_shared<DataTypes>(), rightNode->OutputType()};
+    switch (joinType) {
+        case JoinType::OMNI_JOIN_TYPE_INNER:
+        case JoinType::OMNI_JOIN_TYPE_LEFT:
+        case JoinType::OMNI_JOIN_TYPE_RIGHT:
+        case JoinType::OMNI_JOIN_TYPE_FULL:
+        case JoinType::OMNI_JOIN_TYPE_LEFT_SEMI:
+        case JoinType::OMNI_JOIN_TYPE_LEFT_ANTI:
+            return {leftNode->OutputType(), rightNode->OutputType()};
+        case JoinType::OMNI_JOIN_TYPE_EXISTENCE:
+            std::vector<DataTypePtr> outputTypes = {BooleanDataType::Instance()};
+            return {leftNode->OutputType(), std::make_shared<DataTypes>(std::move(outputTypes))};
     }
 
     OMNI_THROW("Substrait Error", "Output should include left or right columns.");
@@ -349,6 +336,17 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
             OMNI_THROW("Substrait Error", "Unsupported Join type: {}", std::to_string(joinRel.type()));
     }
 
+    // Map build side
+    omniruntime::op::BuildSide buildSide = omniruntime::op::BuildSide::OMNI_BUILD_UNKNOWN;
+    if (joinRel.has_advanced_extension() &&
+        SubstraitParser::ConfigExistInOptimization(joinRel.advanced_extension(), "isBuildLeft=")) {
+        if (SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isBuildLeft=")) {
+            buildSide = omniruntime::op::BuildSide::OMNI_BUILD_LEFT;
+        } else {
+            buildSide = omniruntime::op::BuildSide::OMNI_BUILD_RIGHT;
+        }
+    }
+
     // extract join keys from join expression
     std::vector<const ::substrait::Expression::FieldReference *> leftExprs;
     std::vector<const ::substrait::Expression::FieldReference *> rightExprs;
@@ -375,19 +373,19 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
         filter = exprConverter->ToOmniExpr(joinRel.post_join_filter(), inputType);
     }
 
-    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType);
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType, buildSide);
 
     if (joinRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
         // Create MergeJoinNode node
-        return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, leftKeys, rightKeys,
+        return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, buildSide, leftKeys, rightKeys,
             filter, leftNode, rightNode, leftOutputType, rightOutputType);
     } else {
         auto isBroadcast = joinRel.has_advanced_extension() &&
             SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isBHJ=");
 
         // Create HashJoinNode node
-        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, isNullAwareAntiJoin, !isBroadcast,
+        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin, !isBroadcast,
             leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType);
     }
 }
@@ -423,7 +421,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel
         joinConditions = exprConverter->ToOmniExpr(crossRel.expression(), inputRowType);
     }
 
-    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType);
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(
+        leftNode, rightNode, joinType, omniruntime::op::BuildSide::OMNI_BUILD_UNKNOWN);
 
     return std::make_shared<NestedLoopJoinNode>(NextPlanNodeId(), joinType, joinConditions,
         leftNode, rightNode, leftOutputType, rightOutputType);

@@ -149,6 +149,20 @@ bool SubstraitParser::ConfigSetInOptimization(
     return false;
 }
 
+bool SubstraitParser::ConfigExistInOptimization(
+    const ::substrait::extensions::AdvancedExtension &extension, const std::string &config)
+{
+    if (extension.has_optimization()) {
+        google::protobuf::StringValue msg;
+        extension.optimization().UnpackTo(&msg);
+        std::size_t pos = msg.value().find(config);
+        if (pos != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename T>
 T SubstraitParser::GetLiteralValue(const ::substrait::Expression::Literal & /* literal */)
 {

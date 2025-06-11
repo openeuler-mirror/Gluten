@@ -81,6 +81,14 @@ public:
     /// @return Whether the config is set as true.
     static bool ConfigSetInOptimization(const ::substrait::extensions::AdvancedExtension &, const std::string &config);
 
+    /// @brief Return whether a config is exist in AdvancedExtension
+    /// optimization.
+    /// @param extension Substrait advanced extension.
+    /// @param config the key string of a config.
+    /// @return Whether the config is exist.
+    static bool ConfigExistInOptimization(
+        const ::substrait::extensions::AdvancedExtension &, const std::string &config);
+
     /// Extract input types from Substrait function signature.
     static std::vector<type::DataTypePtr> SigToTypes(const std::string &functionSig);
 
