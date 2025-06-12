@@ -296,6 +296,8 @@ op::FunctionType SubstraitParser::ParseFunctionType(
         }
     } else if (funcName == "first_ignore_null") {
         return op::OMNI_AGGREGATION_TYPE_FIRST_IGNORENULL;
+    } else if (funcName == "stddev_samp") {
+        return op::OMNI_AGGREGATION_TYPE_SAMP;
     } else if (funcName == "first") {
         return op::OMNI_AGGREGATION_TYPE_FIRST_INCLUDENULL;
     } else if (funcName == "rank") {
@@ -356,5 +358,6 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"make_decimal", {FUNCTION_OMNI_EXPR_TYPE, "make_decimal"}},
     {"unix_timestamp", {FUNCTION_OMNI_EXPR_TYPE, "unix_timestamp"}},
     {"from_unixtime", {FUNCTION_OMNI_EXPR_TYPE, "from_unixtime"}},
-    {"first_ignore_null", {FUNCTION_OMNI_EXPR_TYPE, "first_ignore_null"}}};
+    {"first_ignore_null", {FUNCTION_OMNI_EXPR_TYPE, "first_ignore_null"}},
+    {"stddev_samp", {FUNCTION_OMNI_EXPR_TYPE, "stddev_samp"}}};
 } // namespace omniruntime
