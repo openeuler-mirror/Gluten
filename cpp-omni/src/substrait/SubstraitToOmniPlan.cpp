@@ -482,7 +482,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE: { // Partial
                 auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
                 aggOutputTypes.emplace_back(substraitOutTypes);
-                SubstraitParser::AddStructDataTypes(aggFunction.output_type(), nodeOutputTypes);
+                SubstraitParser::AddStructDataType(aggFunction.output_type(), nodeOutputTypes);
                 aggFuncTypes.emplace_back(
                     SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, true));
                 inputRaws.emplace_back(true);
@@ -492,7 +492,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE: { // PartialMerge
                 auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
                 aggOutputTypes.emplace_back(substraitOutTypes);
-                SubstraitParser::AddStructDataTypes(aggFunction.output_type(), nodeOutputTypes);
+                SubstraitParser::AddStructDataType(aggFunction.output_type(), nodeOutputTypes);
                 aggFuncTypes.emplace_back(
                     SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, false));
                 inputRaws.emplace_back(false);

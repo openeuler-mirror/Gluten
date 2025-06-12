@@ -101,7 +101,7 @@ public:
     static op::FunctionType ParseFunctionType(
         const std::string &funcName, std::vector<substrait::Expression> &expressionNodes, bool isMergeCount);
 
-    static void AddStructDataTypes(const ::substrait::Type &substraitType, std::vector<omniruntime::type::DataTypePtr> &outputDataTypes);
+    static void AddStructDataType(const ::substrait::Type &substraitType, std::vector<omniruntime::type::DataTypePtr> &outputDataTypes);
 
 private:
     /// A map used for mapping Substrait function keywords into Omni functions'
