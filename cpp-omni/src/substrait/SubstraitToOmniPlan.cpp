@@ -447,11 +447,15 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
     std::vector<bool> inputRaws;
     std::vector<bool> outputPartial;
     std::vector<TypedExprPtr> groupingExprs;
+    std::vector<DataTypesPtr> nodeOutputTypes;
+    DataTypesPtr outputType;
     uint32_t groupByNum = 0;
 
     for (const auto &grouping : aggRel.groupings()) {
         for (const auto &groupingExpr : grouping.grouping_expressions()) {
-            groupingExprs.emplace_back(exprConverter->ToOmniExpr(groupingExpr, sourceDataTypes));
+            auto omniGroupingExpr = exprConverter->ToOmniExpr(groupingExpr, sourceDataTypes);
+            groupingExprs.emplace_back(omniGroupingExpr);
+            outputDataTypes.emplace_back(omniGroupingExpr);
             groupByNum++;
         }
     }
@@ -478,6 +482,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE: { // Partial
                 auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
                 aggOutputTypes.emplace_back(substraitOutTypes);
+                SubstraitParser::AddStructDataTypes(aggFunction.output_type(), nodeOutputTypes);
                 aggFuncTypes.emplace_back(
                     SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, true));
                 inputRaws.emplace_back(true);
@@ -487,6 +492,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE: { // PartialMerge
                 auto substraitOutTypes = SubstraitParser::ParseStructType(aggFunction.output_type());
                 aggOutputTypes.emplace_back(substraitOutTypes);
+                SubstraitParser::AddStructDataTypes(aggFunction.output_type(), nodeOutputTypes);
                 aggFuncTypes.emplace_back(
                     SubstraitParser::ParseFunctionType(baseFuncName.second, expressionNodes, false));
                 inputRaws.emplace_back(false);
@@ -496,6 +502,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT: { // Complete
                 auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
                 std::vector<DataTypePtr> dataTypes = {substraitOutType};
+                nodeOutputTypes.emplace_back(substraitOutType);
                 auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));
                 aggOutputTypes.emplace_back(dataTypesPtr);
                 aggFuncTypes.emplace_back(
@@ -507,6 +514,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT: { // Final
                 auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
                 std::vector<DataTypePtr> dataTypes = {substraitOutType};
+                nodeOutputTypes.emplace_back(substraitOutType);
                 auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));
                 aggOutputTypes.emplace_back(dataTypesPtr);
                 aggFuncTypes.emplace_back(
@@ -540,9 +548,11 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
         outPutDataTypes.emplace_back(*outputType);
     }
 
+    outputType = std::make_shared<DataTypes>(std::move(nodeOutputTypes));
+
     return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
         outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial, isStatisticalAggregate,
-        childNode);
+        outputType, childNode);
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectRel &projectRel)

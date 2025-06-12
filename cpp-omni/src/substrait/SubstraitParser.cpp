@@ -244,6 +244,16 @@ std::string SubstraitParser::GetLiteralValue(const ::substrait::Expression::Lite
     }
 }
 
+void SubstraitParser::AddStructDataType(const ::substrait::Type &substraitType, std::vector<ommniruntime::type::DataTypePtr> &outputDataTypes)
+{
+    const auto &substraitStruct = substraitType.struct_();
+    const auto &structTypes = substraitStruct.types();
+    std::vector<type::DataTypePtr> types;
+    for (int i = 0; i < structTypes.size(); i++) {
+        outputDataTypes.emplace_back(ParseType(structTypes[i]));
+    }
+}
+
 type::DataTypesPtr SubstraitParser::ParseStructType(const ::substrait::Type &substraitType)
 {
     const auto &substraitStruct = substraitType.struct_();
