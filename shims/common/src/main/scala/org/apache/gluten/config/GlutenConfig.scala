@@ -533,6 +533,10 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def enableColumnarAQEShuffle: Boolean = conf.getConf(COLUMNAR_OMNI_AQE_SHUFFLE_MERGE)
 
   def enableJoinReorderEnhance: Boolean = conf.getConf(ENABLE_JOIN_REORDER_ENHANCE)
+
+  def enableRewriteSelfJoinInInPredicate: Boolean = conf.getConf(ENABLE_REWRITE_SELF_JOIN_IN_IN_PREDICATE)
+
+  def combineJoinedAggregatesEnabled: Boolean = conf.getConf(COMBINE_JOINED_AGGREGATES_ENABLED)
 }
 
 object GlutenConfig {
@@ -2398,17 +2402,28 @@ object GlutenConfig {
     .booleanConf
     .createWithDefault(true)
 
-  val ENABLE_JOIN_REORDER_ENHANCE = buildConf("spark.gluten.sql.columnar.backend.omni.JoinReorderEnhance")
+  val ENABLE_JOIN_REORDER_ENHANCE = buildConf("spark.gluten.sql.columnar.backend.omni.joinReorderEnhance")
     .internal()
     .doc("enable or disable join reorder enhance")
     .booleanConf
     .createWithDefault(true)
+
+  val ENABLE_REWRITE_SELF_JOIN_IN_IN_PREDICATE = buildConf("spark.gluten.sql.columnar.backend.omni.rewriteSelfJoinInInPredicate")
+    .internal()
+    .doc("enable or disable rewrite self join in Predicate to aggregate")
+    .booleanConf
+    .createWithDefault(false)
 
   val ENABLE_SHUFFLE_BATCH_MERGE = buildConf("spark.gluten.sql.columnar.backend.omni.sql.shuffle.merge")
     .internal()
     .doc("enable columnar shuffle merge")
     .booleanConf
     .createWithDefault(true)
+
+  val COMBINE_JOINED_AGGREGATES_ENABLED = buildConf("spark.gluten.sql.columnar.backend.omni.combineJoinedAggregates")
+    .internal()
+    .booleanConf
+    .createWithDefault(false)
 
   val ENABLE_OMNI_ROW_SHUFFLE =
     buildConf("spark.gluten.sql.columnar.backend.omni.rowShuffle.enabled")
