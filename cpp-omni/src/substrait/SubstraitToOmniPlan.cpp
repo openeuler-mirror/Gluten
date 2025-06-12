@@ -455,7 +455,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
         for (const auto &groupingExpr : grouping.grouping_expressions()) {
             auto omniGroupingExpr = exprConverter->ToOmniExpr(groupingExpr, sourceDataTypes);
             groupingExprs.emplace_back(omniGroupingExpr);
-            nodeOutputTypes.emplace_back(omniGroupingExpr);
+            nodeOutputTypes.emplace_back(omniGroupingExpr->GetReturnType());
             groupByNum++;
         }
     }
