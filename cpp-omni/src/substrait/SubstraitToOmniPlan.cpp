@@ -160,7 +160,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
     std::vector<DataTypePtr> allTypesVec;
     auto sourceTypesVec = childNode->OutputType()->Get();
     allTypesVec.insert(allTypesVec.end(), sourceTypesVec.begin(), sourceTypesVec.end());
-    std::vector<int32_t> argumentChannels;
+    std::vector<TypedExprPtr> argumentKeys;
 
     std::vector<int32_t> windowFrameTypes;
     std::vector<int32_t> windowFrameStartTypes;
@@ -176,8 +176,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
         for (const auto& arg : windowFunction.arguments()) {
             expressionNodes.emplace_back(arg.value());
             auto expression = exprConverter->ToOmniExpr(arg.value(), childNode->OutputType());
-            auto fieldExpr = dynamic_cast<const FieldExpr *>(expression);
-            argumentChannels.emplace_back(fieldExpr->colVal);
+            argumentKeys.emplace_back(expression);
         }
         auto funcName = SubstraitParser::FindOmniFunction(functionMap, windowFunction.function_reference());
         op::FunctionType functionType = SubstraitParser::ParseFunctionType(funcName.second, expressionNodes, false);
@@ -212,7 +211,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
     auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(windowRel.sorts(), childNode->OutputType());
     return std::make_shared<WindowNode>(NextPlanNodeId(), windowFunctionTypes, partitionCols, preGroupedCols,
         sortingKeys, sortingOrders, sortNullFirsts, preSortedChannelPreFix, expectedPositionsCount,
-        windowFunctionReturnTypes, allTypes, argumentChannels, windowFrameTypes, windowFrameStartTypes,
+        windowFunctionReturnTypes, allTypes, argumentKeys, windowFrameTypes, windowFrameStartTypes,
         windowFrameStartChannels, windowFrameEndTypes, windowFrameEndChannels, childNode);
 }
 
