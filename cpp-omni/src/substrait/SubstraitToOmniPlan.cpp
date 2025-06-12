@@ -69,23 +69,10 @@ DataTypesPtr getJoinInputType(const PlanNodePtr& leftNode, const PlanNodePtr& ri
 /// @param buildSide the build side.
 /// @return the output type.
 std::tuple<DataTypesPtr, DataTypesPtr> getJoinOutputType(const PlanNodePtr& leftNode,
-    const PlanNodePtr& rightNode, const JoinType& joinType, const omniruntime::op::BuildSide& buildSide)
+    const PlanNodePtr& rightNode)
 {
     // Decide output type.
-    switch (joinType) {
-        case JoinType::OMNI_JOIN_TYPE_INNER:
-        case JoinType::OMNI_JOIN_TYPE_LEFT:
-        case JoinType::OMNI_JOIN_TYPE_RIGHT:
-        case JoinType::OMNI_JOIN_TYPE_FULL:
-        case JoinType::OMNI_JOIN_TYPE_LEFT_SEMI:
-        case JoinType::OMNI_JOIN_TYPE_LEFT_ANTI:
-            return {leftNode->OutputType(), rightNode->OutputType()};
-        case JoinType::OMNI_JOIN_TYPE_EXISTENCE:
-            std::vector<DataTypePtr> outputTypes = {BooleanDataType::Instance()};
-            return {leftNode->OutputType(), std::make_shared<DataTypes>(std::move(outputTypes))};
-    }
-
-    OMNI_THROW("Substrait Error", "Output should include left or right columns.");
+    return {leftNode->OutputType(), rightNode->OutputType()};
 }
 
 std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id)
@@ -373,7 +360,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
         filter = exprConverter->ToOmniExpr(joinRel.post_join_filter(), inputType);
     }
 
-    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode, joinType, buildSide);
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode);
 
     if (joinRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
@@ -421,8 +408,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel
         joinConditions = exprConverter->ToOmniExpr(crossRel.expression(), inputRowType);
     }
 
-    auto [leftOutputType, rightOutputType] = getJoinOutputType(
-        leftNode, rightNode, joinType, omniruntime::op::BuildSide::OMNI_BUILD_UNKNOWN);
+    auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode);
 
     return std::make_shared<NestedLoopJoinNode>(NextPlanNodeId(), joinType, joinConditions,
         leftNode, rightNode, leftOutputType, rightOutputType);
