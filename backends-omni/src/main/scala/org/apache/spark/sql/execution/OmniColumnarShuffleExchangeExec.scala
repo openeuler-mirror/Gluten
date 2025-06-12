@@ -111,7 +111,7 @@ case class OmniColumnarShuffleExchangeExec(
   }
 
   override def nodeName: String =
-    if (!handleRow) "OmniColumnarShuffleExchangeExec" else "OmniRowShuffleExchangeExec"
+    if (!handleRow) "OmniColumnarShuffleExchange" else "OmniRowShuffleExchange"
 
   override def numMappers: Int = inputColumnarRDD.getNumPartitions
 
