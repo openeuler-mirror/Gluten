@@ -447,7 +447,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
     std::vector<bool> inputRaws;
     std::vector<bool> outputPartial;
     std::vector<TypedExprPtr> groupingExprs;
-    std::vector<DataTypesPtr> nodeOutputTypes;
+    std::vector<DataTypePtr> nodeOutputTypes;
     DataTypesPtr outputType;
     uint32_t groupByNum = 0;
 
