@@ -537,6 +537,18 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def enableRewriteSelfJoinInInPredicate: Boolean = conf.getConf(ENABLE_REWRITE_SELF_JOIN_IN_IN_PREDICATE)
 
   def combineJoinedAggregatesEnabled: Boolean = conf.getConf(COMBINE_JOINED_AGGREGATES_ENABLED)
+
+  def enableDedupLeftSemiJoin: Boolean = conf.getConf(ENABLE_DEDUP_LEFT_SEMI_JOIN)
+
+  def dedupLeftSemiJoinThreshold: Int = conf.getConf(DEDUP_LEFT_SEMI_JOIN_THRESHOLD)
+
+  def enablePushOrderedLimitThroughAgg: Boolean =  conf.getConf(PUSH_ORDERED_LIMIT_THROUGH_AGG_ENABLE)
+
+  def enableAdaptivePartialAggregation: Boolean = conf.getConf(ENABLE_ADAPTIVE_PARTIAL_AGGREGATION)
+
+  def filterMergeThreshold: Double = conf.getConf(FILTER_MERGE_THRESHOLD)
+
+  def enablefFilterMerge: Boolean = conf.getConf(FILTER_MERGE_ENABLE)
 }
 
 object GlutenConfig {
@@ -2407,6 +2419,38 @@ object GlutenConfig {
     .doc("enable or disable join reorder enhance")
     .booleanConf
     .createWithDefault(true)
+
+  val ENABLE_DEDUP_LEFT_SEMI_JOIN = buildConf("spark.gluten.sql.columnar.backend.omni.dedupLeftSemiJoin")
+    .internal()
+    .doc("enable or disable deduplicate the right side of left semi join")
+    .booleanConf
+    .createWithDefault(false)
+
+  val DEDUP_LEFT_SEMI_JOIN_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.dedupLeftSemiJoinThreshold")
+    .internal()
+    .intConf
+    .createWithDefault(3)
+
+  val PUSH_ORDERED_LIMIT_THROUGH_AGG_ENABLE = buildConf("spark.gluten.sql.columnar.backend.omni.pushOrderedLimitThroughAggEnable")
+    .internal()
+    .booleanConf
+    .createWithDefault(false)
+
+  val ENABLE_ADAPTIVE_PARTIAL_AGGREGATION = buildConf("spark.gluten.sql.columnar.backend.omni.adaptivePartialAggregation")
+    .internal()
+    .doc("enable or disable adaptive partial aggregation")
+    .booleanConf
+    .createWithDefault(false)
+
+  val FILTER_MERGE_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.filterMerge.maxCost")
+    .internal()
+    .doubleConf
+    .createWithDefault(100.0)
+
+  val FILTER_MERGE_ENABLE = buildConf("spark.gluten.sql.columnar.backend.omni.filterMerge")
+    .internal()
+    .booleanConf
+    .createWithDefault(false)
 
   val ENABLE_REWRITE_SELF_JOIN_IN_IN_PREDICATE = buildConf("spark.gluten.sql.columnar.backend.omni.rewriteSelfJoinInInPredicate")
     .internal()

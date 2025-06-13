@@ -29,7 +29,7 @@ import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.RewriteAQEShuffleRead
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, ReorderJoinEnhances, RewriteSelfJoinInInPredicate}
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, RewriteAQEShuffleRead}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
 
@@ -55,6 +55,7 @@ object OmniRuleApi {
     injector.injectOptimizerRule(ReorderJoinEnhances.apply)
     injector.injectOptimizerRule(RewriteSelfJoinInInPredicate.apply)
     injector.injectOptimizerRule(CombineJoinedAggregates.apply)
+    injector.injectOptimizerRule(MergeSubqueryFilters.apply)
   }
 
   private def injectLegacy(injector: LegacyInjector): Unit = {
@@ -64,6 +65,8 @@ object OmniRuleApi {
     injector.injectPreTransform(c => FallbackOnANSIMode.apply(c.session))
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
+    injector.injectPreTransform(c => DedupLeftSemiJoinAQE(c.session))
+    injector.injectPreTransform(c => PushOrderedLimitThroughAgg(c.session))
     injector.injectPreTransform(_ => RewriteSubqueryBroadcast())
     injector.injectPreTransform(_ => RewriteAQEShuffleRead())
     injector.injectPreTransform(c => FallbackBroadcastHashJoin.apply(c.session))
