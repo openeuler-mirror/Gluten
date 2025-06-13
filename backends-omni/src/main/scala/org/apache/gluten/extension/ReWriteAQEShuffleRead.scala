@@ -26,15 +26,15 @@ case class RewriteAQEShuffleRead() extends Rule[SparkPlan] {
     override def apply(plan: SparkPlan): SparkPlan = plan.transform {
         case plan: AQEShuffleReadExec if GlutenConfig.get.enableColumnarAQEShuffle =>
           plan.child match {
-          case shuffle: ColumnarShuffleExchangeExec =>
+          case shuffle: OmniColumnarShuffleExchangeExec =>
               logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
               OmniAQEShuffleReadExec(plan.child, plan.partitionSpecs)
-          case ShuffleQueryStageExec(_, shuffle: ColumnarShuffleExchangeExec, _) =>
+          case ShuffleQueryStageExec(_, shuffle: OmniColumnarShuffleExchangeExec, _) =>
               logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
               OmniAQEShuffleReadExec(plan.child, plan.partitionSpecs)
           case ShuffleQueryStageExec(_, reused: ReusedExchangeExec, _) =>
               reused match {
-              case ReusedExchangeExec(_, shuffle: ColumnarShuffleExchangeExec) =>
+              case ReusedExchangeExec(_, shuffle: OmniColumnarShuffleExchangeExec) =>
                   logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
                   OmniAQEShuffleReadExec(
                   plan.child,
