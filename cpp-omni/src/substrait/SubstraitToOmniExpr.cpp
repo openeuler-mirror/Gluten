@@ -130,6 +130,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
         return new FuncExpr(funcName, args, std::move(outputType));
     } else if (type == COALESCE_OMNI_EXPR_TYPE) {
+        if (args.size() != COALESCE_INPUT) {
+            OMNI_THROW("SUBSTRAIT_ERROR:", "coalesce expression only support two input parameters");
+        }
         OMNI_CHECK(args[0] != nullptr, "args[0] is null");
         if (args[1] == nullptr) {
             delete args[0];
