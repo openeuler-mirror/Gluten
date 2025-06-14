@@ -22,7 +22,8 @@ import org.apache.gluten.substrait.{AggregationParams, JoinParams}
 
 import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.execution.adaptive.QueryStageExec
+import org.apache.spark.sql.execution.{ColumnarInputAdapter, SparkPlan}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.utils.SparkInputMetricsUtil.InputMetricsWrapper
 
@@ -76,11 +77,15 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater = new MockMetricsUpdater(
     metrics)
   override def genProjectTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty[String, SQLMetric]
+    Map(
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "numOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes")
+    )
 
   override def genProjectTransformerMetricsUpdater(
       metrics: Map[String, SQLMetric],
-      extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater = new MockMetricsUpdater()
+      extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater = new OmniProjectMetricsUpdater(metrics, extraMetrics)
 
   override def genHashAggregateTransformerMetrics(
       sparkContext: SparkContext): Map[String, SQLMetric] = Map.empty[String, SQLMetric]
@@ -198,36 +203,17 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "hashBuildInputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash build input rows"),
       "hashBuildOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash build output rows"),
-      "hashBuildOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of hash build output vectors"),
-      "hashBuildOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of hash build output bytes"),
-      "hashBuildCpuCount" -> SQLMetrics.createMetric(sparkContext, "hash build cpu wall time cout"),
-      "hashBuildWallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of hash build"),
-      "hashBuildPeakMemoryBytes" -> SQLMetrics.createSizeMetric(sparkContext, "hash build peak memory bytes"),
-      "hashBuildNumMemoryAllocations" -> SQLMetrics.createMetric(sparkContext, "number of hash build memory allocations"),
-      "hashBuildSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "bytes written for spilling of hash build"),
-      "hashBuildSpilledRows" -> SQLMetrics.createMetric(sparkContext, "total rows written for spilling of hash build"),
-      "hashBuildSpilledPartitions" -> SQLMetrics.createMetric(sparkContext, "total spilled partitions  of hash build"),
-      "hashBuildSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "total spilled files  of hash build"),
+      "hashBuildNumInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash build input vector batches"),
+      "hashBuildAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash build add input"),
+      "hashBuildGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash build get output"),
+
       "hashProbeInputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash probe input rows"),
       "hashProbeOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash probe output rows"),
-      "hashProbeOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of hash probe output vectors"),
-      "hashProbeOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of hash probe output bytes"),
-      "hashProbeCpuCount" -> SQLMetrics.createMetric(sparkContext, "hash probe cpu wall time cout"),
-      "hashProbeWallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of hash probe"),
-      "hashProbePeakMemoryBytes" -> SQLMetrics.createSizeMetric(sparkContext, "hash probe peak memory bytes"),
-      "hashProbeNumMemoryAllocations" -> SQLMetrics.createMetric(sparkContext, "number of hash probe memory allocations"),
-      "hashProbeSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "bytes written for spilling of hash probe"),
-      "hashProbeSpilledRows" -> SQLMetrics.createMetric(sparkContext, "total rows written for spilling of hash probe"),
-      "hashProbeSpilledPartitions" -> SQLMetrics.createMetric(sparkContext, "total spilled partitions of hash probe"),
-      "hashProbeSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "total spilled files of hash probe"),
-      "hashProbeReplacedWithDynamicFilterRows" -> SQLMetrics.createMetric(sparkContext, "number of hash probe replaced with dynamic filter rows"),
-      "hashProbeDynamicFiltersProduced" -> SQLMetrics.createMetric(sparkContext, "number of hash probe dynamic filters produced"),
-      "streamPreProjectionCpuCount" -> SQLMetrics.createMetric(sparkContext, "stream preProject cpu wall time count"),
-      "streamPreProjectionWallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of stream preProjection"),
-      "buildPreProjectionCpuCount" -> SQLMetrics.createMetric(sparkContext, "preProject cpu wall time count"),
-      "buildPreProjectionWallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of build preProjection"),
-      "postProjectionCpuCount" -> SQLMetrics.createMetric(sparkContext, "postProject cpu wall time count"),
-      "postProjectionWallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of postProjection"),
+      "hashProbeNumInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash probe input vector batches"),
+      "hashProbeNumOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash probe output vector batches"),
+      "hashProbeAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash probe add input"),
+      "hashProbeGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash probe get output"),
+
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
       "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes")
@@ -266,11 +252,34 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
   override def genInputIteratorTransformerMetrics(
       child: SparkPlan,
       sparkContext: SparkContext,
-      forBroadcast: Boolean): Map[String, SQLMetric] = Map.empty
+      forBroadcast: Boolean): Map[String, SQLMetric] = {
+    def metricsPlan(plan: SparkPlan): SparkPlan = {
+      plan match {
+        case ColumnarInputAdapter(child) => metricsPlan(child)
+        case q: QueryStageExec => metricsPlan(q.plan)
+        case _ => plan
+      }
+    }
+
+    val outputMetrics = if (forBroadcast) {
+      metricsPlan(child).metrics
+        .filterKeys(key => key.equals("numOutputRows") || key.equals("outputVectors"))
+    } else {
+      Map(
+        "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+        "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors")
+      )
+    }
+
+    Map(
+      "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count"),
+      "wallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of input iterator")
+    ) ++ outputMetrics
+  }
 
   override def genInputIteratorTransformerMetricsUpdater(
       metrics: Map[String, SQLMetric],
-      forBroadcast: Boolean): MetricsUpdater = new MockMetricsUpdater()
+      forBroadcast: Boolean): MetricsUpdater = new OmniInputIteratorMetricsUpdater(metrics, forBroadcast)
 
   override def genWriteFilesTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
     Map.empty

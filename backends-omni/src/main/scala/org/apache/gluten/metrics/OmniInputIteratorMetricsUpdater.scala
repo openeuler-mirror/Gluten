@@ -22,7 +22,20 @@ case class OmniInputIteratorMetricsUpdater(metrics: Map[String, SQLMetric], forB
   extends MetricsUpdater {
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
-      val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+     val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("cpuCount") += operatorMetrics.getCpuCount
+      metrics("wallNanos") += operatorMetrics.getGetOutputTime
+      if (!forBroadcast) {
+        if (operatorMetrics.getOutputRows == 0 && operatorMetrics.getNumOutputVecBatches == 0) {
+          // Sometimes, omni does not update metrics for intermediate operator,
+          // here we try to use the input metrics
+          metrics("numOutputRows") += operatorMetrics.getInputRows
+          metrics("outputVectors") += operatorMetrics.getNumInputVecBatches
+        } else {
+          metrics("numOutputRows") += operatorMetrics.getOutputRows
+          metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
+        }
+      }
     }
   }
 }

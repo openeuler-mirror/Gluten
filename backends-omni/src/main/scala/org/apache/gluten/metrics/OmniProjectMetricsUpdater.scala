@@ -26,6 +26,16 @@ class OmniProjectMetricsUpdater(
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("numOutputRows") += operatorMetrics.getOutputRows
+      metrics("numOutputVecBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("outputBytes") += operatorMetrics.getOutputBytes
+      extraMetrics.foreach {
+        case (name, metric) =>
+          name match {
+            case "increment_metric" => metric += operatorMetrics.getOutputRows
+            case _ => // do nothing
+          }
+      }
     }
   }
 }

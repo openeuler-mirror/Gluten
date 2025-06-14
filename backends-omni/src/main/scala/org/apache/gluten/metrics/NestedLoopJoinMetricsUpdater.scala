@@ -7,13 +7,13 @@ class NestedLoopJoinMetricsUpdater(val metrics: Map[String, SQLMetric]) extends 
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numOutputRows") += operatorMetrics.getOutputRows()
-      metrics("outputVectors") += operatorMetrics.getOutputVectors()
-      metrics("outputBytes") += operatorMetrics.getOutputBytes()
-      metrics("cpuCount") += operatorMetrics.getCpuCount()
-      metrics("wallNanos") += operatorMetrics.getWallNanos()
-      metrics("peakMemoryBytes") += operatorMetrics.getPeakMemoryBytes()
-      metrics("numMemoryAllocations") += operatorMetrics.getNumMemoryAllocations()
+      metrics("numOutputRows") += operatorMetrics.getOutputRows
+      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
+      metrics("outputBytes") += operatorMetrics.getOutputBytes
+      metrics("cpuCount") += operatorMetrics.getCpuCount
+      metrics("wallNanos") += operatorMetrics.getWallNanos
+      metrics("peakMemoryBytes") += operatorMetrics.getPeakMemoryBytes
+      metrics("numMemoryAllocations") += operatorMetrics.getNumMemoryAllocations
     }
   }
 }

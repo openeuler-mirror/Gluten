@@ -87,18 +87,19 @@ object OmniMetricsUtil extends Logging {
 
     // We are accessing the metrics from end to start. So the input metrics are got from the
     // last suite of metrics, and the output metrics are got from the first suite.
-    val inputRows = operatorMetrics.get(operatorMetrics.size() - 1).getInputRows()
-    val inputVectors = operatorMetrics.get(operatorMetrics.size() - 1).getInputVectors()
-    val inputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getInputBytes()
-    val rawInputRows = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputRows()
-    val rawInputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputBytes()
+    val inputRows = operatorMetrics.get(operatorMetrics.size() - 1).getInputRows
+    val inputVectors = operatorMetrics.get(operatorMetrics.size() - 1).getNumInputVecBatches
+    val inputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getInputBytes
+    val rawInputRows = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputRows
+    val rawInputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputBytes
+    val addInputTime = operatorMetrics.get(operatorMetrics.size() - 1).getAddInputTime;
 
-    val outputRows = operatorMetrics.get(0).getOutputRows()
-    val outputVectors = operatorMetrics.get(0).getOutputVectors()
-    val outputBytes = operatorMetrics.get(0).getOutputBytes()
-
-    val physicalWrittenBytes = operatorMetrics.get(0).getPhysicalWrittenBytes()
-    val writeIOTime = operatorMetrics.get(0).getWriteIOTime()
+    val outputRows = operatorMetrics.get(0).getOutputRows
+    val outputVectors = operatorMetrics.get(0).getNumOutputVecBatches
+    val outputBytes = operatorMetrics.get(0).getOutputBytes
+    val getOutputTime = operatorMetrics.get(0).getGetOutputTime;
+    val physicalWrittenBytes = operatorMetrics.get(0).getPhysicalWrittenBytes
+    val writeIOTime = operatorMetrics.get(0).getWriteIOTime
 
     var cpuCount: Long = 0
     var wallNanos: Long = 0
@@ -127,36 +128,46 @@ object OmniMetricsUtil extends Logging {
     var preloadSplits: Long = 0
     var numWrittenFiles: Long = 0
 
+    val buildInputRows = operatorMetrics.get(operatorMetrics.size() - 1).getBuildInputRows
+    val buildNumInputVecBatches = operatorMetrics.get(operatorMetrics.size() - 1).getBuildNumInputVecBatches
+    val buildAddInputTime = operatorMetrics.get(operatorMetrics.size() - 1).getBuildAddInputTime
+    val buildGetOutputTime = operatorMetrics.get(operatorMetrics.size() - 1).getBuildGetOutputTime
+    val lookupInputRows = operatorMetrics.get(0).getLookupInputRows
+    val lookupNumInputVecBatches = operatorMetrics.get(0).getLookupNumInputVecBatches
+    val lookupOutputRows = operatorMetrics.get(0).getLookupOutputRows
+    val lookupNumOutputVecBatches = operatorMetrics.get(0).getLookupNumOutputVecBatches
+    val lookupAddInputTime = operatorMetrics.get(0).getLookupAddInputTime
+    val lookupGetOutputTime = operatorMetrics.get(0).getLookupGetOutputTime
     val metricsIterator = operatorMetrics.iterator()
     while (metricsIterator.hasNext) {
       val metrics = metricsIterator.next()
-      cpuCount += metrics.getCpuCount()
-      wallNanos += metrics.getWallNanos()
-      peakMemoryBytes = peakMemoryBytes.max(metrics.getPeakMemoryBytes())
-      numMemoryAllocations += metrics.getNumMemoryAllocations()
-      spilledInputBytes += metrics.getSpilledInputBytes()
-      spilledBytes += metrics.getSpilledBytes()
-      spilledRows += metrics.getSpilledRows()
-      spilledPartitions += metrics.getSpilledPartitions()
-      spilledFiles += metrics.getSpilledFiles()
-      numDynamicFiltersProduced += metrics.getNumDynamicFiltersProduced()
-      numDynamicFiltersAccepted += metrics.getNumDynamicFiltersAccepted()
-      numReplacedWithDynamicFilterRows += metrics.getNumReplacedWithDynamicFilterRows()
-      flushRowCount += metrics.getFlushRowCount()
-      loadedToValueHook += metrics.getLoadedToValueHook()
-      scanTime += metrics.getScanTime()
-      skippedSplits += metrics.getSkippedSplits()
-      processedSplits += metrics.getProcessedSplits()
-      skippedStrides += metrics.getSkippedStrides()
-      processedStrides += metrics.getProcessedStrides()
-      remainingFilterTime += metrics.getRemainingFilterTime()
-      ioWaitTime += metrics.getIoWaitTime()
-      storageReadBytes += metrics.getStorageReadBytes()
-      localReadBytes += metrics.getLocalReadBytes()
-      ramReadBytes += metrics.getRamReadBytes()
-      preloadSplits += metrics.getPreloadSplits()
-      numWrittenFiles += metrics.getNumWrittenFiles()
-    }
+      cpuCount += metrics.getCpuCount
+      wallNanos += metrics.getWallNanos
+      peakMemoryBytes = peakMemoryBytes.max(metrics.getPeakMemoryBytes)
+      numMemoryAllocations += metrics.getNumMemoryAllocations
+      spilledInputBytes += metrics.getSpilledInputBytes
+      spilledBytes += metrics.getSpilledBytes
+      spilledRows += metrics.getSpilledRows
+      spilledPartitions += metrics.getSpilledPartitions
+      spilledFiles += metrics.getSpilledFiles
+      numDynamicFiltersProduced += metrics.getNumDynamicFiltersProduced
+      numDynamicFiltersAccepted += metrics.getNumDynamicFiltersAccepted
+      numReplacedWithDynamicFilterRows += metrics.getNumReplacedWithDynamicFilterRows
+      flushRowCount += metrics.getFlushRowCount
+      loadedToValueHook += metrics.getLoadedToValueHook
+      scanTime += metrics.getScanTime
+      skippedSplits += metrics.getSkippedSplits
+      processedSplits += metrics.getProcessedSplits
+      skippedStrides += metrics.getSkippedStrides
+      processedStrides += metrics.getProcessedStrides
+      remainingFilterTime += metrics.getRemainingFilterTime
+      ioWaitTime += metrics.getIoWaitTime
+      storageReadBytes += metrics.getStorageReadBytes
+      localReadBytes += metrics.getLocalReadBytes
+      ramReadBytes += metrics.getRamReadBytes
+      preloadSplits += metrics.getPreloadSplits
+      numWrittenFiles += metrics.getNumWrittenFiles
+  }
 
     new OperatorMetrics(
       inputRows,
@@ -194,7 +205,22 @@ object OmniMetricsUtil extends Logging {
       preloadSplits,
       physicalWrittenBytes,
       writeIOTime,
-      numWrittenFiles
+      numWrittenFiles,
+
+      addInputTime,
+      getOutputTime,
+
+      buildInputRows,
+      buildNumInputVecBatches,
+      buildAddInputTime,
+      buildGetOutputTime,
+
+      lookupInputRows,
+      lookupNumInputVecBatches,
+      lookupOutputRows,
+      lookupNumOutputVecBatches,
+      lookupAddInputTime,
+      lookupGetOutputTime
     )
   }
 
@@ -212,6 +238,8 @@ object OmniMetricsUtil extends Logging {
       metricsIdx: Int,
       joinParamsMap: JMap[JLong, JoinParams],
       aggParamsMap: JMap[JLong, AggregationParams]): (JLong, Int) = {
+    logDebug(s"mutNode.update is : ${mutNode.updater.toString} " +
+      s"and muNode child is ${mutNode.children.toString()}")
     if (mutNode.updater == MetricsUpdater.Terminate) {
       return (operatorIdx, metricsIdx)
     }
@@ -224,7 +252,6 @@ object OmniMetricsUtil extends Logging {
           operatorMetrics.add(metrics.genOperatorMetrics(curMetricsIdx))
           curMetricsIdx -= 1
         })
-    logInfo(s"mutNode.updater is : ${mutNode.updater.toString}")
     mutNode.updater match {
       case ju: HashJoinMetricsUpdater =>
         // JoinRel outputs two suites of metrics respectively for hash build and hash probe.
@@ -285,7 +312,6 @@ object OmniMetricsUtil extends Logging {
         newOperatorIdx = result._1
         newMetricsIdx = result._2
     }
-    logInfo("newOperatorIdx ====> "+ newOperatorIdx  +"newMetricsIdx ==> " + newMetricsIdx)
     (newOperatorIdx, newMetricsIdx)
   }
 

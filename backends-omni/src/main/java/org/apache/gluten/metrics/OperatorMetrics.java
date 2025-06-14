@@ -14,10 +14,13 @@ public class OperatorMetrics implements IOperatorMetrics {
     private long inputRows;
 
     /** number of input vectors */
-    private long inputVectors;
+    private long numInputVecBatches;
 
     /** number of input bytes */
     private long inputBytes;
+
+    /** number of input time */
+    private long addInputTime;
 
     /** number of raw input rows */
     private long rawInputRows;
@@ -29,10 +32,13 @@ public class OperatorMetrics implements IOperatorMetrics {
     private long outputRows;
 
     /** number of output vectors */
-    private long outputVectors;
+    private long numOutputVecBatches;
 
     /** number of output bytes */
     private long outputBytes;
+
+    /** number of output time */
+    private long getOutputTime;
 
     /** cpu wall time cout */
     private long cpuCount;
@@ -118,6 +124,19 @@ public class OperatorMetrics implements IOperatorMetrics {
     /** number of written files */
     private long numWrittenFiles;
 
+    // For BHJ/SHJ
+    private long buildInputRows;
+    private long buildNumInputVecBatches;
+    private long buildAddInputTime;
+    private long buildGetOutputTime;
+
+    private long lookupInputRows;
+    private long lookupNumInputVecBatches;
+    private long lookupOutputRows;
+    private long lookupNumOutputVecBatches;
+    private long lookupAddInputTime;
+    private long lookupGetOutputTime;
+
     /**
      * Create an instance for operator metrics.
      *
@@ -194,13 +213,28 @@ public class OperatorMetrics implements IOperatorMetrics {
         long preloadSplits,
         long physicalWrittenBytes,
         long writeIOTime,
-        long numWrittenFiles) {
+        long numWrittenFiles,
+
+        long addInputTime,
+        long getOutputTime,
+
+        long buildInputRows,
+        long buildNumInputVecBatches,
+        long buildAddInputTime,
+        long buildGetOutputTime,
+
+        long lookupInputRows,
+        long lookupNumInputVecBatches,
+        long lookupOutputRows,
+        long lookupNumOutputVecBatches,
+        long lookupAddInputTime,
+        long lookupGetOutputTime) {
         this.inputRows = inputRows;
-        this.inputVectors = inputVectors;
+        this.numInputVecBatches = inputVectors;
         this.inputBytes = inputBytes;
         this.rawInputBytes = rawInputBytes;
         this.outputRows = outputRows;
-        this.outputVectors = outputVectors;
+        this.numOutputVecBatches = outputVectors;
         this.outputBytes = outputBytes;
         this.cpuCount = cpuCount;
         this.wallNanos = wallNanos;
@@ -229,6 +263,21 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.physicalWrittenBytes = physicalWrittenBytes;
         this.writeIOTime = writeIOTime;
         this.numWrittenFiles = numWrittenFiles;
+
+        this.addInputTime = addInputTime;
+        this.getOutputTime = getOutputTime;
+
+        this.buildInputRows = buildInputRows;
+        this.buildAddInputTime = buildAddInputTime;
+        this.buildGetOutputTime = buildGetOutputTime;
+        this.buildNumInputVecBatches = buildNumInputVecBatches;
+
+        this.lookupAddInputTime = lookupAddInputTime;
+        this.lookupInputRows = lookupInputRows;
+        this.lookupGetOutputTime = lookupGetOutputTime;
+        this.lookupOutputRows = lookupOutputRows;
+        this.lookupNumInputVecBatches = lookupNumInputVecBatches;
+        this.lookupNumOutputVecBatches = lookupNumOutputVecBatches;
     }
 
     public long getInputRows() {
@@ -237,14 +286,6 @@ public class OperatorMetrics implements IOperatorMetrics {
 
     public void setInputRows(long inputRows) {
         this.inputRows = inputRows;
-    }
-
-    public long getInputVectors() {
-        return inputVectors;
-    }
-
-    public void setInputVectors(long inputVectors) {
-        this.inputVectors = inputVectors;
     }
 
     public long getInputBytes() {
@@ -279,12 +320,20 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.outputRows = outputRows;
     }
 
-    public long getOutputVectors() {
-        return outputVectors;
+    public long getNumInputVecBatches() {
+        return numInputVecBatches;
     }
 
-    public void setOutputVectors(long outputVectors) {
-        this.outputVectors = outputVectors;
+    public void setNumInputVecBatches(long numInputVecBatches) {
+        this.numInputVecBatches = numInputVecBatches;
+    }
+
+    public long getNumOutputVecBatches() {
+        return numOutputVecBatches;
+    }
+
+    public void setNumOutputVecBatches(long numOutputVecBatches) {
+        this.numOutputVecBatches = numOutputVecBatches;
     }
 
     public long getOutputBytes() {
@@ -517,5 +566,155 @@ public class OperatorMetrics implements IOperatorMetrics {
 
     public void setNumWrittenFiles(long numWrittenFiles) {
         this.numWrittenFiles = numWrittenFiles;
+    }
+
+    public long getLookupNumOutputVecBatches() {
+        return lookupNumOutputVecBatches;
+    }
+
+    public void setLookupNumOutputVecBatches(long lookupNumOutputVecBatches) {
+        this.lookupNumOutputVecBatches = lookupNumOutputVecBatches;
+    }
+
+    public long getAddInputTime() {
+        return addInputTime;
+    }
+
+    public void setAddInputTime(long addInputTime) {
+        this.addInputTime = addInputTime;
+    }
+
+    public long getGetOutputTime() {
+        return getOutputTime;
+    }
+
+    public void setGetOutputTime(long getOutputTime) {
+        this.getOutputTime = getOutputTime;
+    }
+
+    public long getBuildInputRows() {
+        return buildInputRows;
+    }
+
+    public void setBuildInputRows(long buildInputRows) {
+        this.buildInputRows = buildInputRows;
+    }
+
+    public long getBuildNumInputVecBatches() {
+        return buildNumInputVecBatches;
+    }
+
+    public void setBuildNumInputVecBatches(long buildNumInputVecBatches) {
+        this.buildNumInputVecBatches = buildNumInputVecBatches;
+    }
+
+    public long getBuildAddInputTime() {
+        return buildAddInputTime;
+    }
+
+    public void setBuildAddInputTime(long buildAddInputTime) {
+        this.buildAddInputTime = buildAddInputTime;
+    }
+
+    public long getBuildGetOutputTime() {
+        return buildGetOutputTime;
+    }
+
+    public void setBuildGetOutputTime(long buildGetOutputTime) {
+        this.buildGetOutputTime = buildGetOutputTime;
+    }
+
+    public long getLookupInputRows() {
+        return lookupInputRows;
+    }
+
+    public void setLookupInputRows(long lookupInputRows) {
+        this.lookupInputRows = lookupInputRows;
+    }
+
+    public long getLookupNumInputVecBatches() {
+        return lookupNumInputVecBatches;
+    }
+
+    public void setLookupNumInputVecBatches(long lookupNumInputVecBatches) {
+        this.lookupNumInputVecBatches = lookupNumInputVecBatches;
+    }
+
+    public long getLookupOutputRows() {
+        return lookupOutputRows;
+    }
+
+    public void setLookupOutputRows(long lookupOutputRows) {
+        this.lookupOutputRows = lookupOutputRows;
+    }
+
+    public long getLookupAddInputTime() {
+        return lookupAddInputTime;
+    }
+
+    public void setLookupAddInputTime(long lookupAddInputTime) {
+        this.lookupAddInputTime = lookupAddInputTime;
+    }
+
+    public long getLookupGetOutputTime() {
+        return lookupGetOutputTime;
+    }
+
+    public void setLookupGetOutputTime(long lookupGetOutputTime) {
+        this.lookupGetOutputTime = lookupGetOutputTime;
+    }
+
+    @Override
+    public String toString() {
+        return "OperatorMetrics{" +
+                "inputRows=" + inputRows +
+                ", numInputVecBatches=" + numInputVecBatches +
+                ", inputBytes=" + inputBytes +
+                ", addInputTime=" + addInputTime +
+                ", rawInputRows=" + rawInputRows +
+                ", rawInputBytes=" + rawInputBytes +
+                ", outputRows=" + outputRows +
+                ", numOutputVecBatches=" + numOutputVecBatches +
+                ", outputBytes=" + outputBytes +
+                ", getOutputTime=" + getOutputTime +
+                ", cpuCount=" + cpuCount +
+                ", wallNanos=" + wallNanos +
+                ", scanTime=" + scanTime +
+                ", peakMemoryBytes=" + peakMemoryBytes +
+                ", numMemoryAllocations=" + numMemoryAllocations +
+                ", spilledInputBytes=" + spilledInputBytes +
+                ", spilledBytes=" + spilledBytes +
+                ", spilledRows=" + spilledRows +
+                ", spilledPartitions=" + spilledPartitions +
+                ", spilledFiles=" + spilledFiles +
+                ", numDynamicFiltersProduced=" + numDynamicFiltersProduced +
+                ", numDynamicFiltersAccepted=" + numDynamicFiltersAccepted +
+                ", numReplacedWithDynamicFilterRows=" + numReplacedWithDynamicFilterRows +
+                ", flushRowCount=" + flushRowCount +
+                ", loadedToValueHook=" + loadedToValueHook +
+                ", skippedSplits=" + skippedSplits +
+                ", processedSplits=" + processedSplits +
+                ", skippedStrides=" + skippedStrides +
+                ", processedStrides=" + processedStrides +
+                ", remainingFilterTime=" + remainingFilterTime +
+                ", ioWaitTime=" + ioWaitTime +
+                ", storageReadBytes=" + storageReadBytes +
+                ", localReadBytes=" + localReadBytes +
+                ", ramReadBytes=" + ramReadBytes +
+                ", preloadSplits=" + preloadSplits +
+                ", physicalWrittenBytes=" + physicalWrittenBytes +
+                ", writeIOTime=" + writeIOTime +
+                ", numWrittenFiles=" + numWrittenFiles +
+                ", buildInputRows=" + buildInputRows +
+                ", buildNumInputVecBatches=" + buildNumInputVecBatches +
+                ", buildAddInputTime=" + buildAddInputTime +
+                ", buildGetOutputTime=" + buildGetOutputTime +
+                ", lookupInputRows=" + lookupInputRows +
+                ", lookupNumInputVecBatches=" + lookupNumInputVecBatches +
+                ", lookupOutputRows=" + lookupOutputRows +
+                ", lookupNumOutputVecBatches=" + lookupNumOutputVecBatches +
+                ", lookupAddInputTime=" + lookupAddInputTime +
+                ", lookupGetOutputTime=" + lookupGetOutputTime +
+                '}';
     }
 }

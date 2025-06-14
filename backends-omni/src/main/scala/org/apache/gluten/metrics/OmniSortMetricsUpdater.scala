@@ -24,14 +24,15 @@ class OmniSortMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metric
     if (opMetrics != null) {
       logInfo("operator metrics is not empty.")
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numOutputRows") += operatorMetrics.getOutputRows()
-      metrics("addInputTime") += operatorMetrics.getScanTime()
-      metrics("numInputVecBatches") += operatorMetrics.getInputVectors()
-      metrics("numInputRows") += operatorMetrics.getInputRows()
-      metrics("getOutputTime") += operatorMetrics.getIoWaitTime()
-      metrics("outputDataSize") += operatorMetrics.getOutputBytes()
-      metrics("numOutputVecBatches") += operatorMetrics.getOutputVectors()
-      metrics("spillSize") += operatorMetrics.getSpilledRows()
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
+      metrics("numInputVecBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputRows") += operatorMetrics.getInputRows
+      metrics("numOutputRows") += operatorMetrics.getOutputRows
+      // todo omniCodegenTime
+      metrics("getOutputTime") += operatorMetrics.getGetOutputTime
+      metrics("outputDataSize") += operatorMetrics.getOutputBytes
+      metrics("numOutputVecBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("spillSize") += operatorMetrics.getSpilledRows
     }
   }
 }

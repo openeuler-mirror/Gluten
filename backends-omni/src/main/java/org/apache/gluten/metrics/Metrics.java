@@ -16,10 +16,13 @@ public class Metrics implements IMetrics {
     private long[] inputRows;
 
     /** number of input vectors */
-    private long[] inputVectors;
+    private long[] numInputVecBatches;
 
     /** number of input bytes */
     private long[] inputBytes;
+
+    /** number of input times */
+    private long[] addInputTime;
 
     /** number of raw input rows */
     private long[] rawInputRows;
@@ -31,10 +34,13 @@ public class Metrics implements IMetrics {
     private long[] outputRows;
 
     /** number of output vectors */
-    private long[] outputVectors;
+    private long[] numOutputVecBatches;
 
     /** number of output bytes */
     private long[] outputBytes;
+
+    /** number of output times */
+    private long[] getOutputTime;
 
     /** cpu wall time cout */
     private long[] cpuCount;
@@ -120,6 +126,37 @@ public class Metrics implements IMetrics {
     /** number of written files */
     private long[] numWrittenFiles;
 
+    // For BHJ/SHJ
+    /** number of build input rows */
+    private long[] buildInputRows;
+
+    /** number of build input vector batch */
+    private long[] buildNumInputVecBatches;
+
+    /** number of build add input time */
+    private long[] buildAddInputTime;
+
+    /** number of lookup output time */
+    private long[] buildGetOutputTime;
+
+    /** number of lookup input rows */
+    private long[] lookupInputRows;
+
+    /** number of lookup input vector batch */
+    private long[] lookupNumInputVecBatches;
+
+    /** number of lookup output row */
+    private long[] lookupOutputRows;
+
+    /** number of lookup output vector batch */
+    private long[] lookupNumOutputVecBatches;
+
+    /** number of lookup add input time */
+    private long[] lookupAddInputTime;
+
+    /** number of lookup output time */
+    private long[] lookupGetOutputTime;
+
     /** single metric */
     private SingleMetric singleMetric = new SingleMetric();
 
@@ -127,12 +164,12 @@ public class Metrics implements IMetrics {
      * Create an instance for native metrics.
      *
      * @param inputRows number of input rows
-     * @param inputVectors number of input vectors
+     * @param numInputVecBatches number of input vectors
      * @param inputBytes number of input bytes
      * @param rawInputRows number of raw input rows
      * @param rawInputBytes number of raw input bytes
      * @param outputRows number of output rows
-     * @param outputVectors number of output vectors
+     * @param numOutputVecBatches number of output vectors
      * @param outputBytes number of output bytes
      * @param cpuCount cpu wall time cout
      * @param wallNanos time of operator
@@ -166,12 +203,12 @@ public class Metrics implements IMetrics {
      */
     public Metrics(
         long[] inputRows,
-        long[] inputVectors,
+        long[] numInputVecBatches,
         long[] inputBytes,
         long[] rawInputRows,
         long[] rawInputBytes,
         long[] outputRows,
-        long[] outputVectors,
+        long[] numOutputVecBatches,
         long[] outputBytes,
         long[] cpuCount,
         long[] wallNanos,
@@ -201,14 +238,27 @@ public class Metrics implements IMetrics {
         long[] preloadSplits,
         long[] physicalWrittenBytes,
         long[] writeIOTime,
-        long[] numWrittenFiles) {
+        long[] numWrittenFiles,
+        long[] addInputTime,
+        long[] getOutputTime,
+        long[] buildInputRows,
+        long[] buildNumInputVecBatches,
+        long[] buildAddInputTime,
+        long[] buildGetOutputTime,
+        long[] lookupInputRows,
+        long[] lookupNumInputVecBatches,
+        long[] lookupOutputRows,
+        long[] lookupNumOutputVecBatches,
+        long[] lookupAddInputTime,
+        long[] lookupGetOutputTime
+        ) {
         this.inputRows = inputRows;
-        this.inputVectors = inputVectors;
+        this.numInputVecBatches = numInputVecBatches;
         this.inputBytes = inputBytes;
         this.rawInputRows = rawInputRows;
         this.rawInputBytes = rawInputBytes;
         this.outputRows = outputRows;
-        this.outputVectors = outputVectors;
+        this.numOutputVecBatches = numOutputVecBatches;
         this.outputBytes = outputBytes;
         this.cpuCount = cpuCount;
         this.wallNanos = wallNanos;
@@ -239,14 +289,25 @@ public class Metrics implements IMetrics {
         this.physicalWrittenBytes = physicalWrittenBytes;
         this.writeIOTime = writeIOTime;
         this.numWrittenFiles = numWrittenFiles;
+
+        this.addInputTime = addInputTime;
+        this.getOutputTime = getOutputTime;
+
+        this.buildInputRows = buildInputRows;
+        this.buildAddInputTime = buildAddInputTime;
+        this.buildGetOutputTime = buildGetOutputTime;
+        this.buildNumInputVecBatches = buildNumInputVecBatches;
+
+        this.lookupAddInputTime = lookupAddInputTime;
+        this.lookupInputRows = lookupInputRows;
+        this.lookupGetOutputTime = lookupGetOutputTime;
+        this.lookupOutputRows = lookupOutputRows;
+        this.lookupNumInputVecBatches = lookupNumInputVecBatches;
+        this.lookupNumOutputVecBatches = lookupNumOutputVecBatches;
     }
 
     public long[] getInputRows() {
         return inputRows;
-    }
-
-    public long[] getInputVectors() {
-        return inputVectors;
     }
 
     public long[] getInputBytes() {
@@ -263,10 +324,6 @@ public class Metrics implements IMetrics {
 
     public long[] getOutputRows() {
         return outputRows;
-    }
-
-    public long[] getOutputVectors() {
-        return outputVectors;
     }
 
     public long[] getOutputBytes() {
@@ -402,12 +459,12 @@ public class Metrics implements IMetrics {
 
         return new OperatorMetrics(
             inputRows[index],
-            inputVectors[index],
+            numInputVecBatches[index],
             inputBytes[index],
             rawInputRows[index],
             rawInputBytes[index],
             outputRows[index],
-            outputVectors[index],
+            numOutputVecBatches[index],
             outputBytes[index],
             cpuCount[index],
             wallNanos[index],
@@ -436,7 +493,21 @@ public class Metrics implements IMetrics {
             preloadSplits[index],
             physicalWrittenBytes[index],
             writeIOTime[index],
-            numWrittenFiles[index]
+            numWrittenFiles[index],
+
+            addInputTime[index],
+            getOutputTime[index],
+            buildInputRows[index],
+            buildNumInputVecBatches[index],
+            buildAddInputTime[index],
+            buildGetOutputTime[index],
+
+            lookupNumOutputVecBatches[index],
+            lookupNumInputVecBatches[index],
+            lookupOutputRows[index],
+            lookupInputRows[index],
+            lookupGetOutputTime[index],
+            lookupAddInputTime[index]
         );
     }
 

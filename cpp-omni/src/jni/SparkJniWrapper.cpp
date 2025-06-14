@@ -444,10 +444,10 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniW
         }
         return env->NewObject(
             metricsBuilderClass, metricsBuilderConstructor,
-            longArray[omniruntime::OmniMetrics::kInputRows], longArray[omniruntime::OmniMetrics::kInputVectors],
+            longArray[omniruntime::OmniMetrics::kInputRows], longArray[omniruntime::OmniMetrics::kNumInputVecBatches],
             longArray[omniruntime::OmniMetrics::kInputBytes], longArray[omniruntime::OmniMetrics::kRawInputRows],
             longArray[omniruntime::OmniMetrics::kRawInputBytes], longArray[omniruntime::OmniMetrics::kOutputRows],
-            longArray[omniruntime::OmniMetrics::kOutputVectors], longArray[omniruntime::OmniMetrics::kOutputBytes],
+            longArray[omniruntime::OmniMetrics::kNumOutputVecBatches], longArray[omniruntime::OmniMetrics::kOutputBytes],
             longArray[omniruntime::OmniMetrics::kCpuCount], longArray[omniruntime::OmniMetrics::kWallNanos],
             metrics ? metrics->omniToArrow : -1, longArray[omniruntime::OmniMetrics::kPeakMemoryBytes],
             longArray[omniruntime::OmniMetrics::kNumMemoryAllocations],
@@ -467,6 +467,12 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniW
             longArray[omniruntime::OmniMetrics::kLocalReadBytes], longArray[omniruntime::OmniMetrics::kRamReadBytes],
             longArray[omniruntime::OmniMetrics::kPreloadSplits],
             longArray[omniruntime::OmniMetrics::kPhysicalWrittenBytes],
-            longArray[omniruntime::OmniMetrics::kWriteIOTime], longArray[omniruntime::OmniMetrics::kNumWrittenFiles]);
+            longArray[omniruntime::OmniMetrics::kWriteIOTime], longArray[omniruntime::OmniMetrics::kNumWrittenFiles],
+            longArray[omniruntime::OmniMetrics::kAddInputTime], longArray[omniruntime::OmniMetrics::kGetOutputTime],
+            longArray[omniruntime::OmniMetrics::kBuildInputRows], longArray[omniruntime::OmniMetrics::kBuildNumInputVecBatches],
+            longArray[omniruntime::OmniMetrics::kBuildAddInputTime], longArray[omniruntime::OmniMetrics::kBuildGetOutputTime],
+            longArray[omniruntime::OmniMetrics::kLookupInputRows], longArray[omniruntime::OmniMetrics::kLookupNumInputVecBatches],
+            longArray[omniruntime::OmniMetrics::kLookupOutputRows], longArray[omniruntime::OmniMetrics::kLookupNumOutputVecBatches],
+            longArray[omniruntime::OmniMetrics::kLookupAddInputTime], longArray[omniruntime::OmniMetrics::kLookupGetOutputTime]);
     JNI_FUNC_END(runtimeExceptionClass)
 }

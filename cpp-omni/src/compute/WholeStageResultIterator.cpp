@@ -117,10 +117,9 @@ void WholeStageResultIterator::CollectMetrics()
 {
     if (metrics_) {
         // The metrics has already been created.
-        LogsInfo("The metrics has already been created..");
+        LogsWarn("The metrics has already been created.");
         return;
     }
-    LogsInfo("start get taskstates.");
     const auto& taskStats = task_->GetTaskStats();
     if (taskStats.executionStartTimeMs == 0) {
         LogsWarn("Skip collect task metrics since task did not call next().");
@@ -141,26 +140,23 @@ void WholeStageResultIterator::CollectMetrics()
         }
         statsNum += planStats.at(nodeId).operatorStats.size();
     }
-    LogsDebug("statsNum is %d.", statsNum);
+    LogsDebug("planStats size: %d, statsNum is %d.", planStats.size(), statsNum);
     metrics_ = std::make_unique<omniruntime::OmniMetrics>(statsNum);
     int metricIndex = 0;
     for (size_t idx = 0; idx < orderedNodeIds_.size(); idx++) {
         const auto& nodeId = orderedNodeIds_[idx];
         if (planStats.find(nodeId) == planStats.end()) {
             metrics_->get(omniruntime::OmniMetrics::kOutputRows)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kOutputVectors)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kNumOutputVecBatches)[metricIndex] = 0;
             metrics_->get(omniruntime::OmniMetrics::kOutputBytes)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kWallNanos)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kPeakMemoryBytes)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kNumMemoryAllocations)[metricIndex] = 0;
-            metrics_->get(omniruntime::OmniMetrics::kInputVectors)[metricIndex] = 0;
+            metrics_->get(omniruntime::OmniMetrics::kNumInputVecBatches)[metricIndex] = 0;
             metricIndex += 1;
             LogsWarn("no nodeId %d in planState and continue.", nodeId);
             continue;
         }
         const auto& stats = planStats.at(nodeId);
         buildMetricsForNative(stats, metricIndex);
+        metricIndex += 1;
     }
 }
 
@@ -170,23 +166,37 @@ void WholeStageResultIterator::buildMetricsForNative(
     for (const auto& entry : stats.operatorStats) {
         const auto& second = entry.second;
         metrics_->get(omniruntime::OmniMetrics::kInputRows)[metricIndex] = second->inputRows;
-        metrics_->get(omniruntime::OmniMetrics::kInputVectors)[metricIndex] = second->inputVectors;
+        metrics_->get(omniruntime::OmniMetrics::kNumInputVecBatches)[metricIndex] = second->numInputVecBatches;
         metrics_->get(omniruntime::OmniMetrics::kInputBytes)[metricIndex] = second->inputBytes;
         metrics_->get(omniruntime::OmniMetrics::kRawInputRows)[metricIndex] = second->rawInputRows;
         metrics_->get(omniruntime::OmniMetrics::kRawInputBytes)[metricIndex] = second->rawInputBytes;
         metrics_->get(omniruntime::OmniMetrics::kOutputRows)[metricIndex] = second->outputRows;
-        metrics_->get(omniruntime::OmniMetrics::kOutputVectors)[metricIndex] = second->outputVectors;
+        metrics_->get(omniruntime::OmniMetrics::kNumOutputVecBatches)[metricIndex] = second->numOutputVecBatches;
         metrics_->get(omniruntime::OmniMetrics::kOutputBytes)[metricIndex] = second->outputBytes;
-        metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = second->cpuWallTiming.count;
-        metrics_->get(omniruntime::OmniMetrics::kWallNanos)[metricIndex] = second->cpuWallTiming.wallNanos;
-        metrics_->get(omniruntime::OmniMetrics::kPeakMemoryBytes)[metricIndex] = second->peakMemoryBytes;
-        metrics_->get(omniruntime::OmniMetrics::kNumMemoryAllocations)[metricIndex] = second->numMemoryAllocations;
-        metrics_->get(omniruntime::OmniMetrics::kSpilledInputBytes)[metricIndex] = second->spilledInputBytes;
         metrics_->get(omniruntime::OmniMetrics::kSpilledBytes)[metricIndex] = second->spilledBytes;
         metrics_->get(omniruntime::OmniMetrics::kSpilledRows)[metricIndex] = second->spilledRows;
         metrics_->get(omniruntime::OmniMetrics::kSpilledPartitions)[metricIndex] = second->spilledPartitions;
         metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
-        metricIndex += 1;
+
+        metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] = second->addInputTime.cpuNanos;
+        metrics_->get(omniruntime::OmniMetrics::kGetOutputTime)[metricIndex] = second->getOutputTime.cpuNanos;
+
+        metrics_->get(omniruntime::OmniMetrics::kBuildInputRows)[metricIndex] = second->buildInputRows;
+        metrics_->get(omniruntime::OmniMetrics::kBuildNumInputVecBatches)[metricIndex] =
+            second->buildNumInputVecBatches;
+        metrics_->get(omniruntime::OmniMetrics::kBuildAddInputTime)[metricIndex] = second->buildAddInputTime.cpuNanos;
+        metrics_->get(omniruntime::OmniMetrics::kBuildGetOutputTime)[metricIndex] = second->buildGetOutputTime.cpuNanos;
+
+        metrics_->get(omniruntime::OmniMetrics::kLookupInputRows)[metricIndex] = second->lookupInputRows;
+        metrics_->get(omniruntime::OmniMetrics::kLookupNumInputVecBatches)[metricIndex] =
+            second->lookupNumInputVecBatches;
+        metrics_->get(omniruntime::OmniMetrics::kLookupOutputRows)[metricIndex] = second->lookupOutputRows;
+        metrics_->get(omniruntime::OmniMetrics::kLookupNumOutputVecBatches)[metricIndex] =
+            second->lookupNumOutputVecBatches;
+        metrics_->get(omniruntime::OmniMetrics::kLookupAddInputTime)[metricIndex] =
+            second->lookupAddInputTime.cpuNanos;
+        metrics_->get(omniruntime::OmniMetrics::kLookupGetOutputTime)[metricIndex] =
+            second->lookupGetOutputTime.cpuNanos;
     }
 }
 }
