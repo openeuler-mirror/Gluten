@@ -19,7 +19,7 @@ package org.apache.gluten.backendsapi.omni
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.{ExpressionTransformer, GenericExpressionTransformer, LiteralTransformer, OmniAliasTransformer, OmniHashExpressionTransformer}
+import org.apache.gluten.expression.{ExpressionTransformer, GenericExpressionTransformer, LiteralTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
 
@@ -29,12 +29,12 @@ import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expression, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expression, FromUnixTime, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
-import org.apache.spark.sql.execution.{OmniColumnarShuffleExchangeExec, ColumnarWriteFilesExec, GenerateExec, SparkPlan}
+import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, GenerateExec, OmniColumnarShuffleExchangeExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
@@ -74,6 +74,18 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       child: ExpressionTransformer,
       original: Expression): ExpressionTransformer =
     OmniAliasTransformer(substraitExprName, child, original)
+
+  /**
+   * Generate FromUnixTime transformer
+   *
+   * @return
+   *   a transformer for fromUnixTime
+   */
+  override def genFromUnixTimeTransformer(
+      substraitExprName: String,
+      children: Seq[ExpressionTransformer],
+      original: FromUnixTime): ExpressionTransformer =
+    OmniFromUnixTimeTransformer(substraitExprName, children, original)
 
   /** Generate HashAggregateExecTransformer. */
   override def genHashAggregateExecTransformer(

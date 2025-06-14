@@ -42,3 +42,9 @@ case class BoundReferenceTransformer(substraitExprName: String, original: BoundR
     ExpressionBuilder.makeSelection(original.ordinal.asInstanceOf[java.lang.Integer])
   }
 }
+
+case class FromUnixTimeTransformer(
+    substraitExprName: String,
+    children: Seq[ExpressionTransformer],
+    original: FromUnixTime)
+  extends ExpressionTransformer {}

@@ -225,6 +225,15 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           substraitExprName,
           replaceWithExpressionTransformer0(a.child, attributeSeq, expressionsMap),
           a)
+      case f: FromUnixTime =>
+        BackendsApiManager.getSparkPlanExecApiInstance.genFromUnixTimeTransformer(
+          substraitExprName,
+          Seq(
+            replaceWithExpressionTransformer0(f.sec, attributeSeq, expressionsMap),
+            replaceWithExpressionTransformer0(f.format, attributeSeq, expressionsMap)
+          ),
+          f
+        )
       case a: AttributeReference =>
         if (attributeSeq == null) {
           throw new UnsupportedOperationException(s"attributeSeq should not be null.")
