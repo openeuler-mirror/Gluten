@@ -402,7 +402,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::CrossRel
     }
 
     auto inputRowType = getJoinInputType(leftNode, rightNode);
-    TypedExprPtr joinConditions;
+    TypedExprPtr joinConditions = nullptr;
     if (crossRel.has_expression()) {
         joinConditions = exprConverter->ToOmniExpr(crossRel.expression(), inputRowType);
     }
