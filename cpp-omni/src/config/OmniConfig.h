@@ -159,6 +159,14 @@ const std::string kPreloadSplits = "readyPreloadedSplits";
 const std::string kNumWrittenFiles = "numWrittenFiles";
 const std::string kWriteIOTime = "writeIOTime";
 
+// spill config
+const std::string KSpillHashAggRowThreshold = "spark.gluten.sql.columnar.backend.omni.hashAggSpill.rowThreshold";
+const std::string KSpillSortRowThreshold = "spark.gluten.sql.columnar.backend.omni.sortSpill.rowThreshold";
+
+const std::string KColumnarSpillMemThreshold = "spark.gluten.sql.columnar.backend.omni.spill.memFraction";
+const std::string KColumnarSpillWriteBufferSize = "spark.gluten.sql.columnar.backend.omni.spill.writeBufferSize";
+const std::string KColumnarSpillDirDiskReserveSize = "spark.gluten.sql.columnar.backend.omni.spill.dirDiskReserveSize";
+
 // others
 const std::string kHiveDefaultPartition = "__HIVE_DEFAULT_PARTITION__";
 

@@ -100,6 +100,16 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<uint8_t>(kSpillableReservationGrowthPct, 25));
         configs[config::QueryConfig::kSpillPrefixSortEnabled] = omniCfg_->Get<std::string>(kSpillPrefixSortEnabled,
             "false");
+        configs[config::QueryConfig::KSpillHashAggRowThreshold] = std::to_string(
+            omniCfg_->Get<int32_t>(KSpillHashAggRowThreshold, INT32_MAX));
+        configs[config::QueryConfig::KSpillSortRowThreshold] = std::to_string(
+            omniCfg_->Get<int32_t>(KSpillSortRowThreshold, INT32_MAX));
+        configs[config::QueryConfig::KColumnarSpillMemThreshold] = std::to_string(
+            omniCfg_->Get<uint64_t>(KColumnarSpillMemThreshold, 90));
+        configs[config::QueryConfig::KColumnarSpillWriteBufferSize] = std::to_string(
+            omniCfg_->Get<uint64_t>(KColumnarSpillWriteBufferSize, 4121440L));
+        configs[config::QueryConfig::KColumnarSpillDirDiskReserveSize] = std::to_string(
+            omniCfg_->Get<uint64_t>(KColumnarSpillDirDiskReserveSize, 10737418240L));
         if (omniCfg_->Get<bool>(kSparkShuffleSpillCompress, true)) {
             configs[config::QueryConfig::kSpillCompressionKind] = omniCfg_->Get<std::string>(kSpillCompressionKind,
                 omniCfg_->Get<std::string>(kCompressionKind, "lz4"));

@@ -549,6 +549,16 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def filterMergeThreshold: Double = conf.getConf(FILTER_MERGE_THRESHOLD)
 
   def enablefFilterMerge: Boolean = conf.getConf(FILTER_MERGE_ENABLE)
+
+  def columnarSpillWriteBufferSize: Long = conf.getConf(COLUMNAR_SPILL_WRITE_BUFFER_SIZE)
+
+  def columnarSpillMemPctThreshold: Long = conf.getConf(COLUMNAR_SPILL_MEM_PCT_THRESHOLD)
+
+  def columnarSpillDirDiskReserveSize: Long = conf.getConf(COLUMNAR_SPILL_DIR_DISK_RESERVE_SIZE)
+
+  def columnarHashAggSpillRowThreshold: Int = conf.getConf(COLUMNAR_HASH_AGG_SPILL_ROW_THRESHOLD)
+
+  def columnarSortSpillRowThreshold: Int = conf.getConf(COLUMNAR_SORT_SPILL_ROW_THRESHOLD)
 }
 
 object GlutenConfig {
@@ -778,6 +788,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
+    nativeConfMap.putAll(conf.filter(e => e._1.contains("omni")).asJava)
     // return
     nativeConfMap
   }
@@ -2502,4 +2513,35 @@ object GlutenConfig {
     .doc("enable or disable aqe shuffle")
     .booleanConf
     .createWithDefault(true)
+
+  val COLUMNAR_SPILL_WRITE_BUFFER_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.spill.writeBufferSize")
+    .internal()
+    .doc("columnar spill native buffer size")
+    .longConf
+    .createWithDefault(4121440L)
+
+  val COLUMNAR_SPILL_MEM_PCT_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.spill.memFraction")
+    .internal()
+    .doc("columnar spill threshold - Percentage of memory usage," +
+      " associate with the \"spark.memory.offHeap\" together")
+    .longConf
+    .createWithDefault(90)
+
+  val COLUMNAR_SPILL_DIR_DISK_RESERVE_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.spill.dirDiskReserveSize")
+    .internal()
+    .doc("columnar spill dir disk reserve Size, default 10GB")
+    .longConf
+    .createWithDefault(10737418240L)
+
+  val COLUMNAR_HASH_AGG_SPILL_ROW_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.hashAggSpill.rowThreshold")
+    .internal()
+    .doc("columnar hash aggregate spill threshold")
+    .intConf
+    .createWithDefault(Integer.MAX_VALUE)
+
+  val COLUMNAR_SORT_SPILL_ROW_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.sortSpill.rowThreshold")
+    .internal()
+    .doc("columnar sort spill threshold")
+    .intConf
+    .createWithDefault(Integer.MAX_VALUE)
 }
