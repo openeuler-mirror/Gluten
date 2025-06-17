@@ -700,4 +700,20 @@ trait SparkPlanExecApi {
       limitExpr: ExpressionTransformer,
       original: StringSplit): ExpressionTransformer =
     GenericExpressionTransformer(substraitExprName, Seq(srcExpr, regexExpr, limitExpr), original)
+
+
+  def genFileSourceScanExecTransformer(
+      scanExec: FileSourceScanExec): FileSourceScanExecTransformerBase = {
+    FileSourceScanExecTransformer(
+      scanExec.relation,
+      scanExec.output,
+      scanExec.requiredSchema,
+      scanExec.partitionFilters,
+      scanExec.optionalBucketSet,
+      scanExec.optionalNumCoalescedBuckets,
+      scanExec.dataFilters,
+      scanExec.tableIdentifier,
+      scanExec.disableBucketedScan
+    )
+  }
 }

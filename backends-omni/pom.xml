@@ -51,6 +51,11 @@
       </exclusions>
     </dependency>
     <dependency>
+      <groupId>com.huawei.boostkit</groupId>
+      <artifactId>boostkit-omniop-native-reader</artifactId>
+      <version>${spark.version}-${omniruntime.version}</version>
+    </dependency>
+    <dependency>
       <groupId>org.apache.gluten</groupId>
       <artifactId>gluten-arrow</artifactId>
       <version>${project.version}</version>

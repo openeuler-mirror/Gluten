@@ -892,35 +892,18 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::AggregateRel &agg
 
 bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ReadRel &readRel)
 {
-    planConverter.ToOmniPlan(readRel);
-
     // Validate filter in ReadRel.
     if (readRel.has_filter()) {
-        std::vector<DataTypePtr> veloxTypeList;
+        std::vector<DataTypePtr> omniTypeList;
         if (readRel.has_base_schema()) {
-            return false;
+            const auto& baseSchema = readRel.base_schema();
+            omniTypeList = SubstraitParser::ParseNamedStruct(baseSchema);
         }
 
-        int32_t inputPlanNodeId = 0;
-        std::vector<std::string> names;
-        names.reserve(veloxTypeList.size());
-        for (auto colIdx = 0; colIdx < veloxTypeList.size(); colIdx++) {
-            names.emplace_back(SubstraitParser::MakeNodeName(inputPlanNodeId, colIdx));
-        }
-
-        auto rowType = std::make_shared<DataTypes>(std::move(veloxTypeList));
+        auto rowType = std::make_shared<DataTypes>(std::move(omniTypeList));
         std::vector<TypedExprPtr> expressions;
         if (!ValidateExpression(readRel.filter(), rowType)) {
             return false;
-        }
-        expressions.emplace_back(exprConverter_->ToOmniExpr(readRel.filter(), rowType));
-        // Try to compile the expressions. If there is any unregistered function
-        // or mismatched type, exception will be thrown.
-        ExprVerifier ev;
-        for (const auto &expression : expressions) {
-            if (!ev.VisitExpr(*expression)) {
-                return false;
-            }
         }
     }
 

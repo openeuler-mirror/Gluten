@@ -74,8 +74,11 @@ object OmniBackendSettings extends BackendSettingsApi {
       rootPaths: Seq[String],
       properties: Map[String, String],
       serializableHadoopConf: Option[SerializableConfiguration] = None): ValidationResult = {
-    // todo: add some check
-    ValidationResult.succeeded
+    format match {
+      case ReadFileFormat.ParquetReadFormat => ValidationResult.succeeded
+      case ReadFileFormat.OrcReadFormat => ValidationResult.succeeded
+      case _ => ValidationResult.failed(s"Unsupported file format $format")
+    }
   }
 
   override def needOutputSchemaForPlan(): Boolean = true
@@ -85,8 +88,8 @@ object OmniBackendSettings extends BackendSettingsApi {
     fileFormat.getClass.getSimpleName match {
       case "OrcFileFormat" => ReadFileFormat.OrcReadFormat
       case "ParquetFileFormat" => ReadFileFormat.ParquetReadFormat
-      case "DwrfFileFormat" => ReadFileFormat.DwrfReadFormat
-      case "CSVFileFormat" => ReadFileFormat.TextReadFormat
+      case "OmniOrcFileFormat" => ReadFileFormat.OrcReadFormat
+      case "OmniParquetFileFormat" => ReadFileFormat.ParquetReadFormat
       case _ => ReadFileFormat.UnknownFormat
     }
   }
@@ -111,6 +114,10 @@ object OmniBackendSettings extends BackendSettingsApi {
   override def supportWindowExec(windowFunctions: Seq[NamedExpression]): Boolean = true
 
   override def transformCheckOverflow: Boolean = false
+
+  override def excludeScanExecFromCollapsedStage(): Boolean = {
+    GlutenConfig.get.omniExcludeScanExecFromCollapsedStage
+  }
 }
 
 class OmniValidatorApi extends ValidatorApi {

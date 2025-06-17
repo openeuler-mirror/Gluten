@@ -559,6 +559,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def columnarHashAggSpillRowThreshold: Int = conf.getConf(COLUMNAR_HASH_AGG_SPILL_ROW_THRESHOLD)
 
   def columnarSortSpillRowThreshold: Int = conf.getConf(COLUMNAR_SORT_SPILL_ROW_THRESHOLD)
+
+  def omniExcludeScanExecFromCollapsedStage: Boolean = conf.getConf(COLUMNAR_OMNI_EXCLUDE_SCAN)
 }
 
 object GlutenConfig {
@@ -788,7 +790,6 @@ object GlutenConfig {
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
-    nativeConfMap.putAll(conf.filter(e => e._1.contains("omni")).asJava)
     // return
     nativeConfMap
   }
@@ -2544,4 +2545,16 @@ object GlutenConfig {
     .doc("columnar sort spill threshold")
     .intConf
     .createWithDefault(Integer.MAX_VALUE)
+
+  val COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER = buildConf("spark.gluten.sql.columnar.backend.omni.vec.predicate.enabled")
+    .internal()
+    .doc("enable vectorized predicate filtering")
+    .booleanConf
+    .createWithDefault(false)
+
+  val COLUMNAR_OMNI_EXCLUDE_SCAN = buildConf("spark.gluten.sql.columnar.backend.omni.excludeScanExecFromCollapsedStage")
+    .internal()
+    .doc("exclude scan exec from collapsed stage")
+    .booleanConf
+    .createWithDefault(true)
 }

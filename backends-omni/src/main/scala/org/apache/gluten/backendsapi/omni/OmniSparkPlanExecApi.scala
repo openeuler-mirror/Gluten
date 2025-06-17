@@ -34,8 +34,8 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
-import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, GenerateExec, OmniColumnarShuffleExchangeExec, SparkPlan}
-import org.apache.spark.sql.execution.datasources.FileFormat
+import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, FileSourceScanExec, GenerateExec, OmniColumnarShuffleExchangeExec, SparkPlan}
+import org.apache.spark.sql.execution.datasources.{FileFormat, HadoopFsRelation}
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
 import org.apache.spark.sql.execution.metric.SQLMetric
@@ -44,6 +44,11 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 
 import nova.hetu.omniruntime.vector.VecBatch
 import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
+import org.apache.gluten.datasources.orc.OmniOrcFileFormat
+import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 
 class OmniSparkPlanExecApi extends SparkPlanExecApi {
 
@@ -438,5 +443,37 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
         }
       case other => other
     }
+  }
+
+  override def genFileSourceScanExecTransformer(
+    scanExec: FileSourceScanExec): FileSourceScanExecTransformerBase = {
+    val hadoopFsRelation = scanExec.relation
+    val fileFormat: FileFormat = hadoopFsRelation.fileFormat match {
+        case orcFormat: OrcFileFormat =>
+            new OmniOrcFileFormat()
+        case parquetFormat: ParquetFileFormat =>
+            new OmniParquetFileFormat()
+        case _ =>
+            hadoopFsRelation.fileFormat
+      }
+    val newRelation = HadoopFsRelation(
+      hadoopFsRelation.location,
+      hadoopFsRelation.partitionSchema,
+      hadoopFsRelation.dataSchema,
+      hadoopFsRelation.bucketSpec,
+      fileFormat = fileFormat,
+      hadoopFsRelation.options)(SparkSession.active)
+
+    FileSourceScanExecTransformer(
+      newRelation,
+      scanExec.output,
+      scanExec.requiredSchema,
+      scanExec.partitionFilters,
+      scanExec.optionalBucketSet,
+      scanExec.optionalNumCoalescedBuckets,
+      scanExec.dataFilters,
+      scanExec.tableIdentifier,
+      scanExec.disableBucketedScan
+    )
   }
 }

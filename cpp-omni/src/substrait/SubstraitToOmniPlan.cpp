@@ -617,7 +617,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel 
     if (streamIdx >= 0) {
         return ConstructValueStreamNode(readRel, streamIdx);
     }
-    OMNI_THROW("error", "Scan not supported for Rel.");
+    return nullptr;
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
