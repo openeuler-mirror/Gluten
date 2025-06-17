@@ -26,6 +26,17 @@ class OmniFilterMetricsUpdater(
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("numOutputRows") += operatorMetrics.getOutputRows
+      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
+      metrics("outputBytes") += operatorMetrics.getOutputBytes
+      metrics("cpuCount") += operatorMetrics.getCpuCount
+      extraMetrics.foreach {
+        case (name, metric) =>
+          name match {
+            case "increment_metric" => metric += operatorMetrics.getOutputRows
+            case _ => // do nothing
+          }
+      }
     }
   }
 }

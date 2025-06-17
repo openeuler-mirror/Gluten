@@ -70,12 +70,17 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       metrics: Map[String, SQLMetric]): MetricsUpdater = new MockMetricsUpdater()
 
   override def genFilterTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty[String, SQLMetric]
+    Map(
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes")
+    )
 
   override def genFilterTransformerMetricsUpdater(
       metrics: Map[String, SQLMetric],
-      extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater = new MockMetricsUpdater(
-    metrics)
+      extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater =
+    new OmniFilterMetricsUpdater(metrics, extraMetrics)
+
   override def genProjectTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),

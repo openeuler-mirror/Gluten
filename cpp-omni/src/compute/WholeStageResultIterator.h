@@ -52,13 +52,9 @@ public:
         return omniPlan_.get();
     }
 
-    omniruntime::OmniMetrics* getMetrics(int64_t exportNanos)
+    omniruntime::OmniMetrics* getMetrics()
     {
-        LogsDebug("get Metrics and exportNanos = %d", exportNanos);
         CollectMetrics();
-        if (metrics_) {
-            metrics_->omniToArrow = exportNanos;
-        }
         return metrics_.get();
     }
 

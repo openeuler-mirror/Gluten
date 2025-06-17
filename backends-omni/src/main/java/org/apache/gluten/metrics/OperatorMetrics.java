@@ -176,6 +176,18 @@ public class OperatorMetrics implements IOperatorMetrics {
      * @param physicalWrittenBytes number of physical written bytes
      * @param writeIOTime write io time
      * @param numWrittenFiles number of written files
+     * @param getOutputTime getOutputTime
+     * @param buildInputRows buildInputRows
+     * @param buildAddInputTime buildAddInputTime
+     * @param buildGetOutputTime buildGetOutputTime
+     * @param lookupInputRows lookupInputRows
+     * @param buildNumInputVecBatches buildNumInputVecBatches
+     * @param lookupNumInputVecBatches lookupNumInputVecBatches
+     * @param lookupNumOutputVecBatches lookupNumOutputVecBatches
+     * @param addInputTime addInputTime
+     * @param lookupAddInputTime lookupAddInputTime
+     * @param lookupGetOutputTime lookupGetOutputTime
+     * @param lookupOutputRows lookupOutputRows
      */
     public OperatorMetrics(
         long inputRows,
@@ -662,59 +674,5 @@ public class OperatorMetrics implements IOperatorMetrics {
 
     public void setLookupGetOutputTime(long lookupGetOutputTime) {
         this.lookupGetOutputTime = lookupGetOutputTime;
-    }
-
-    @Override
-    public String toString() {
-        return "OperatorMetrics{" +
-                "inputRows=" + inputRows +
-                ", numInputVecBatches=" + numInputVecBatches +
-                ", inputBytes=" + inputBytes +
-                ", addInputTime=" + addInputTime +
-                ", rawInputRows=" + rawInputRows +
-                ", rawInputBytes=" + rawInputBytes +
-                ", outputRows=" + outputRows +
-                ", numOutputVecBatches=" + numOutputVecBatches +
-                ", outputBytes=" + outputBytes +
-                ", getOutputTime=" + getOutputTime +
-                ", cpuCount=" + cpuCount +
-                ", wallNanos=" + wallNanos +
-                ", scanTime=" + scanTime +
-                ", peakMemoryBytes=" + peakMemoryBytes +
-                ", numMemoryAllocations=" + numMemoryAllocations +
-                ", spilledInputBytes=" + spilledInputBytes +
-                ", spilledBytes=" + spilledBytes +
-                ", spilledRows=" + spilledRows +
-                ", spilledPartitions=" + spilledPartitions +
-                ", spilledFiles=" + spilledFiles +
-                ", numDynamicFiltersProduced=" + numDynamicFiltersProduced +
-                ", numDynamicFiltersAccepted=" + numDynamicFiltersAccepted +
-                ", numReplacedWithDynamicFilterRows=" + numReplacedWithDynamicFilterRows +
-                ", flushRowCount=" + flushRowCount +
-                ", loadedToValueHook=" + loadedToValueHook +
-                ", skippedSplits=" + skippedSplits +
-                ", processedSplits=" + processedSplits +
-                ", skippedStrides=" + skippedStrides +
-                ", processedStrides=" + processedStrides +
-                ", remainingFilterTime=" + remainingFilterTime +
-                ", ioWaitTime=" + ioWaitTime +
-                ", storageReadBytes=" + storageReadBytes +
-                ", localReadBytes=" + localReadBytes +
-                ", ramReadBytes=" + ramReadBytes +
-                ", preloadSplits=" + preloadSplits +
-                ", physicalWrittenBytes=" + physicalWrittenBytes +
-                ", writeIOTime=" + writeIOTime +
-                ", numWrittenFiles=" + numWrittenFiles +
-                ", buildInputRows=" + buildInputRows +
-                ", buildNumInputVecBatches=" + buildNumInputVecBatches +
-                ", buildAddInputTime=" + buildAddInputTime +
-                ", buildGetOutputTime=" + buildGetOutputTime +
-                ", lookupInputRows=" + lookupInputRows +
-                ", lookupNumInputVecBatches=" + lookupNumInputVecBatches +
-                ", lookupOutputRows=" + lookupOutputRows +
-                ", lookupNumOutputVecBatches=" + lookupNumOutputVecBatches +
-                ", lookupAddInputTime=" + lookupAddInputTime +
-                ", lookupGetOutputTime=" + lookupGetOutputTime +
-                '}';
     }
 }

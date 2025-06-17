@@ -426,9 +426,8 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniW
     JNI_FUNC_START
         const auto rawIter = reinterpret_cast<omniruntime::ResultIterator *>(iterHandle);
         auto  baseColumnIter = rawIter->GetInputIter();
-        int64_t exportNanos = rawIter->GetExportNanos();
         const auto iter = reinterpret_cast<omniruntime::WholeStageResultIterator *>(baseColumnIter);
-        auto metrics = iter->getMetrics(exportNanos);
+        auto metrics = iter->getMetrics();
         unsigned int numMetrics = 0;
         if (metrics) {
             numMetrics = metrics->numMetrics;

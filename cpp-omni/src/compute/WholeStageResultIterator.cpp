@@ -186,8 +186,8 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kSpilledBytes)[metricIndex] = second->spilledBytes;
         metrics_->get(omniruntime::OmniMetrics::kSpilledRows)[metricIndex] = second->spilledRows;
         metrics_->get(omniruntime::OmniMetrics::kSpilledPartitions)[metricIndex] = second->spilledPartitions;
+        metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = second->cpuWallTiming.count;
         metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
-
         metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] = second->addInputTime.cpuNanos;
         metrics_->get(omniruntime::OmniMetrics::kGetOutputTime)[metricIndex] = second->getOutputTime.cpuNanos;
 
