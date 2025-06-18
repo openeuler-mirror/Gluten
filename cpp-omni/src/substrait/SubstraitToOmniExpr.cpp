@@ -116,6 +116,10 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
         }
         return new BinaryExpr(op, args[0], args[1], std::move(outputType));
     } else if (type == FUNCTION_OMNI_EXPR_TYPE) {
+        if (funcName == "MakeDecimal" && args.size() == 2) {
+            // only use first arg in func MakeDecimal
+            return new FuncExpr(funcName, {args[0]}, std::move(outputType));
+        }
         if (funcName == "RLike" && args.size() == RLIKE_INPUT) {
             auto secondArg = args[1];
             if (secondArg->GetType() != ExprType::LITERAL_E) {
