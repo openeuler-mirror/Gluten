@@ -43,8 +43,3 @@ case class BoundReferenceTransformer(substraitExprName: String, original: BoundR
   }
 }
 
-case class FromUnixTimeTransformer(
-    substraitExprName: String,
-    children: Seq[ExpressionTransformer],
-    original: FromUnixTime)
-  extends ExpressionTransformer {}

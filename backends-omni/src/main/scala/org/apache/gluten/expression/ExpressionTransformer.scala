@@ -78,6 +78,44 @@ case class OmniFromUnixTimeTransformer(
   }
 }
 
+case class OmniUnixTimestampTransformer(
+                                        substraitExprName: String,
+                                        children: Seq[ExpressionTransformer],
+                                        original: UnixTimestamp)
+  extends ExpressionTransformer {
+
+  private val timeFormatSet: Set[String] = Set("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd")
+  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Shanghai")
+
+  private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
+    if (GlutenConfig.get.timeParserPolicy == "LEGACY") {
+      throw new GlutenNotSupportException(s"Unsupported Time Parser Policy: LEGACY")
+    }
+    if (!timeZoneSet.contains(timeZone)) {
+      throw new GlutenNotSupportException(s"Unsupported Time Zone: $timeZone")
+    }
+    if (!timeFormatSet.contains(timeFormat)) {
+      throw new GlutenNotSupportException(s"Unsupported Time Format: $timeFormat")
+    }
+  }
+
+  override def doTransform(args: java.lang.Object): ExpressionNode = {
+    val timeZone = original.timeZoneId.getOrElse("")
+    unsupportedUnixTimeFunction(original.format.toString, timeZone)
+    val functionMap = args.asInstanceOf[java.util.HashMap[String, java.lang.Long]]
+    val funcName: String =
+      ConverterUtils.makeFuncName(substraitExprName, original.children.map(_.dataType))
+    val functionId = ExpressionBuilder.newScalarFunction(functionMap, funcName)
+    val policy = GlutenConfig.get.timeParserPolicy
+    var newChildren =
+      children :+ LiteralTransformer(Literal(UTF8String.fromString(timeZone), StringType))
+    newChildren = newChildren :+ LiteralTransformer(Literal(UTF8String.fromString(policy), StringType))
+    val childNodes = newChildren.map(_.doTransform(args)).asJava
+    val typeNode = ConverterUtils.getTypeNode(dataType, nullable)
+    ExpressionBuilder.makeScalarFunction(functionId, childNodes, typeNode)
+  }
+}
+
 case class OmniHashExpressionTransformer(
     substraitExprName: String,
     children: Seq[ExpressionTransformer],

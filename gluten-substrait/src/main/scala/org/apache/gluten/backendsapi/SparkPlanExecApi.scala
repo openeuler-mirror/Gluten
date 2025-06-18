@@ -149,7 +149,14 @@ trait SparkPlanExecApi {
       substraitExprName: String,
       children: Seq[ExpressionTransformer],
       original: FromUnixTime): ExpressionTransformer =
-    FromUnixTimeTransformer(substraitExprName, children, original)
+    GenericExpressionTransformer(substraitExprName, children, original)
+
+  def genUnixTimestampTransformer(
+      substraitExprName: String,
+      children: Seq[ExpressionTransformer],
+      original: UnixTimestamp): ExpressionTransformer =
+    GenericExpressionTransformer(substraitExprName, children, ToUnixTimestamp(original.timeExp,
+      original.format, original.timeZoneId, original.failOnError))
 
   /** Generate an expression transformer to transform GetMapValue to Substrait. */
   def genGetMapValueTransformer(

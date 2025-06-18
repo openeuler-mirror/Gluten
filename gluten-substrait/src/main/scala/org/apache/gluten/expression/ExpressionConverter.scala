@@ -234,6 +234,15 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ),
           f
         )
+      case f: UnixTimestamp =>
+        BackendsApiManager.getSparkPlanExecApiInstance.genUnixTimestampTransformer(
+          substraitExprName,
+          Seq(
+            replaceWithExpressionTransformer0(f.timeExp, attributeSeq, expressionsMap),
+            replaceWithExpressionTransformer0(f.format, attributeSeq, expressionsMap)
+          ),
+          f
+        )
       case a: AttributeReference =>
         if (attributeSeq == null) {
           throw new UnsupportedOperationException(s"attributeSeq should not be null.")
@@ -276,15 +285,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
             replaceWithExpressionTransformer0(t.format, attributeSeq, expressionsMap)
           ),
           t
-        )
-      case u: UnixTimestamp =>
-        GenericExpressionTransformer(
-          substraitExprName,
-          Seq(
-            replaceWithExpressionTransformer0(u.timeExp, attributeSeq, expressionsMap),
-            replaceWithExpressionTransformer0(u.format, attributeSeq, expressionsMap)
-          ),
-          ToUnixTimestamp(u.timeExp, u.format, u.timeZoneId, u.failOnError)
         )
       case t: TruncTimestamp =>
         BackendsApiManager.getSparkPlanExecApiInstance.genTruncTimestampTransformer(
