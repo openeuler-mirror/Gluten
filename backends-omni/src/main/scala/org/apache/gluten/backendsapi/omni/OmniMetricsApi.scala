@@ -181,10 +181,19 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
   }
 
   override def genWindowTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty[String, SQLMetric]
+    Map(
+      "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
+      "inputVectors" -> SQLMetrics.createMetric(sparkContext, "number of input vectors"),
+      "inputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of input bytes"),
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
+      "cpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of window"),
+      "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count")
+    )
 
   override def genWindowTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
-    new MockMetricsUpdater()
+    new OmniWindowMetricsUpdater(metrics)
 
   override def genColumnarToRowMetrics(sparkContext: SparkContext): Map[String, SQLMetric] = {
     Map(
@@ -204,10 +213,16 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
 
 
   override def genLimitTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty[String, SQLMetric]
+    Map(
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
+      "cpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of limit"),
+      "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count")
+    )
 
   override def genLimitTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
-    new MockMetricsUpdater()
+    new OmniLimitMetricsUpdater(metrics)
 
   override def genSortTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] = {
     Map(

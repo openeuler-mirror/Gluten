@@ -23,6 +23,14 @@ class OmniWindowMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("numInputRows") += operatorMetrics.getInputRows
+      metrics("inputVectors") += operatorMetrics.getNumInputVecBatches
+      metrics("inputBytes") += operatorMetrics.getInputBytes
+      metrics("numOutputRows") += operatorMetrics.getOutputRows
+      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
+      metrics("outputBytes") += operatorMetrics.getOutputBytes
+      metrics("cpuCount") += operatorMetrics.getCpuCount
+      metrics("cpuNanos") += operatorMetrics.getCpuNanos
     }
   }
 }
