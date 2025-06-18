@@ -564,6 +564,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarEnableDelayCartesianProduct: Boolean = conf.getConf(COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT)
 
+
+  def columnarPreferShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_OMNI_PREFER_SHUFFLED_HASH_JOIN)
+
 }
 
 object GlutenConfig {
@@ -2566,4 +2569,12 @@ object GlutenConfig {
     .doc("enable or disable delay cartesian product")
     .booleanConf
     .createWithDefault(true)
+
+  val COLUMNAR_OMNI_PREFER_SHUFFLED_HASH_JOIN = buildConf("spark.gluten.sql.columnar.backend.omni.preferShuffledHashJoin")
+    .internal()
+    .doc("Pick columnar shuffle hash join if one side join count > = 0 to build local hash map, " +
+      "and is bigger than the other side join count, and `spark.sql.join.columnar.preferShuffledHashJoin`" +
+      "is true.")
+    .booleanConf
+    .createWithDefault(false)
 }

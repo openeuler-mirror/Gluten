@@ -29,7 +29,7 @@ import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.RewriteAQEShuffleRead
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate}
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, ShuffleJoinStrategy}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, RewriteAQEShuffleRead}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
 
@@ -48,6 +48,7 @@ object OmniRuleApi {
   private def injectSpark(injector: SparkInjector): Unit = {
     // Inject the regular Spark rules directly.
     injector.injectQueryStagePrepRule(FallbackBroadcastHashJoinPrepQueryStage.apply)
+    injector.injectPlannerStrategy(_ => ShuffleJoinStrategy)
 //    injector.injectOptimizerRule(CollectRewriteRule.apply)
 //    injector.injectOptimizerRule(HLLRewriteRule.apply)
 //    injector.injectOptimizerRule(CollapseGetJsonObjectExpressionRule.apply)
