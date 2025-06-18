@@ -84,7 +84,7 @@ case class OmniHashAggregateExecPullOutBaseHelper(
             }
         case _ =>
             mode match {
-                case Partial | PartialMerge | Final => true
+                case Partial | PartialMerge | Final | Complete => true
                 case _ => false
             }
         }
