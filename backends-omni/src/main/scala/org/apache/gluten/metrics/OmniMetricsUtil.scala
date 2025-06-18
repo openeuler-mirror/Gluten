@@ -102,7 +102,7 @@ object OmniMetricsUtil extends Logging {
     val writeIOTime = operatorMetrics.get(0).getWriteIOTime
 
     var cpuCount: Long = 0
-    var wallNanos: Long = 0
+    var cpuNanos: Long = 0
     var peakMemoryBytes: Long = 0
     var numMemoryAllocations: Long = 0
     var spilledInputBytes: Long = 0
@@ -142,7 +142,7 @@ object OmniMetricsUtil extends Logging {
     while (metricsIterator.hasNext) {
       val metrics = metricsIterator.next()
       cpuCount += metrics.getCpuCount
-      wallNanos += metrics.getWallNanos
+      cpuNanos += metrics.getCpuNanos
       peakMemoryBytes = peakMemoryBytes.max(metrics.getPeakMemoryBytes)
       numMemoryAllocations += metrics.getNumMemoryAllocations
       spilledInputBytes += metrics.getSpilledInputBytes
@@ -179,7 +179,7 @@ object OmniMetricsUtil extends Logging {
       outputVectors,
       outputBytes,
       cpuCount,
-      wallNanos,
+      cpuNanos,
       peakMemoryBytes,
       numMemoryAllocations,
       spilledInputBytes,

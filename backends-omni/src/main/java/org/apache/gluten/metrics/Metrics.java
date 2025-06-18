@@ -46,7 +46,7 @@ public class Metrics implements IMetrics {
     private long[] cpuCount;
 
     /** time of operator */
-    private long[] wallNanos;
+    private long[] cpuNanos;
 
     /** scan time */
     private long[] scanTime;
@@ -172,7 +172,7 @@ public class Metrics implements IMetrics {
      * @param numOutputVecBatches number of output vectors
      * @param outputBytes number of output bytes
      * @param cpuCount cpu wall time cout
-     * @param wallNanos time of operator
+     * @param cpuNanos time of operator
      * @param omniToArrow omni to arrow
      * @param peakMemoryBytes peak memory bytes
      * @param numMemoryAllocations number of memory allocations
@@ -211,7 +211,7 @@ public class Metrics implements IMetrics {
         long[] numOutputVecBatches,
         long[] outputBytes,
         long[] cpuCount,
-        long[] wallNanos,
+        long[] cpuNanos,
         long omniToArrow,
         long[] peakMemoryBytes,
         long[] numMemoryAllocations,
@@ -261,7 +261,7 @@ public class Metrics implements IMetrics {
         this.numOutputVecBatches = numOutputVecBatches;
         this.outputBytes = outputBytes;
         this.cpuCount = cpuCount;
-        this.wallNanos = wallNanos;
+        this.cpuNanos = cpuNanos;
         this.scanTime = scanTime;
         this.singleMetric.setOmniToArrow(omniToArrow);
         this.peakMemoryBytes = peakMemoryBytes;
@@ -334,8 +334,8 @@ public class Metrics implements IMetrics {
         return cpuCount;
     }
 
-    public long[] getWallNanos() {
-        return wallNanos;
+    public long[] getCpuNanos() {
+        return cpuNanos;
     }
 
     public long[] getScanTime() {
@@ -467,7 +467,7 @@ public class Metrics implements IMetrics {
             numOutputVecBatches[index],
             outputBytes[index],
             cpuCount[index],
-            wallNanos[index],
+            cpuNanos[index],
             peakMemoryBytes[index],
             numMemoryAllocations[index],
             spilledInputBytes[index],

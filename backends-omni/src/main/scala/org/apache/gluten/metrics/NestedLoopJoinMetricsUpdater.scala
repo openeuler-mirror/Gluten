@@ -11,7 +11,7 @@ class NestedLoopJoinMetricsUpdater(val metrics: Map[String, SQLMetric]) extends 
       metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
       metrics("outputBytes") += operatorMetrics.getOutputBytes
       metrics("cpuCount") += operatorMetrics.getCpuCount
-      metrics("wallNanos") += operatorMetrics.getWallNanos
+      metrics("cpuNanos") += operatorMetrics.getCpuNanos
       metrics("peakMemoryBytes") += operatorMetrics.getPeakMemoryBytes
       metrics("numMemoryAllocations") += operatorMetrics.getNumMemoryAllocations
     }

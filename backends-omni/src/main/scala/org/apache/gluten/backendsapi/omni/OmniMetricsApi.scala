@@ -129,10 +129,28 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       extraMetrics: Seq[(String, SQLMetric)] = Seq.empty): MetricsUpdater = new OmniProjectMetricsUpdater(metrics, extraMetrics)
 
   override def genHashAggregateTransformerMetrics(
-      sparkContext: SparkContext): Map[String, SQLMetric] = Map.empty[String, SQLMetric]
+      sparkContext: SparkContext): Map[String, SQLMetric] = Map(
+    "aggOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+    "aggOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+    "aggOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
+    "aggCpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu time count"),
+    "aggCpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of aggregation"),
+    "rowConstructionCpuCount" -> SQLMetrics.createMetric(
+      sparkContext,
+      "rowConstruction cpu time count"),
+    "rowConstructionCpuNanos" -> SQLMetrics.createTimingMetric(
+      sparkContext,
+      "time of rowConstruction"),
+    "extractionCpuCount" -> SQLMetrics.createMetric(
+      sparkContext,
+      "extraction cpu time count"),
+    "extractionCpuNanos" -> SQLMetrics.createTimingMetric(
+      sparkContext,
+      "time of extraction")
+  )
 
   override def genHashAggregateTransformerMetricsUpdater(
-      metrics: Map[String, SQLMetric]): MetricsUpdater = new MockMetricsUpdater()
+      metrics: Map[String, SQLMetric]): MetricsUpdater = new OmniHashAggregateMetricsUpdaterImpl(metrics)
 
   override def genExpandTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
     Map.empty[String, SQLMetric]
@@ -150,9 +168,9 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "dataSize" -> SQLMetrics.createSizeMetric(sparkContext, "data size"),
       "bytesSpilled" -> SQLMetrics.createSizeMetric(sparkContext, "shuffle bytes spilled"),
-      "splitTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "totaltime_split"),
-      "spillTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "shuffle spill time"),
-      "compressTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "totaltime_compress"),
+      "splitTime" -> SQLMetrics.createTimingMetric(sparkContext, "totaltime_split"),
+      "spillTime" -> SQLMetrics.createTimingMetric(sparkContext, "shuffle spill time"),
+      "compressTime" -> SQLMetrics.createTimingMetric(sparkContext, "totaltime_compress"),
       "avgReadBatchNumRows" -> SQLMetrics
         .createAverageMetric(sparkContext, "avg read batch num rows"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
@@ -196,7 +214,6 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "addInputTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni addInput"),
       "numInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of input vecBatches"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
-      "omniCodegenTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni codegen"),
       "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni getOutput"),
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "outputDataSize" -> SQLMetrics.createSizeMetric(sparkContext, "output data size"),
@@ -210,6 +227,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
   override def genSortMergeJoinTransformerMetrics(
       sparkContext: SparkContext): Map[String, SQLMetric] = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+    "numOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+    "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
     "streamedAddInputTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni streamed addInput"),
     "streamedCodegenTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni streamed codegen"),
     "bufferedAddInputTime" -> SQLMetrics.createTimingMetric(sparkContext, "time in omni buffered addInput"),
@@ -218,7 +237,11 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     "numOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
     "numMergedVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of merged vecBatches"),
     "numStreamVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of streamed vecBatches"),
-    "numBufferVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of buffered vecBatches")
+    "numBufferVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of buffered vecBatches"),
+    "streamPreProjectionCpuCount" -> SQLMetrics.createMetric(sparkContext, "number of streamed cpu count"),
+    "streamPreProjectionWallNanos" -> SQLMetrics.createMetric(sparkContext, "time in streamed pre projection"),
+    "bufferPreProjectionCpuCount" -> SQLMetrics.createMetric(sparkContext, "number of buffer pre projection cpu count"),
+    "bufferPreProjectionWallNanos" -> SQLMetrics.createMetric(sparkContext, "time in buffer pre projection")
   )
 
   override def genSortMergeJoinTransformerMetricsUpdater(
@@ -245,15 +268,15 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "hashBuildInputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash build input rows"),
       "hashBuildOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash build output rows"),
       "hashBuildNumInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash build input vector batches"),
-      "hashBuildAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash build add input"),
-      "hashBuildGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash build get output"),
+      "hashBuildAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash build input"),
+      "hashBuildGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash build output"),
 
       "hashProbeInputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash probe input rows"),
       "hashProbeOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of hash probe output rows"),
       "hashProbeNumInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash probe input vector batches"),
       "hashProbeNumOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of hash probe output vector batches"),
-      "hashProbeAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash probe add input"),
-      "hashProbeGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash probe get output"),
+      "hashProbeAddInputTime" -> SQLMetrics.createSizeMetric(sparkContext, "time of hash probe input"),
+      "hashProbeGetOutputTime" -> SQLMetrics.createMetric(sparkContext, "time of hash probe output"),
 
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
@@ -269,7 +292,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
         "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
         "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
         "outputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
-        "wallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of NestedLoopJoin"),
+        "cpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of NestedLoopJoin"),
         "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count"),
         "peakMemoryBytes" -> SQLMetrics.createSizeMetric(sparkContext, "peak memory bytes"),
         "numMemoryAllocations" -> SQLMetrics.createMetric(sparkContext, "number of memory allocations")
@@ -314,7 +337,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
 
     Map(
       "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count"),
-      "wallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of input iterator")
+      "cpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of input iterator")
     ) ++ outputMetrics
   }
 

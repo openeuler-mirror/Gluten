@@ -28,9 +28,9 @@ abstract class JoinMetricsUpdaterBase(val metrics: Map[String, SQLMetric])
     joinParams: JoinParams): Unit = {
     assert(joinParams.postProjectionNeeded)
     val postProjectMetrics = joinMetrics.remove(0);
-    numOutputRows += postProjectMetrics.getOutputRows()
-    numOutputVectors += postProjectMetrics.getNumOutputVecBatches()
-    numOutputBytes += postProjectMetrics.getOutputBytes()
+    numOutputRows += postProjectMetrics.getOutputRows
+    numOutputVectors += postProjectMetrics.getNumOutputVecBatches
+    numOutputBytes += postProjectMetrics.getOutputBytes
 
     updateJoinMetricsInternal(joinMetrics, joinParams)
   }
@@ -79,53 +79,34 @@ class HashJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     if (TaskResources.inSparkTask()) {
       SparkMetricsUtil.incMemoryBytesSpilled(
         TaskResources.getLocalTaskContext().taskMetrics(), 
-        hashProbeMetrics.getSpilledInputBytes())
+        hashProbeMetrics.getSpilledInputBytes)
       SparkMetricsUtil.incDiskBytesSpilled(
         TaskResources.getLocalTaskContext().taskMetrics(), 
-        hashProbeMetrics.getSpilledBytes())
+        hashProbeMetrics.getSpilledBytes)
       SparkMetricsUtil.incMemoryBytesSpilled(
         TaskResources.getLocalTaskContext().taskMetrics(), 
-        hashBuildMetrics.getSpilledInputBytes())
+        hashBuildMetrics.getSpilledInputBytes)
       SparkMetricsUtil.incDiskBytesSpilled(
         TaskResources.getLocalTaskContext().taskMetrics(), 
-        hashBuildMetrics.getSpilledBytes())
+        hashBuildMetrics.getSpilledBytes)
     }
   }
 }
 
 class SortMergeJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
   extends JoinMetricsUpdaterBase(metrics) {
-  val cpuCount: SQLMetric = metrics("cpuCount")
-  val wallNanos: SQLMetric = metrics("wallNanos")
-  val peakMemoryBytes: SQLMetric = metrics("peakMemoryBytes")
-  val numMemoryAllocations: SQLMetric = metrics("numMemoryAllocations")
-
-  val streamPreProjectionCpuCount: SQLMetric = metrics("streamPreProjectionCpuCount")
-  val streamPreProjectionWallNanos: SQLMetric = metrics("streamPreProjectionWallNanos")
-  val bufferPreProjectionCpuCount: SQLMetric = metrics("bufferPreProjectionCpuCount")
-  val bufferPreProjectionWallNanos: SQLMetric = metrics("bufferPreProjectionWallNanos")
 
   override protected def updateJoinMetricsInternal(
-    joinMetrics: util.ArrayList[OperatorMetrics], 
+    joinMetrics: util.ArrayList[OperatorMetrics],
     joinParams: JoinParams): Unit = {
-    var idx = 0
-    val smjMetrics = joinMetrics.get(0)
-    cpuCount += smjMetrics.getCpuCount()
-    wallNanos += smjMetrics.getWallNanos()
-    peakMemoryBytes += smjMetrics.getPeakMemoryBytes()
-    numMemoryAllocations += smjMetrics.getNumMemoryAllocations()
-    idx += 1
+    val numOutputRows: SQLMetric = metrics("numOutputRows")
+    val numOutputVectors: SQLMetric = metrics("numOutputVectors")
+    val numOutputBytes: SQLMetric = metrics("numOutputBytes")
 
-    if (joinParams.buildPreProjectionNeeded) {
-      bufferPreProjectionCpuCount += joinMetrics.get(idx).getCpuCount()
-      bufferPreProjectionWallNanos += joinMetrics.get(idx).getWallNanos()
-      idx += 1
-    }
-
-    if (joinParams.streamPreProjectionNeeded) {
-      streamPreProjectionCpuCount += joinMetrics.get(idx).getCpuCount()
-      streamPreProjectionWallNanos += joinMetrics.get(idx).getWallNanos()
-      idx += 1
-    }
+    val idx = 0;
+    val operatorMetrics = joinMetrics.get(idx);
+    numOutputRows += operatorMetrics.getOutputRows
+    numOutputVectors += operatorMetrics.getNumOutputVecBatches
+    numOutputBytes += operatorMetrics.getOutputBytes
   }
 }
