@@ -561,6 +561,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def columnarSortSpillRowThreshold: Int = conf.getConf(COLUMNAR_SORT_SPILL_ROW_THRESHOLD)
 
   def omniExcludeScanExecFromCollapsedStage: Boolean = conf.getConf(COLUMNAR_OMNI_EXCLUDE_SCAN)
+
+  def omniColumnarEnableDelayCartesianProduct: Boolean = conf.getConf(COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT)
+
 }
 
 object GlutenConfig {
@@ -2555,6 +2558,12 @@ object GlutenConfig {
   val COLUMNAR_OMNI_EXCLUDE_SCAN = buildConf("spark.gluten.sql.columnar.backend.omni.excludeScanExecFromCollapsedStage")
     .internal()
     .doc("exclude scan exec from collapsed stage")
+    .booleanConf
+    .createWithDefault(true)
+
+  val COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT = buildConf("spark.gluten.sql.columnar.backend.omni.enableDelayCartesianProduct.enabled")
+    .internal()
+    .doc("enable or disable delay cartesian product")
     .booleanConf
     .createWithDefault(true)
 }
