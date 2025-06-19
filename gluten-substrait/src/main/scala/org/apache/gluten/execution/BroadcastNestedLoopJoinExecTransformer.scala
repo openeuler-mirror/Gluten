@@ -53,7 +53,7 @@ abstract class BroadcastNestedLoopJoinExecTransformer(
   override def leftKeys: Seq[Expression] = Nil
   override def rightKeys: Seq[Expression] = Nil
 
-  private lazy val substraitJoinType: CrossRel.JoinType =
+  protected lazy val substraitJoinType: CrossRel.JoinType =
     SubstraitUtil.toCrossRelSubstrait(joinType)
 
   // Unique ID for builded table
