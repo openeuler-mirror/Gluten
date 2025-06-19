@@ -796,6 +796,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
+    nativeConfMap.putAll(conf.filter(e => e._1.contains("omni")).asJava)
     // return
     nativeConfMap
   }
