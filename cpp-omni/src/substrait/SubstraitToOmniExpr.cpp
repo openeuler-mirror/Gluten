@@ -120,7 +120,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             // only use first arg in func MakeDecimal
             return new FuncExpr(funcName, {args[0]}, std::move(outputType));
         }
-        if (funcName == "RLike" && args.size() == RLIKE_INPUT) {
+        if ((funcName == "RLike" || funcName == "LIKE") && args.size() == RLIKE_INPUT) {
             auto secondArg = args[1];
             if (secondArg->GetType() != ExprType::LITERAL_E) {
                 Expr::DeleteExprs(args);

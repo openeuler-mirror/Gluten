@@ -335,6 +335,7 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"abs", {FUNCTION_OMNI_EXPR_TYPE, "abs"}},
     {"round", {FUNCTION_OMNI_EXPR_TYPE, "round"}},
     {"rlike", {FUNCTION_OMNI_EXPR_TYPE, "RLike"}},
+    {"like", {FUNCTION_OMNI_EXPR_TYPE, "LIKE"}},
     {"md5", {FUNCTION_OMNI_EXPR_TYPE, "Md5"}},
     {"concat", {FUNCTION_OMNI_EXPR_TYPE, "concat"}},
     {"xxhash64", {FUNCTION_OMNI_EXPR_TYPE, "xxhash64"}},
