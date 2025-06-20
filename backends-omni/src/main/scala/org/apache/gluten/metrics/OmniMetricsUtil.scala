@@ -90,14 +90,18 @@ object OmniMetricsUtil extends Logging {
     val inputRows = operatorMetrics.get(operatorMetrics.size() - 1).getInputRows
     val inputVectors = operatorMetrics.get(operatorMetrics.size() - 1).getNumInputVecBatches
     val inputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getInputBytes
+    val inputCpuCount = operatorMetrics.get(operatorMetrics.size() - 1).getInputCpuCount
     val rawInputRows = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputRows
     val rawInputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputBytes
-    val addInputTime = operatorMetrics.get(operatorMetrics.size() - 1).getAddInputTime;
+    val addInputTime = operatorMetrics.get(operatorMetrics.size() - 1).getAddInputTime
+
 
     val outputRows = operatorMetrics.get(0).getOutputRows
     val outputVectors = operatorMetrics.get(0).getNumOutputVecBatches
     val outputBytes = operatorMetrics.get(0).getOutputBytes
+    val outputCpuCount = operatorMetrics.get(0).getCpuCount
     val getOutputTime = operatorMetrics.get(0).getGetOutputTime;
+
     val physicalWrittenBytes = operatorMetrics.get(0).getPhysicalWrittenBytes
     val writeIOTime = operatorMetrics.get(0).getWriteIOTime
 
@@ -180,6 +184,8 @@ object OmniMetricsUtil extends Logging {
       outputBytes,
       cpuCount,
       cpuNanos,
+      inputCpuCount,
+      outputCpuCount,
       peakMemoryBytes,
       numMemoryAllocations,
       spilledInputBytes,

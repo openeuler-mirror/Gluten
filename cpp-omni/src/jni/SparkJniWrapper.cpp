@@ -448,6 +448,8 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_metrics_OmniIteratorMetricsJniW
             longArray[omniruntime::OmniMetrics::kRawInputBytes], longArray[omniruntime::OmniMetrics::kOutputRows],
             longArray[omniruntime::OmniMetrics::kNumOutputVecBatches], longArray[omniruntime::OmniMetrics::kOutputBytes],
             longArray[omniruntime::OmniMetrics::kCpuCount], longArray[omniruntime::OmniMetrics::kWallNanos],
+            longArray[omniruntime::OmniMetrics::kAddInputCpuCount],
+            longArray[omniruntime::OmniMetrics::kGetOutputCpuCount],
             metrics ? metrics->omniToArrow : -1, longArray[omniruntime::OmniMetrics::kPeakMemoryBytes],
             longArray[omniruntime::OmniMetrics::kNumMemoryAllocations],
             longArray[omniruntime::OmniMetrics::kSpilledInputBytes], longArray[omniruntime::OmniMetrics::kSpilledBytes],

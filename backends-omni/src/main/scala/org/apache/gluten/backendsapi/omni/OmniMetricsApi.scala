@@ -153,10 +153,23 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       metrics: Map[String, SQLMetric]): MetricsUpdater = new OmniHashAggregateMetricsUpdaterImpl(metrics)
 
   override def genExpandTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty[String, SQLMetric]
+    Map(
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
+
+      "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
+      "inputVectors" -> SQLMetrics.createMetric(sparkContext, "number of input vectors"),
+      "inputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of input bytes"),
+
+      "inputCpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of input expand"),
+      "inputCpuCount" -> SQLMetrics.createMetric(sparkContext, "input cpu time count"),
+      "outputCpuNanos" -> SQLMetrics.createTimingMetric(sparkContext, "time of output expand"),
+      "outputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output cpu time count"),
+    )
 
   override def genExpandTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
-    new MockMetricsUpdater()
+    new OmniExpandMetricsUpdater(metrics)
 
   override def genCustomExpandMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
     Map.empty[String, SQLMetric]
@@ -323,7 +336,16 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     new MockMetricsUpdater()
 
   override def genUnionTransformerMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
-    Map.empty
+    Map(
+      "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
+      "inputVectors" -> SQLMetrics.createMetric(sparkContext, "number of input vectors"),
+      "inputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of input bytes"),
+      "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+      "numOutputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
+      "cpuNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of union"),
+      "cpuCount" -> SQLMetrics.createMetric(sparkContext, "cpu wall time count")
+    )
 
   override def genUnionTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
     new MockMetricsUpdater()

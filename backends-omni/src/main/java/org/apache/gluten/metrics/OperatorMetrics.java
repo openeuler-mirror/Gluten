@@ -46,6 +46,12 @@ public class OperatorMetrics implements IOperatorMetrics {
     /** time of operator */
     private long cpuNanos;
 
+    // input cpu wall time count
+    private long inputCpuCount;
+
+    // output cpu wall time count
+    private long outputCpuCount;
+
     /** scan time */
     private long scanTime;
 
@@ -188,6 +194,8 @@ public class OperatorMetrics implements IOperatorMetrics {
      * @param lookupAddInputTime lookupAddInputTime
      * @param lookupGetOutputTime lookupGetOutputTime
      * @param lookupOutputRows lookupOutputRows
+     * @param inputCpuCount inputCpuCount
+     * @param outputCpuCount outputCpuCount
      */
     public OperatorMetrics(
         long inputRows,
@@ -200,6 +208,8 @@ public class OperatorMetrics implements IOperatorMetrics {
         long outputBytes,
         long cpuCount,
         long cpuNanos,
+        long inputCpuCount,
+        long outputCpuCount,
         long peakMemoryBytes,
         long numMemoryAllocations,
         long spilledInputBytes,
@@ -251,6 +261,8 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.outputBytes = outputBytes;
         this.cpuCount = cpuCount;
         this.cpuNanos = cpuNanos;
+        this.inputCpuCount = inputCpuCount;
+        this.outputCpuCount = outputCpuCount;
         this.peakMemoryBytes = peakMemoryBytes;
         this.numMemoryAllocations = numMemoryAllocations;
         this.spilledInputBytes = spilledInputBytes;
@@ -279,12 +291,10 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.scanTime = scanTime;
         this.addInputTime = addInputTime;
         this.getOutputTime = getOutputTime;
-
         this.buildInputRows = buildInputRows;
         this.buildAddInputTime = buildAddInputTime;
         this.buildGetOutputTime = buildGetOutputTime;
         this.buildNumInputVecBatches = buildNumInputVecBatches;
-
         this.lookupAddInputTime = lookupAddInputTime;
         this.lookupInputRows = lookupInputRows;
         this.lookupGetOutputTime = lookupGetOutputTime;
@@ -371,6 +381,22 @@ public class OperatorMetrics implements IOperatorMetrics {
 
     public void setCpuNanos(long wallNanos) {
         this.cpuNanos = wallNanos;
+    }
+
+    public long getInputCpuCount() {
+        return inputCpuCount;
+    }
+
+    public void setInputCpuCount(long inputCpuCount) {
+        this.inputCpuCount = inputCpuCount;
+    }
+
+    public long getOutputCpuCount() {
+        return outputCpuCount;
+    }
+
+    public void setOutputCpuCount(long outputCpuCount) {
+        this.outputCpuCount = outputCpuCount;
     }
 
     public long getPeakMemoryBytes() {

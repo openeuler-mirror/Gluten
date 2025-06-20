@@ -48,6 +48,12 @@ public class Metrics implements IMetrics {
     /** time of operator */
     private long[] cpuNanos;
 
+    /** input cpu wall time cout */
+    private long[] inputCpuCount;
+
+    /** output cpu wall time cout */
+    private long[] outputCpuCount;
+
     /** scan time */
     private long[] scanTime;
 
@@ -200,6 +206,20 @@ public class Metrics implements IMetrics {
      * @param physicalWrittenBytes number of physical written bytes
      * @param writeIOTime write io time
      * @param numWrittenFiles number of written files
+     * @param inputCpuCount inputCpuCount
+     * @param outputCpuCount outputCpuCount
+     * @param buildNumInputVecBatches buildNumInputVecBatches
+     * @param getOutputTime getOutputTime
+     * @param addInputTime addInputTime
+     * @param buildInputRows buildInputRows
+     * @param buildAddInputTime buildAddInputTime
+     * @param buildGetOutputTime buildGetOutputTime
+     * @param lookupInputRows lookupInputRows
+     * @param lookupNumInputVecBatches lookupNumInputVecBatches
+     * @param lookupOutputRows lookupOutputRows
+     * @param lookupNumOutputVecBatches lookupNumOutputVecBatches
+     * @param lookupAddInputTime lookupAddInputTime
+     * @param lookupGetOutputTime lookupGetOutputTime
      */
     public Metrics(
         long[] inputRows,
@@ -212,6 +232,8 @@ public class Metrics implements IMetrics {
         long[] outputBytes,
         long[] cpuCount,
         long[] cpuNanos,
+        long[] inputCpuCount,
+        long[] outputCpuCount,
         long omniToArrow,
         long[] peakMemoryBytes,
         long[] numMemoryAllocations,
@@ -262,6 +284,8 @@ public class Metrics implements IMetrics {
         this.outputBytes = outputBytes;
         this.cpuCount = cpuCount;
         this.cpuNanos = cpuNanos;
+        this.inputCpuCount = inputCpuCount;
+        this.outputCpuCount = outputCpuCount;
         this.scanTime = scanTime;
         this.singleMetric.setOmniToArrow(omniToArrow);
         this.peakMemoryBytes = peakMemoryBytes;
@@ -468,6 +492,8 @@ public class Metrics implements IMetrics {
             outputBytes[index],
             cpuCount[index],
             cpuNanos[index],
+            inputCpuCount[index],
+            outputCpuCount[index],
             peakMemoryBytes[index],
             numMemoryAllocations[index],
             spilledInputBytes[index],

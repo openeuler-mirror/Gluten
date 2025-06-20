@@ -178,11 +178,14 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kInputRows)[metricIndex] = second->inputRows;
         metrics_->get(omniruntime::OmniMetrics::kNumInputVecBatches)[metricIndex] = second->numInputVecBatches;
         metrics_->get(omniruntime::OmniMetrics::kInputBytes)[metricIndex] = second->inputBytes;
+
         metrics_->get(omniruntime::OmniMetrics::kRawInputRows)[metricIndex] = second->rawInputRows;
         metrics_->get(omniruntime::OmniMetrics::kRawInputBytes)[metricIndex] = second->rawInputBytes;
+
         metrics_->get(omniruntime::OmniMetrics::kOutputRows)[metricIndex] = second->outputRows;
         metrics_->get(omniruntime::OmniMetrics::kNumOutputVecBatches)[metricIndex] = second->numOutputVecBatches;
         metrics_->get(omniruntime::OmniMetrics::kOutputBytes)[metricIndex] = second->outputBytes;
+
         metrics_->get(omniruntime::OmniMetrics::kSpilledBytes)[metricIndex] = second->spilledBytes;
         metrics_->get(omniruntime::OmniMetrics::kSpilledRows)[metricIndex] = second->spilledRows;
         metrics_->get(omniruntime::OmniMetrics::kSpilledPartitions)[metricIndex] = second->spilledPartitions;
@@ -190,6 +193,8 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
         metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] = second->addInputTime.cpuNanos;
         metrics_->get(omniruntime::OmniMetrics::kGetOutputTime)[metricIndex] = second->getOutputTime.cpuNanos;
+        metrics_->get(omniruntime::OmniMetrics::kAddInputCpuCount)[metricIndex] = second->addInputTime.count;
+        metrics_->get(omniruntime::OmniMetrics::kGetOutputCpuCount)[metricIndex] = second->getOutputTime.count;
 
         metrics_->get(omniruntime::OmniMetrics::kBuildInputRows)[metricIndex] = second->buildInputRows;
         metrics_->get(omniruntime::OmniMetrics::kBuildNumInputVecBatches)[metricIndex] =
