@@ -19,7 +19,7 @@ package org.apache.gluten.backendsapi.omni
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.{ExpressionTransformer, GenericExpressionTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer}
+import org.apache.gluten.expression.{ExpressionMappings, ExpressionTransformer, GenericExpressionTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
 
@@ -29,7 +29,7 @@ import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, Expression, FromUnixTime, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF, UnixTimestamp}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF, UnixTimestamp}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
@@ -237,7 +237,10 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       substraitExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: GetMapValue): ExpressionTransformer = null
+      original: GetMapValue): ExpressionTransformer = GenericExpressionTransformer(
+    ExpressionMappings.expressionsMap(classOf[ElementAt]),
+    Seq(left, right),
+    original)
 
   override def genHashExpressionTransformer(
       substraitExprName: String,
@@ -251,7 +254,9 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       substraitExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: Expression): ExpressionTransformer = null
+      original: Expression): ExpressionTransformer = {
+    GenericExpressionTransformer(substraitExprName, Seq(left, right), original)
+  }
 
   /** Transform posexplode to Substrait. */
   override def genPosExplodeTransformer(
