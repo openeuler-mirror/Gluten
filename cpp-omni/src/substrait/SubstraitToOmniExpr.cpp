@@ -116,6 +116,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
         }
         return new BinaryExpr(op, args[0], args[1], std::move(outputType));
     } else if (type == FUNCTION_OMNI_EXPR_TYPE) {
+        if (funcName == "concat") {
+            return UnfoldConcatStringFunc(args, outputType);
+        }
         if (funcName == "MakeDecimal" && args.size() == 2) {
             // only use first arg in func MakeDecimal
             return new FuncExpr(funcName, {args[0]}, std::move(outputType));
@@ -149,6 +152,19 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
         OMNI_THROW(
             "SUBSTRAIT_ERROR:", "function type {} and function {} is unsupported yet", std::to_string(type), funcName);
     }
+}
+
+TypedExprPtr SubstraitOmniExprConverter::UnfoldConcatStringFunc(std::vector<Expr *> args,
+    DataTypePtr outputType)
+{
+    int concatParams = 2;
+    int argSize = args.size();
+    if (argSize == concatParams) {
+        return new FuncExpr("concat", {args[0], args[1]}, std::move(outputType));
+    }
+    std::vector<Expr*> newArgs(args.begin() + 1, args.end());
+    TypedExprPtr ret = UnfoldConcatStringFunc(newArgs, outputType);
+    return new FuncExpr("concat", {args[0], ret}, std::move(outputType));
 }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
