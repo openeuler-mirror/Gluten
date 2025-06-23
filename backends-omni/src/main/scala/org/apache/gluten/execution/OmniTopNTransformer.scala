@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.execution.SparkPlan
 
 import io.substrait.proto.SortField
+import com.google.protobuf.{Any, StringValue}
 
 import scala.collection.JavaConverters._
 
@@ -38,7 +39,8 @@ case class OmniTopNTransformer(
     limit: Long,
     sortOrder: Seq[SortOrder],
     global: Boolean,
-    child: SparkPlan)
+    child: SparkPlan,
+    isTopNSort: Boolean = false)
   extends UnaryTransformSupport {
   override def output: Seq[Attribute] = child.output
   override def outputPartitioning: Partitioning = child.outputPartitioning
@@ -80,7 +82,7 @@ case class OmniTopNTransformer(
         sortOrder,
         child.output,
         childCtx.root,
-        validation = false)
+        validation = true)
     TransformContext(child.output, relNode)
   }
 
@@ -110,10 +112,25 @@ case class OmniTopNTransformer(
       val inputTypeNodes =
         inputAttributes.map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable)).asJava
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
+        genTopNParameters(isTopNSort),
         BackendsApiManager.getTransformerApiInstance.packPBMessage(
           TypeBuilder.makeStruct(false, inputTypeNodes).toProtobuf))
       RelBuilder.makeTopNRel(input, count, sortFieldList.asJava, extensionNode, context, operatorId)
     }
+  }
+
+  def genTopNParameters(isTopNSort: Boolean): Any = {
+    val topNParametersStr = new StringBuffer("TopNParameters:")
+    if (isTopNSort) {
+      topNParametersStr.append("isTopNSort=").append(1).append("\n")
+    } else {
+      topNParametersStr.append("isTopNSort=").append(0).append("\n")
+    }
+    val message = StringValue
+      .newBuilder()
+      .setValue(topNParametersStr.toString)
+      .build()
+    BackendsApiManager.getTransformerApiInstance.packPBMessage(message)
   }
 
   override def metricsUpdater(): MetricsUpdater = MetricsUpdater.Todo // TODO

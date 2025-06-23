@@ -599,9 +599,18 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel &topNRel)
 {
     auto childNode = ConvertSingleInput<::substrait::TopNRel>(topNRel);
-    auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(topNRel.sorts(), childNode->OutputType());
-    return std::make_shared<TopNNode>(
-        NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, static_cast<int32_t>(topNRel.n()), childNode);
+    auto [partitionKeys, sortingKeys, sortingOrders, sortNullFirsts] =
+        ProcessSortFieldWithExpr(topNRel.sorts(), childNode->OutputType());
+    if (topNRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(topNRel.advanced_extension(), "isTopNSort=")) {
+        // Create TopNSort node
+        return std::make_shared<TopNSortNode>(
+            NextPlanNodeId(), partitionKeys, sortingKeys, sortingOrders,
+            sortNullFirsts, static_cast<int32_t>(topNRel.n()), false, childNode);
+    } else {
+        return std::make_shared<TopNNode>(
+            NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, static_cast<int32_t>(topNRel.n()), childNode);
+    }
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel &readRel, const DataTypesPtr &type)
@@ -698,6 +707,24 @@ SubstraitToOmniPlanConverter::ProcessSortField(
         sortNullFirsts.emplace_back(sortOrder.IsNullsFirst());
     }
     return {sortingKeys, sortingOrders, sortNullFirsts};
+}
+
+SortWithExprTuple SubstraitToOmniPlanConverter::ProcessSortFieldWithExpr(
+    const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortFields, const DataTypesPtr &inputType)
+{
+    std::vector<TypedExprPtr> partitionKeys;
+    std::vector<TypedExprPtr> sortingKeys;
+    std::vector<int32_t> sortingOrders;
+    std::vector<int32_t> sortNullFirsts;
+    for (const auto &sort : sortFields) {
+        OMNI_CHECK(sort.has_expr(), "Sort field must have expr");
+        auto expression = exprConverter->ToOmniExpr(sort.expr(), inputType);
+        sortingKeys.emplace_back(expression);
+        auto sortOrder = ToSortOrder(sort);
+        sortingOrders.emplace_back(sortOrder.IsAscending());
+        sortNullFirsts.emplace_back(sortOrder.IsNullsFirst());
+    }
+    return {partitionKeys, sortingKeys, sortingOrders, sortNullFirsts};
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ProcessEmit(
