@@ -99,11 +99,9 @@ case class OmniHashAggregateExecTransformer(
     }
 
     aggregateMode match {
-      case Partial =>
+      case Partial | PartialMerge =>
         addFunctionNodeWithAggFunctionInputAggBuf()
-      case PartialMerge =>
-        addFunctionNodeWithAggFunctionInputAggBuf()
-      case Final =>
+      case Final | Complete =>
         validDataType(aggregateFunction.dataType)
         aggregateNodeList.add(
           ExpressionBuilder.makeAggregateFunction(
@@ -113,8 +111,8 @@ case class OmniHashAggregateExecTransformer(
             ConverterUtils.getTypeNode(aggregateFunction.dataType, aggregateFunction.nullable)
           )
         )
-      case Complete =>
-        throw new UnsupportedOperationException("Complete mode is not supported in Omni backend")
+      case other =>
+        throw new UnsupportedOperationException(s"$other mode is not supported in Omni backend")
     }
   }
 
@@ -280,7 +278,7 @@ case class OmniHashAggregateExecTransformer(
         }
         val aggregateFunc = aggExpr.aggregateFunction
         val childrenNodes = aggExpr.mode match {
-          case Partial =>
+          case Partial | Complete =>
             aggregateFunc.children.toList.map(
               expr => {
                 ExpressionConverter
