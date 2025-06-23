@@ -22,6 +22,10 @@ import org.apache.spark.sql.execution.SparkPlan
 case class FilterExecTransformer(condition: Expression, child: SparkPlan)
   extends FilterExecTransformerBase(condition, child) {
 
+  // use condition as filters directly
+  // consider push down filters to scan in rule
+  override protected def getRemainingCondition: Expression = condition
+
   override protected def withNewChildInternal(newChild: SparkPlan): FilterExecTransformer =
     copy(child = newChild)
 }
