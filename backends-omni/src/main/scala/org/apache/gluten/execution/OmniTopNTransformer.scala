@@ -46,7 +46,7 @@ case class OmniTopNTransformer(
   override def outputPartitioning: Partitioning = child.outputPartitioning
   override def outputOrdering: Seq[SortOrder] = sortOrder
 
-  override def nodeName: String = "OmniTopNTransformer"
+  override def nodeName: String = if(isTopNSort) "OmniTopNSortTransformer" else "OmniTopNTransformer"
 
   override def requiredChildDistribution: Seq[Distribution] =
     if (global) AllTuples :: Nil else UnspecifiedDistribution :: Nil
