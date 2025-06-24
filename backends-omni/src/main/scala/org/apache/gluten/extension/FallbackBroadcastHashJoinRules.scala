@@ -165,10 +165,17 @@ case class FallbackBroadcastHashJoin(session: SparkSession) extends Rule[SparkPl
               //  some tricks around C2R and R2C to make them adapt to columnar broadcast.
               //  Currently their doBroadcast() methods just propagate child's broadcast
               //  payloads which is not right in speaking of columnar.
+              val buildSidePlan = bhj.buildSide match {
+                  case BuildLeft => bhj.left
+                  case BuildRight => bhj.right
+                }
+
               if (!enableColumnarBroadcastJoin) {
                 FallbackTags.add(
                   bhj,
                   "columnar BroadcastJoin is not enabled in BroadcastHashJoinExec")
+                preTagBroadcastExchangeFallback(bhj, buildSidePlan,
+                  ValidationResult.failed("columnar BroadcastJoin is not enabled"))
               } else {
                 val isBhjTransformable: ValidationResult = {
                   val transformer = BackendsApiManager.getSparkPlanExecApiInstance
@@ -183,11 +190,6 @@ case class FallbackBroadcastHashJoin(session: SparkSession) extends Rule[SparkPl
                       isNullAwareAntiJoin = bhj.isNullAwareAntiJoin)
                   transformer.doValidate()
                 }
-                val buildSidePlan = bhj.buildSide match {
-                  case BuildLeft => bhj.left
-                  case BuildRight => bhj.right
-                }
-
                 preTagBroadcastExchangeFallback(bhj, buildSidePlan, isBhjTransformable)
               }
             case bnlj: BroadcastNestedLoopJoinExec => applyBNLJFallback(bnlj)
