@@ -74,12 +74,26 @@ object OmniBackendSettings extends BackendSettingsApi {
       rootPaths: Seq[String],
       properties: Map[String, String],
       serializableHadoopConf: Option[SerializableConfiguration] = None): ValidationResult = {
+    def checkUnsupportedDataTypes: ValidationResult = {
+      //Collect unsupported types
+      val unsupportedDataTypes = fields.map(_.dataType).collect {
+        case _: MapType => "MapType"
+        case _: StructType => "StructType"
+        case _: ArrayType => "ArrayType"
+      }
+      for (unsupportedDataType <- unsupportedDataTypes) {
+        return ValidationResult.failed(s"Validation failed for ${this.getClass.toString}"
+          + s"deu to: data type $unsupportedDataType in file schema.")
+      }
+      ValidationResult.succeeded
+    }
     format match {
-      case ReadFileFormat.ParquetReadFormat => ValidationResult.succeeded
-      case ReadFileFormat.OrcReadFormat => ValidationResult.succeeded
+      case ReadFileFormat.ParquetReadFormat => checkUnsupportedDataTypes
+      case ReadFileFormat.OrcReadFormat => checkUnsupportedDataTypes
       case _ => ValidationResult.failed(s"Unsupported file format $format")
     }
   }
+
 
   override def needOutputSchemaForPlan(): Boolean = true
 
