@@ -70,11 +70,9 @@ bool ValidatePattern(const std::string &pattern, std::string &error)
     LogValidateMsg(Format("Validation failed at file:{}, line:{}, function:{}, reason:{}", ExtractFileName(__FILE__),  \
         __LINE__, __FUNCTION__, reason))
 
-const std::unordered_set<std::string> kRegexFunctions = {
-    "regexp_extract", "regexp_extract_all", "regexp_replace", "rlike"};
+const std::unordered_set<std::string> kRegexFunctions = {"rlike", "like"};
 
-const std::unordered_set<std::string> kBlackList = {"split_part", "factorial", "from_json", "json_array_length",
-    "trunc", "sequence", "approx_percentile", "get_array_struct_fields", "map_from_arrays"};
+const std::unordered_set<std::string> kBlackList = {"get_struct_field", "rpad"};
 } // namespace
 
 bool SubstraitToOmniPlanValidator::ParseOmniType(
@@ -186,6 +184,18 @@ bool SubstraitToOmniPlanValidator::ValidateScalarFunction(
             return false;
         }
     }
+
+    std::string funcSpec = SubstraitParser::FindFunctionSpec(planConverter.GetFunctionMap(),
+        scalarFunction.function_reference());
+    std::string funcName = SubstraitParser::GetNameBeforeDelimiter(funcSpec);
+    auto it = kBlackList.find(funcName);
+    if (it != kBlackList.end()) {
+        LOG_VALIDATION_MSG("Function is not support: " + funcName);
+        return false;
+    }
+    if (kRegexFunctions.find(funcName) != kRegexFunctions.end()) {
+        return ValidateRegexExpr(funcName, scalarFunction);
+    }
     return true;
 }
 
@@ -222,7 +232,12 @@ bool SubstraitToOmniPlanValidator::ValidateCast(
 bool SubstraitToOmniPlanValidator::ValidateIfThen(
     const ::substrait::Expression_IfThen &ifThen, const DataTypesPtr &inputType)
 {
-    for (const auto &subIfThen : ifThen.ifs()) {
+    auto ifs = ifThen.ifs();
+    if (ifs.size() > 1) {
+        LOG_VALIDATION_MSG("IFS size > 1");
+        return false;
+    }
+    for (const auto &subIfThen : ifs) {
         if (!ValidateExpression(subIfThen.if_(), inputType) || !ValidateExpression(subIfThen.then(), inputType)) {
             return false;
         }

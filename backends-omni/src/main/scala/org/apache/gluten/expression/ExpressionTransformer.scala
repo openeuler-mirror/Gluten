@@ -52,6 +52,9 @@ case class OmniFromUnixTimeTransformer(
   private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Shanghai")
 
   private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
+    if (!GlutenConfig.get.enableOmniUnixTimeFunc) {
+      throw new GlutenNotSupportException(s"Not Enable Omni UnixTime Function")
+    }
     if (GlutenConfig.get.timeParserPolicy == "LEGACY") {
       throw new GlutenNotSupportException(s"Unsupported Time Parser Policy: LEGACY")
     }
@@ -88,6 +91,9 @@ case class OmniUnixTimestampTransformer(
   private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Shanghai")
 
   private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
+    if (!GlutenConfig.get.enableOmniUnixTimeFunc) {
+      throw new GlutenNotSupportException(s"Not Enable Omni UnixTime Function")
+    }
     if (GlutenConfig.get.timeParserPolicy == "LEGACY") {
       throw new GlutenNotSupportException(s"Unsupported Time Parser Policy: LEGACY")
     }
