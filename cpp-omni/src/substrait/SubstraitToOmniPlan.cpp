@@ -656,8 +656,17 @@ PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SortRel &sortRel)
 {
     auto childNode = ConvertSingleInput<::substrait::SortRel>(sortRel);
+    std::vector<TypedExprPtr> sortExpressions;
+    const auto &sorts = sortRel.sorts();
+    for (const auto &sort : sorts) {
+        if (sort.has_expr()) {
+            auto expression = exprConverter->ToOmniExpr(sort.expr(), childNode->OutputType());
+            sortExpressions.emplace_back(expression);
+        }
+    }
     auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(sortRel.sorts(), childNode->OutputType());
-    return std::make_shared<OrderByNode>(NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode);
+    return std::make_shared<OrderByNode>(
+        NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode, sortExpressions);
 }
 
 int32_t SubstraitToOmniPlanConverter::GetStreamIndex(const ::substrait::ReadRel &sRead)
