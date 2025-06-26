@@ -18,6 +18,7 @@ package org.apache.gluten.backendsapi
 
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.execution._
+import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
 import org.apache.gluten.expression._
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, WindowFunctionNode}
@@ -426,6 +427,12 @@ trait SparkPlanExecApi {
       left: ExpressionTransformer,
       right: ExpressionTransformer,
       original: Like): ExpressionTransformer
+
+  def genPromotePrecisionTransformer(
+                                      cast: Cast,
+                                      attributeSeq: Seq[Attribute]): ExpressionTransformer = {
+    replaceWithExpressionTransformer(cast.child, attributeSeq)
+  }
 
   /**
    * Generate an ExpressionTransformer to transform TruncTimestamp expression.

@@ -474,10 +474,10 @@ object ExpressionConverter extends SQLConfHelper with Logging {
             LiteralTransformer(m.nullOnOverflow)),
           m
         )
-      case PromotePrecision(_ @Cast(child, _: DecimalType, _, _))
+      case PromotePrecision(c @Cast(child, _: DecimalType, _, _))
           if child.dataType
             .isInstanceOf[DecimalType] && !BackendsApiManager.getSettings.transformCheckOverflow =>
-        replaceWithExpressionTransformer0(child, attributeSeq, expressionsMap)
+        BackendsApiManager.getSparkPlanExecApiInstance.genPromotePrecisionTransformer(c, attributeSeq)
       case _: NormalizeNaNAndZero | _: PromotePrecision | _: TaggingExpression |
           _: DynamicPruningExpression =>
         ChildTransformer(
