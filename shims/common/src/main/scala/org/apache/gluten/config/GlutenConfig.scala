@@ -564,9 +564,11 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarEnableDelayCartesianProduct: Boolean = conf.getConf(COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT)
 
-
   def columnarPreferShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_OMNI_PREFER_SHUFFLED_HASH_JOIN)
 
+  def omniColumnarCatalogCacheSize: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_SIZE)
+
+  def omniColumnarCatalogCacheExpireTime: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_EXPIRE_TIME)
 }
 
 object GlutenConfig {
@@ -2578,4 +2580,16 @@ object GlutenConfig {
       "is true.")
     .booleanConf
     .createWithDefault(false)
+
+  val COLUMNAR_OMNI_CATALOG_CACHE_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.catalog.cache.size")
+    .internal()
+    .doc("set catalog cache size, value <= 0 presents no cache")
+    .intConf
+    .createWithDefault(128)
+
+  val COLUMNAR_OMNI_CATALOG_CACHE_EXPIRE_TIME = buildConf("spark.gluten.sql.columnar.backend.omni.catalog.cache.expire.time")
+    .internal()
+    .doc("set catalog cache expire time in seconds")
+    .intConf
+    .createWithDefault(600)
 }

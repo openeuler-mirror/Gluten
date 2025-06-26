@@ -356,6 +356,10 @@
                     <ignoreClass>org.apache.spark.sql.execution.datasources.WriterBucketSpec$</ignoreClass>
                     <ignoreClass>org.apache.spark.sql.execution.datasources.InsertIntoHadoopFsRelationCommand</ignoreClass>
                     <ignoreClass>org.apache.spark.sql.execution.datasources.InsertIntoHadoopFsRelationCommand$</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.datasources.CatalogFileIndex*</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.streaming.FileStreamSink*</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.catalyst.catalog.SessionCatalog*</ignoreClass>
+                    <ignoreClass>org.apache.spark.util.HadoopFSUtils*</ignoreClass>
                     <ignoreClass>org.apache.spark.util.collection.unsafe.sort.UnsafeExternalSorter</ignoreClass>
                     <ignoreClass>org.apache.spark.util.collection.unsafe.sort.UnsafeExternalSorter$</ignoreClass>
                     <ignoreClass>org.apache.spark.util.collection.unsafe.sort.UnsafeExternalSorter$SpillableIterator</ignoreClass>
