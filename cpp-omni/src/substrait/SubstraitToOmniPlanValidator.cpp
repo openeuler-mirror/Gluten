@@ -871,6 +871,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::CrossRel &crossRe
     switch (crossRel.type()) {
         case ::substrait::CrossRel_JoinType_JOIN_TYPE_INNER:
         case ::substrait::CrossRel_JoinType_JOIN_TYPE_LEFT:
+        case ::substrait::CrossRel_JoinType_JOIN_TYPE_RIGHT:
             break;
         default:
             LOG_VALIDATION_MSG("Unsupported Join type in CrossRel");
