@@ -87,7 +87,7 @@ private:
         std::vector<omniruntime::PlanNodeId> &nodeIds);
 
     void buildMetricsForNative(const struct omniruntime::compute::PlanNodeStats& stats,
-        int metricIndex);
+        int& metricIndex);
     /// Collect omni metrics.
     void CollectMetrics();
 };

@@ -11,13 +11,13 @@ package org.apache.gluten.metrics;
  */
 public class OperatorMetrics implements IOperatorMetrics {
     /** number of input rows */
-    private long inputRows;
+    private long numInputRows;
 
     /** number of input vectors */
     private long numInputVecBatches;
 
     /** number of input bytes */
-    private long inputBytes;
+    private long numInputBytes;
 
     /** number of input time */
     private long addInputTime;
@@ -29,13 +29,13 @@ public class OperatorMetrics implements IOperatorMetrics {
     private long rawInputBytes;
 
     /** number of output rows */
-    private long outputRows;
+    private long numOutputRows;
 
     /** number of output vectors */
     private long numOutputVecBatches;
 
     /** number of output bytes */
-    private long outputBytes;
+    private long numOutputBytes;
 
     /** number of output time */
     private long getOutputTime;
@@ -251,14 +251,14 @@ public class OperatorMetrics implements IOperatorMetrics {
         long lookupNumOutputVecBatches,
         long lookupAddInputTime,
         long lookupGetOutputTime) {
-        this.inputRows = inputRows;
+        this.numInputRows = inputRows;
         this.numInputVecBatches = inputVectors;
-        this.inputBytes = inputBytes;
+        this.numInputBytes = inputBytes;
         this.rawInputRows = rawInputRows;
         this.rawInputBytes = rawInputBytes;
-        this.outputRows = outputRows;
+        this.numOutputRows = outputRows;
         this.numOutputVecBatches = outputVectors;
-        this.outputBytes = outputBytes;
+        this.numOutputBytes = outputBytes;
         this.cpuCount = cpuCount;
         this.cpuNanos = cpuNanos;
         this.inputCpuCount = inputCpuCount;
@@ -303,22 +303,6 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.lookupNumOutputVecBatches = lookupNumOutputVecBatches;
     }
 
-    public long getInputRows() {
-        return inputRows;
-    }
-
-    public void setInputRows(long inputRows) {
-        this.inputRows = inputRows;
-    }
-
-    public long getInputBytes() {
-        return inputBytes;
-    }
-
-    public void setInputBytes(long inputBytes) {
-        this.inputBytes = inputBytes;
-    }
-
     public long getRawInputRows() {
         return rawInputRows;
     }
@@ -333,14 +317,6 @@ public class OperatorMetrics implements IOperatorMetrics {
 
     public void setRawInputBytes(long rawInputBytes) {
         this.rawInputBytes = rawInputBytes;
-    }
-
-    public long getOutputRows() {
-        return outputRows;
-    }
-
-    public void setOutputRows(long outputRows) {
-        this.outputRows = outputRows;
     }
 
     public long getNumInputVecBatches() {
@@ -359,12 +335,36 @@ public class OperatorMetrics implements IOperatorMetrics {
         this.numOutputVecBatches = numOutputVecBatches;
     }
 
-    public long getOutputBytes() {
-        return outputBytes;
+    public long getNumOutputBytes() {
+        return numOutputBytes;
     }
 
-    public void setOutputBytes(long outputBytes) {
-        this.outputBytes = outputBytes;
+    public void setNumOutputBytes(long numOutputBytes) {
+        this.numOutputBytes = numOutputBytes;
+    }
+
+    public long getNumOutputRows() {
+        return numOutputRows;
+    }
+
+    public void setNumOutputRows(long numOutputRows) {
+        this.numOutputRows = numOutputRows;
+    }
+
+    public long getNumInputBytes() {
+        return numInputBytes;
+    }
+
+    public void setNumInputBytes(long numInputBytes) {
+        this.numInputBytes = numInputBytes;
+    }
+
+    public long getNumInputRows() {
+        return numInputRows;
+    }
+
+    public void setNumInputRows(long numInputRows) {
+        this.numInputRows = numInputRows;
     }
 
     public long getCpuCount() {

@@ -22,12 +22,19 @@ case class OmniInputIteratorMetricsUpdater(metrics: Map[String, SQLMetric], forB
   extends MetricsUpdater {
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
-     val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("cpuCount") += operatorMetrics.getCpuCount
-      metrics("cpuNanos") += operatorMetrics.getGetOutputTime
+      val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
+      metrics("addInputCpuCount") += operatorMetrics.getInputCpuCount
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
+
       if (!forBroadcast) {
-        metrics("numOutputRows") += operatorMetrics.getOutputRows
-        metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
+        metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+        metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+        metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
+        metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
+        metrics("getOutputTime") += operatorMetrics.getGetOutputTime
       }
     }
   }

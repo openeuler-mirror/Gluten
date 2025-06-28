@@ -7,13 +7,18 @@ class NestedLoopJoinMetricsUpdater(val metrics: Map[String, SQLMetric]) extends 
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numOutputRows") += operatorMetrics.getOutputRows
-      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
-      metrics("outputBytes") += operatorMetrics.getOutputBytes
-      metrics("cpuCount") += operatorMetrics.getCpuCount
-      metrics("cpuNanos") += operatorMetrics.getCpuNanos
-      metrics("peakMemoryBytes") += operatorMetrics.getPeakMemoryBytes
-      metrics("numMemoryAllocations") += operatorMetrics.getNumMemoryAllocations
+      metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+      metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
+
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
+
+      metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
+      metrics("addInputCpuCount") += operatorMetrics.getInputCpuCount
+      metrics("getOutputTime") += operatorMetrics.getGetOutputTime
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
     }
   }
 }

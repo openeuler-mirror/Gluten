@@ -22,17 +22,19 @@ import org.apache.spark.sql.execution.metric.SQLMetric
 class OmniSortMetricsUpdater(val metrics: Map[String, SQLMetric]) extends MetricsUpdater with Logging {
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
-      logInfo("operator metrics is not empty.")
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
+      metrics("addInputCpuCount") += operatorMetrics.getInputCpuCount
       metrics("addInputTime") += operatorMetrics.getAddInputTime
-      metrics("numInputVecBatches") += operatorMetrics.getNumInputVecBatches
-      metrics("numInputRows") += operatorMetrics.getInputRows
-      metrics("numOutputRows") += operatorMetrics.getOutputRows
+
       // todo omniCodegenTime
+      metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+      metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
+      metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
       metrics("getOutputTime") += operatorMetrics.getGetOutputTime
-      metrics("outputDataSize") += operatorMetrics.getOutputBytes
-      metrics("numOutputVecBatches") += operatorMetrics.getNumOutputVecBatches
-      metrics("spillSize") += operatorMetrics.getSpilledRows
     }
   }
 }

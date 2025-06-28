@@ -23,14 +23,17 @@ class OmniWindowMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numInputRows") += operatorMetrics.getInputRows
-      metrics("inputVectors") += operatorMetrics.getNumInputVecBatches
-      metrics("inputBytes") += operatorMetrics.getInputBytes
-      metrics("numOutputRows") += operatorMetrics.getOutputRows
-      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
-      metrics("outputBytes") += operatorMetrics.getOutputBytes
-      metrics("cpuCount") += operatorMetrics.getCpuCount
-      metrics("cpuNanos") += operatorMetrics.getCpuNanos
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
+      metrics("addInputCount") += operatorMetrics.getInputCpuCount
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
+
+      metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+      metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
+      metrics("getOutputCount") += operatorMetrics.getOutputCpuCount
+      metrics("getOutputTime") += operatorMetrics.getGetOutputTime
     }
   }
 }

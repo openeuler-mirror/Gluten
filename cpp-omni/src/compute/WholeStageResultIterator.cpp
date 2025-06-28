@@ -166,12 +166,11 @@ void WholeStageResultIterator::CollectMetrics()
         }
         const auto& stats = planStats.at(nodeId);
         buildMetricsForNative(stats, metricIndex);
-        metricIndex += 1;
     }
 }
 
 void WholeStageResultIterator::buildMetricsForNative(
-    const omniruntime::compute::PlanNodeStats& stats, int metricIndex)
+    const omniruntime::compute::PlanNodeStats& stats, int& metricIndex)
 {
     for (const auto& entry : stats.operatorStats) {
         const auto& second = entry.second;
@@ -212,6 +211,7 @@ void WholeStageResultIterator::buildMetricsForNative(
             second->lookupAddInputTime.cpuNanos;
         metrics_->get(omniruntime::OmniMetrics::kLookupGetOutputTime)[metricIndex] =
             second->lookupGetOutputTime.cpuNanos;
+        metricIndex += 1;
     }
 }
 }

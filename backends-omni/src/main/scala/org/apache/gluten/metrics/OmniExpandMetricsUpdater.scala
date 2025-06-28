@@ -23,18 +23,18 @@ class OmniExpandMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numOutputRows") += operatorMetrics.getOutputRows
-      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
-      metrics("outputBytes") += operatorMetrics.getOutputBytes
+      metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+      metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
 
-      metrics("numInputRows") += operatorMetrics.getInputRows
-      metrics("inputVectors") += operatorMetrics.getNumInputVecBatches
-      metrics("inputBytes") += operatorMetrics.getInputBytes
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
 
-      metrics("inputCpuCount") += operatorMetrics.getInputCpuCount
-      metrics("inputCpuNanos") += operatorMetrics.getAddInputTime
-      metrics("outputCpuCount") += operatorMetrics.getOutputCpuCount
-      metrics("outputCpuNanos") += operatorMetrics.getGetOutputTime
+      metrics("addInputCount") += operatorMetrics.getInputCpuCount
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
+      metrics("getOutputCount") += operatorMetrics.getOutputCpuCount
+      metrics("getOutputTime") += operatorMetrics.getGetOutputTime
 
 
     }

@@ -30,42 +30,38 @@ trait OmniHashAggregateMetricsUpdater extends MetricsUpdater {
 
 class OmniHashAggregateMetricsUpdaterImpl(val metrics: Map[String, SQLMetric])
   extends OmniHashAggregateMetricsUpdater {
-  val aggOutputRows: SQLMetric = metrics("aggOutputRows")
-  val aggOutputVectors: SQLMetric = metrics("aggOutputVectors")
-  val aggOutputBytes: SQLMetric = metrics("aggOutputBytes")
-  val aggCpuCount: SQLMetric = metrics("aggCpuCount")
-  val aggWallNanos: SQLMetric = metrics("aggCpuNanos")
+  val numOutputRows: SQLMetric = metrics("numOutputRows")
+  val numOutputVecBatches: SQLMetric = metrics("numOutputVecBatches")
+  val numOutputBytes: SQLMetric = metrics("numOutputBytes")
 
-  val rowConstructionCpuCount: SQLMetric = metrics("rowConstructionCpuCount")
-  val rowConstructionWallNanos: SQLMetric = metrics("rowConstructionCpuNanos")
+  val numInputRows: SQLMetric = metrics("numInputRows")
+  val numInputVecBatches: SQLMetric = metrics("numInputVecBatches")
+  val numInputBytes: SQLMetric = metrics("numInputBytes")
 
-  val extractionCpuCount: SQLMetric = metrics("extractionCpuCount")
-  val extractionWallNanos: SQLMetric = metrics("extractionCpuNanos")
+  val addInputCount: SQLMetric = metrics("addInputCount")
+  val addInputTime: SQLMetric = metrics("addInputTime")
+  val getOutputCount: SQLMetric = metrics("getOutputCount")
+  val getOutputTime: SQLMetric = metrics("getOutputTime")
 
   override def updateAggregationMetrics(
     aggregationMetrics: java.util.ArrayList[OperatorMetrics],
     aggParams: AggregationParams): Unit = {
     var idx = 0
 
-    if (aggParams.extractionNeeded) {
-      extractionCpuCount += aggregationMetrics.get(idx).getCpuCount
-      extractionWallNanos += aggregationMetrics.get(idx).getCpuNanos
-      idx += 1
-    }
-
     val aggMetrics = aggregationMetrics.get(idx)
-    aggOutputRows += aggMetrics.getOutputRows
-    aggOutputVectors += aggMetrics.getNumOutputVecBatches
-    aggOutputBytes += aggMetrics.getOutputBytes
-    aggCpuCount += aggMetrics.getCpuCount
-    aggWallNanos += aggMetrics.getCpuNanos
+    numOutputRows += aggMetrics.getNumOutputRows
+    numOutputVecBatches += aggMetrics.getNumOutputVecBatches
+    numOutputBytes += aggMetrics.getNumOutputBytes
+    numInputRows += aggMetrics.getNumInputRows
+    numInputVecBatches += aggMetrics.getNumInputVecBatches
+    numInputBytes += aggMetrics.getNumInputBytes
+
+    getOutputCount += aggMetrics.getOutputCpuCount
+    getOutputTime += aggMetrics.getGetOutputTime
+    addInputTime += aggMetrics.getAddInputTime
+    addInputCount += aggMetrics.getInputCpuCount
     idx += 1
 
-    if (aggParams.rowConstructionNeeded) {
-      rowConstructionCpuCount += aggregationMetrics.get(idx).getCpuCount
-      rowConstructionWallNanos += aggregationMetrics.get(idx).getCpuNanos
-      idx += 1
-    }
     if (TaskResources.inSparkTask()) {
       SparkMetricsUtil.incMemoryBytesSpilled(
         TaskResources.getLocalTaskContext().taskMetrics(),

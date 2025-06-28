@@ -87,18 +87,18 @@ object OmniMetricsUtil extends Logging {
 
     // We are accessing the metrics from end to start. So the input metrics are got from the
     // last suite of metrics, and the output metrics are got from the first suite.
-    val inputRows = operatorMetrics.get(operatorMetrics.size() - 1).getInputRows
+    val inputRows = operatorMetrics.get(operatorMetrics.size() - 1).getNumInputRows
     val inputVectors = operatorMetrics.get(operatorMetrics.size() - 1).getNumInputVecBatches
-    val inputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getInputBytes
+    val inputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getNumInputBytes
     val inputCpuCount = operatorMetrics.get(operatorMetrics.size() - 1).getInputCpuCount
     val rawInputRows = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputRows
     val rawInputBytes = operatorMetrics.get(operatorMetrics.size() - 1).getRawInputBytes
     val addInputTime = operatorMetrics.get(operatorMetrics.size() - 1).getAddInputTime
 
 
-    val outputRows = operatorMetrics.get(0).getOutputRows
+    val outputRows = operatorMetrics.get(0).getNumOutputRows
     val outputVectors = operatorMetrics.get(0).getNumOutputVecBatches
-    val outputBytes = operatorMetrics.get(0).getOutputBytes
+    val outputBytes = operatorMetrics.get(0).getNumOutputBytes
     val outputCpuCount = operatorMetrics.get(0).getCpuCount
     val getOutputTime = operatorMetrics.get(0).getGetOutputTime;
 

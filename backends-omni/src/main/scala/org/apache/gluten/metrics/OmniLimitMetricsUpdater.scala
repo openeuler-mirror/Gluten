@@ -23,11 +23,17 @@ class OmniLimitMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metri
   override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
     if (opMetrics != null) {
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
-      metrics("numOutputRows") += operatorMetrics.getOutputRows
-      metrics("outputVectors") += operatorMetrics.getNumOutputVecBatches
-      metrics("outputBytes") += operatorMetrics.getOutputBytes
-      metrics("cpuCount") += operatorMetrics.getCpuCount
-      metrics("cpuNanos") += operatorMetrics.getCpuNanos
+      metrics("numOutputRows") += operatorMetrics.getNumOutputRows
+      metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
+      metrics("getOutputTime") += operatorMetrics.getGetOutputTime
+      metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
+
+      metrics("numInputVectorBatches") += operatorMetrics.getNumInputVecBatches
+      metrics("numInputRows") += operatorMetrics.getNumInputRows
+      metrics("numInputBytes") += operatorMetrics.getNumInputBytes
+      metrics("addInputTime") += operatorMetrics.getAddInputTime
+      metrics("addInputCount") += operatorMetrics.getInputCpuCount
     }
   }
 }
