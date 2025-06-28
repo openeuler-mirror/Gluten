@@ -28,6 +28,8 @@ import org.apache.gluten.extension.columnar.transition.{InsertTransitions, Remov
 import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
+import org.apache.gluten.extension.RewriteAQEShuffleRead
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy}
 import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, OmniRewriteSubqueryBroadcast, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, ShuffleJoinStrategy}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, RewriteAQEShuffleRead}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
@@ -82,7 +84,6 @@ object OmniRuleApi {
         RewriteIn,
         RewriteMultiChildrenCount,
         RewriteJoin,
-        PullOutPreProject,
         PullOutPostProject,
         ProjectColumnPruning)
     injector.injectTransform(
@@ -99,7 +100,6 @@ object OmniRuleApi {
     injector.injectPostTransform(_ => CollapseProjectExecTransformer)
 //    injector.injectPostTransform(c => FlushableHashAggregateRule.apply(c.session))
     injector.injectPostTransform(c => InsertTransitions.create(c.outputsColumnar, OmniBatch))
-
     // Gluten columnar: Fallback policies.
     injector.injectFallbackPolicy(
       c => ExpandFallbackPolicy(c.ac.isAdaptiveContext(), c.ac.originalPlan()))
@@ -112,6 +112,7 @@ object OmniRuleApi {
     injector.injectPost(c => ColumnarCollapseTransformStages(c.glutenConf))
 
     // Gluten columnar: Final rules.
+    injector.injectFinal(c => RollupOptimization.apply(c.session))
     injector.injectFinal(c => RemoveGlutenTableCacheColumnarToRow(c.session))
     injector.injectFinal(c => GlutenFallbackReporter(c.glutenConf, c.session))
     injector.injectFinal(_ => RemoveFallbackTagRule())

@@ -4,6 +4,7 @@
 
 #include "SubstraitToOmniPlan.h"
 #include <expression/expressions.h>
+#include <google/protobuf/wrappers.pb.h>
 #include <vector>
 #include <stack>
 #include <algorithm>
@@ -428,6 +429,17 @@ std::vector<uint32_t> getDefaultMaskChannel(const std::vector<uint32_t>& aggFunc
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::AggregateRel &aggRel)
 {
     auto childNode = ConvertSingleInput<::substrait::AggregateRel>(aggRel);
+    PlanNodePtr expandPlanNode = nullptr;
+    if (aggRel.has_advanced_extension()) {
+        const auto &advancedExtension = aggRel.advanced_extension();
+        if (advancedExtension.has_optimization()) {
+            const auto &optimization = advancedExtension.optimization();
+            ::substrait::Rel expandRel;
+            optimization.UnpackTo(&expandRel);
+            expandPlanNode = ToOmniPlan(expandRel);
+            childNode = expandPlanNode;
+        }
+    }
     const auto &sourceDataTypes = childNode->OutputType();
     std::vector<TypedExprPtr> aggFilterExprs;
     std::vector<DataTypesPtr> aggOutputTypes;
@@ -539,9 +551,12 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
 
     outputType = std::make_shared<DataTypes>(std::move(nodeOutputTypes));
 
+    if (expandPlanNode) {
+        childNode = expandPlanNode->Sources()[0];
+    }
     return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
         outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial, isStatisticalAggregate,
-        outputType, childNode);
+        outputType, childNode, expandPlanNode);
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectRel &projectRel)

@@ -19,14 +19,12 @@ package org.apache.gluten.config
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 import org.apache.spark.sql.internal.SQLConf
-
 import com.google.common.collect.ImmutableList
 import org.apache.hadoop.security.UserGroupInformation
 
 import java.util
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-
 import scala.collection.JavaConverters._
 
 case class GlutenNumaBindingInfo(
@@ -569,6 +567,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarCatalogCacheSize: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_SIZE)
 
   def omniColumnarCatalogCacheExpireTime: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_EXPIRE_TIME)
+
+  def enableRollupOptimization: Boolean = conf.getConf(ENABLE_ROLLUP_OPTIMIZATION)
 }
 
 object GlutenConfig {
@@ -2592,4 +2592,10 @@ object GlutenConfig {
     .doc("set catalog cache expire time in seconds")
     .intConf
     .createWithDefault(600)
+
+  val ENABLE_ROLLUP_OPTIMIZATION = buildConf("spark.gluten.sql.columnar.backend.omni.rollupOptimization.enabled")
+    .internal()
+    .doc("enable or disable columnar rollupOptimization")
+    .booleanConf
+    .createWithDefault(true)
 }
