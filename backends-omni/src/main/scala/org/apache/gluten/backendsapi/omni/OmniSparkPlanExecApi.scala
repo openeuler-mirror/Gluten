@@ -333,7 +333,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   }
 
   /** Create broadcast relation for BroadcastExchangeExec */
-  override def createBroadcastRelation(
+ override def createBroadcastRelation(
       mode: BroadcastMode,
       child: SparkPlan,
       numOutputRows: SQLMetric,
@@ -354,12 +354,12 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
               nullRelationFlag = hashRelMode.isNullAware
             case _ =>
           }
-          new Iterator[Array[Byte]] {
+          new Iterator[OmniSerializerResult] {
             override def hasNext: Boolean = {
               iter.hasNext
             }
 
-            override def next(): Array[Byte] = {
+            override def next(): OmniSerializerResult = {
               val batch = iter.next()
               var index = 0
               // When nullRelationFlag is true, it means anti-join
@@ -377,18 +377,21 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
               }
               val vectors = transColBatchToOmniVecs(batch)
               val vecBatch = new VecBatch(vectors, batch.numRows())
-              numOutputRows += vecBatch.getRowCount
+
               val vecBatchSer = serializer.serialize(vecBatch)
-              dataSize += vecBatchSer.length
+
+              val result = OmniSerializerResult(vecBatch.getRowCount, vecBatchSer)
               // close omni vec
               vecBatch.releaseAllVectors()
               vecBatch.close()
-              vecBatchSer
+              result
             }
           }
       }
       .collect()
-    val relation = OmniColumnarBuildSideRelation(mode, child.output, input)
+    val relation = OmniColumnarBuildSideRelation(mode, child.output, input.map(_.getBatches))
+    dataSize.add(input.map(_.getBatches.length).sum)
+    numOutputRows.add(input.map(_.getRowNum).sum)
     if (dataSize.value >= BroadcastExchangeExec.MAX_BROADCAST_TABLE_BYTES) {
       throw new SparkException(
         s"Cannot broadcast the table that is larger than 8GB: ${dataSize.value >> 30} GB")
