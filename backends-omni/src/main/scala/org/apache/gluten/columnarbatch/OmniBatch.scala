@@ -17,7 +17,8 @@
 package org.apache.gluten.columnarbatch
 
 import org.apache.gluten.extension.columnar.transition.Convention
-import org.apache.gluten.execution.{OmniColumnarToRowExec, RowToOmniColumnarExec}
+import org.apache.gluten.execution.RowToOmniColumnarExec
+import org.apache.spark.sql.execution.OmniColumnarToRowExec
 
 object OmniBatch extends Convention.BatchType {
   override protected def registerTransitions(): Unit = {

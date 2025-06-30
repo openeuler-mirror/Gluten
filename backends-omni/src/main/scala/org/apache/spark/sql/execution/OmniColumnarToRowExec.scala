@@ -14,24 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.gluten.execution
+package org.apache.spark.sql.execution
 
+import nova.hetu.omniruntime.vector.Vec
 import org.apache.gluten.exception.{GlutenException, GlutenNotSupportException}
+import org.apache.gluten.execution.ColumnarToRowExecBase
 import org.apache.gluten.extension.ValidationResult
+import org.apache.gluten.utils.SparkMemoryUtils
+import org.apache.gluten.vectorized.OmniColumnVector
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, UnsafeProjection}
-import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types._
-import org.apache.gluten.utils.SparkMemoryUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
+import scala.collection.JavaConverters.asScalaIteratorConverter
 import scala.collection.mutable.ListBuffer
-import nova.hetu.omniruntime.vector.Vec
-import org.apache.gluten.vectorized.OmniColumnVector
-
-import scala.collection.JavaConverters._
 
 case class OmniColumnarToRowExec(child: SparkPlan) extends ColumnarToRowExecBase(child = child) {
 
@@ -72,13 +71,14 @@ case class OmniColumnarToRowExec(child: SparkPlan) extends ColumnarToRowExecBase
     // This avoids calling `output` in the RDD closure, so that we don't need to include the entire
     // plan (this) in the closure.
     val localOutput = this.output
-    child.executeColumnar().mapPartitions { batches =>
+    child.executeColumnar().mapPartitionsInternal { batches =>
       ColumnarBatchToInternalRow.convert(localOutput, batches, numOutputRows, numInputBatches, omniColumnarToRowTime, true)
     }
   }
 
   object ColumnarBatchToInternalRow {
-    final val NANOSECONDS  = java.util.concurrent.TimeUnit.NANOSECONDS
+    final val NANOSECONDS = java.util.concurrent.TimeUnit.NANOSECONDS
+
     def convert(output: Seq[Attribute], batches: Iterator[ColumnarBatch],
                 numOutputRows: SQLMetric, numInputBatches: SQLMetric,
                 rowToOmniColumnarTime: SQLMetric,
@@ -140,4 +140,3 @@ case class OmniColumnarToRowExec(child: SparkPlan) extends ColumnarToRowExecBase
   protected def withNewChildInternal(newChild: SparkPlan): OmniColumnarToRowExec =
     copy(child = newChild)
 }
-

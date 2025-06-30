@@ -211,7 +211,7 @@ case class WholeStageTransformer(child: SparkPlan, materializeInput: Boolean = f
 
   val sparkConf: SparkConf = sparkContext.getConf
 
-  val brSerializableHadoopConf = sparkContext.broadcast(new SerializableConfiguration(
+  lazy val brSerializableHadoopConf = sparkContext.broadcast(new SerializableConfiguration(
     sparkContext.hadoopConfiguration))
 
   val numaBindingInfo: GlutenNumaBindingInfo = GlutenConfig.get.numaBindingInfo
