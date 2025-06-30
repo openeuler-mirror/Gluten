@@ -468,6 +468,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
                 auto omniFilter = exprConverter->ToOmniExpr(substraitFilter, sourceDataTypes);
                 aggFilterExprs.emplace_back(omniFilter);
             }
+        } else {
+            aggFilterExprs.emplace_back(nullptr);
         }
 
         const auto &aggFunction = measure.measure();
