@@ -18,7 +18,7 @@
 namespace omniruntime {
 /// This class is used to convert the Substrait plan into Omni plan.
 using SortWithExprTuple =
-	std::tuple<std::vector<TypedExprPtr>, std::vector<TypedExprPtr>, std::vector<int32_t>, std::vector<int32_t>>;
+	std::tuple<std::vector<TypedExprPtr>, std::vector<int32_t>, std::vector<int32_t>>;
 class SubstraitToOmniPlanConverter {
 public:
     SubstraitToOmniPlanConverter(const std::unordered_map<std::string, std::string> &confMap = {},
@@ -146,6 +146,9 @@ public:
 
     SortWithExprTuple ProcessSortFieldWithExpr(
         const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortFields, const DataTypesPtr &inputType);
+
+    std::vector<TypedExprPtr> ProcessTopNSortPartitionKeys(
+        const ::substrait::extensions::AdvancedExtension &extension, const DataTypesPtr &inputType);
 
 private:
     /// Integrate Substrait emit feature. Here a given 'substrait::RelCommon'

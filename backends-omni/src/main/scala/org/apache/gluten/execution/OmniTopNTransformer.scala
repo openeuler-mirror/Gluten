@@ -20,11 +20,12 @@ import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.expression.{ConverterUtils, ExpressionConverter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.metrics.MetricsUpdater
-import org.apache.gluten.substrait.`type`.TypeBuilder
 import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.extensions.ExtensionBuilder
 import org.apache.gluten.substrait.rel.{RelBuilder, RelNode}
+import org.apache.gluten.substrait.`type`.TypeBuilder
 
+import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, Distribution, Partitioning, UnspecifiedDistribution}
 import org.apache.spark.sql.catalyst.util.truncatedString
@@ -40,7 +41,9 @@ case class OmniTopNTransformer(
     sortOrder: Seq[SortOrder],
     global: Boolean,
     child: SparkPlan,
-    isTopNSort: Boolean = false)
+    isTopNSort: Boolean = false,
+    isStrictTopN: Boolean = false,
+    partitionSpec: Seq[Expression] = Seq.empty[Expression])
   extends UnaryTransformSupport {
   override def output: Seq[Attribute] = child.output
   override def outputPartitioning: Partitioning = child.outputPartitioning
@@ -67,7 +70,7 @@ case class OmniTopNTransformer(
     val context = new SubstraitContext
     val operatorId = context.nextOperatorId(this.nodeName)
     val relNode =
-      getRelNode(context, operatorId, limit, sortOrder, child.output, null, validation = true)
+      getRelNode(context, operatorId, limit, partitionSpec, sortOrder, child.output, null, validation = true)
     doNativeValidation(context, relNode)
   }
 
@@ -79,10 +82,11 @@ case class OmniTopNTransformer(
         context,
         operatorId,
         limit,
+        partitionSpec,
         sortOrder,
         child.output,
         childCtx.root,
-        validation = true)
+        validation = false)
     TransformContext(child.output, relNode)
   }
 
@@ -90,6 +94,7 @@ case class OmniTopNTransformer(
       context: SubstraitContext,
       operatorId: Long,
       count: Long,
+      partitionSpec: Seq[Expression],
       sortOrder: Seq[SortOrder],
       inputAttributes: Seq[Attribute],
       input: RelNode,
@@ -106,13 +111,25 @@ case class OmniTopNTransformer(
         builder.setDirectionValue(SortExecTransformer.transformSortDirection(order))
         builder.build()
     }
+
+    // Partition By Expressions
+    val partitionsExpressions = partitionSpec
+      .map(
+        ExpressionConverter
+          .replaceWithExpressionTransformer(_, attributeSeq = child.output)
+          .doTransform(args))
+      .asJava
+    val projectRel = RelBuilder.makeProjectRel(null, partitionsExpressions, context, operatorId)
+
     if (!validation) {
-      RelBuilder.makeTopNRel(input, count, sortFieldList.asJava, context, operatorId)
+      val extensionNode = ExtensionBuilder.makeAdvancedExtension(
+        genTopNParameters(isTopNSort),
+        BackendsApiManager.getTransformerApiInstance.packPBMessage(projectRel.toProtobuf))
+      RelBuilder.makeTopNRel(input, count, sortFieldList.asJava, extensionNode, context, operatorId)
     } else {
       val inputTypeNodes =
         inputAttributes.map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable)).asJava
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
-        genTopNParameters(isTopNSort),
         BackendsApiManager.getTransformerApiInstance.packPBMessage(
           TypeBuilder.makeStruct(false, inputTypeNodes).toProtobuf))
       RelBuilder.makeTopNRel(input, count, sortFieldList.asJava, extensionNode, context, operatorId)
@@ -125,6 +142,11 @@ case class OmniTopNTransformer(
       topNParametersStr.append("isTopNSort=").append(1).append("\n")
     } else {
       topNParametersStr.append("isTopNSort=").append(0).append("\n")
+    }
+    if (isStrictTopN) {
+      topNParametersStr.append("isStrictTopN=").append(1).append("\n")
+    } else {
+      topNParametersStr.append("isStrictTopN=").append(0).append("\n")
     }
     val message = StringValue
       .newBuilder()

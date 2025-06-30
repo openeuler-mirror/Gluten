@@ -29,7 +29,7 @@ import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.RewriteAQEShuffleRead
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy}
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort}
 import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, OmniRewriteSubqueryBroadcast, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, ShuffleJoinStrategy}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, RewriteAQEShuffleRead}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
@@ -100,6 +100,7 @@ object OmniRuleApi {
     injector.injectPostTransform(_ => CollapseProjectExecTransformer)
 //    injector.injectPostTransform(c => FlushableHashAggregateRule.apply(c.session))
     injector.injectPostTransform(c => InsertTransitions.create(c.outputsColumnar, OmniBatch))
+    injector.injectPostTransform(_ => RewriteTopNSort())
     // Gluten columnar: Fallback policies.
     injector.injectFallbackPolicy(
       c => ExpandFallbackPolicy(c.ac.isAdaptiveContext(), c.ac.originalPlan()))

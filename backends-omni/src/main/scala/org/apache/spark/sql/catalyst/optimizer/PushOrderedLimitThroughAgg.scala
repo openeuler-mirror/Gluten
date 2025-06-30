@@ -98,7 +98,8 @@ case class PushOrderedLimitThroughAgg(session: SparkSession)
                           validSortOrder,
                           global = false,
                           child = partialAgg,
-                          isTopNSort = true);
+                          isTopNSort = true,
+                          partitionSpec = validSortOrder.take(0));
                       } else {
                         val newSortExec = SortExec(
                           validSortOrder,

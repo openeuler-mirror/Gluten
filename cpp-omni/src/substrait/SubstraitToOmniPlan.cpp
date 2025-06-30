@@ -206,6 +206,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
         auto fieldExpr = dynamic_cast<const FieldExpr *>(expression);
         partitionCols.emplace_back(fieldExpr->colVal);
     }
+
     std::vector<int32_t> preGroupedCols;
     int32_t preSortedChannelPreFix = 0;
     int32_t expectedPositionsCount = 10000;
@@ -619,14 +620,19 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FetchRel
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel &topNRel)
 {
     auto childNode = ConvertSingleInput<::substrait::TopNRel>(topNRel);
-    auto [partitionKeys, sortingKeys, sortingOrders, sortNullFirsts] =
+    auto [sortingKeys, sortingOrders, sortNullFirsts] =
         ProcessSortFieldWithExpr(topNRel.sorts(), childNode->OutputType());
+    auto partitionKeys = ProcessTopNSortPartitionKeys(topNRel.advanced_extension(), childNode->OutputType());
     if (topNRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(topNRel.advanced_extension(), "isTopNSort=")) {
         // Create TopNSort node
+        bool isStrictTopN = false;
+        if (SubstraitParser::ConfigSetInOptimization(topNRel.advanced_extension(), "isStrictTopN=")) {
+            isStrictTopN = true;
+        }
         return std::make_shared<TopNSortNode>(
             NextPlanNodeId(), partitionKeys, sortingKeys, sortingOrders,
-            sortNullFirsts, static_cast<int32_t>(topNRel.n()), false, childNode);
+            sortNullFirsts, static_cast<int32_t>(topNRel.n()), isStrictTopN, childNode);
     } else {
         return std::make_shared<TopNNode>(
             NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, static_cast<int32_t>(topNRel.n()), childNode);
@@ -741,7 +747,6 @@ SubstraitToOmniPlanConverter::ProcessSortField(
 SortWithExprTuple SubstraitToOmniPlanConverter::ProcessSortFieldWithExpr(
     const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortFields, const DataTypesPtr &inputType)
 {
-    std::vector<TypedExprPtr> partitionKeys;
     std::vector<TypedExprPtr> sortingKeys;
     std::vector<int32_t> sortingOrders;
     std::vector<int32_t> sortNullFirsts;
@@ -753,7 +758,30 @@ SortWithExprTuple SubstraitToOmniPlanConverter::ProcessSortFieldWithExpr(
         sortingOrders.emplace_back(sortOrder.IsAscending());
         sortNullFirsts.emplace_back(sortOrder.IsNullsFirst());
     }
-    return {partitionKeys, sortingKeys, sortingOrders, sortNullFirsts};
+
+    return {sortingKeys, sortingOrders, sortNullFirsts};
+}
+
+std::vector<TypedExprPtr> SubstraitToOmniPlanConverter::ProcessTopNSortPartitionKeys(
+    const ::substrait::extensions::AdvancedExtension &extension, const DataTypesPtr &inputType)
+{
+    std::vector<TypedExprPtr> partitionKeys;
+    ::substrait::Rel rel;
+    if (extension.has_enhancement()) {
+        const auto &enhancement = extension.enhancement();
+        enhancement.UnpackTo(&rel);
+    }
+
+    if (rel.has_project()) {
+        auto projectRel = rel.project();
+        const auto &exprs = projectRel.expressions();
+        for (const auto& expr : exprs) {
+            auto expression = exprConverter->ToOmniExpr(expr, inputType);
+            partitionKeys.emplace_back(expression);
+        }
+    }
+
+    return partitionKeys;
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ProcessEmit(

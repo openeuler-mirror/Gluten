@@ -513,6 +513,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableColumnarTopNSort: Boolean = conf.getConf(ENABLE_COLUMNAR_TOP_N_SORT)
 
+  def topNSortThreshold: Int = conf.getConf(TOP_N_THRESHOLD)
+
   def enableShareBroadcastJoinHashTable: Boolean = conf.getConf(ENABLE_SHARE_BROADCAST_JOIN_HASH_TABLE)
 
   def enableShareBroadcastJoinNestedTable: Boolean = conf.getConf(ENABLE_SHARE_BROADCAST_JOIN_NESTED_TABLE)
@@ -2422,6 +2424,11 @@ object GlutenConfig {
     .doc("enable or disable columnar TopNSort")
     .booleanConf
     .createWithDefault(true)
+
+  val TOP_N_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.topN.threshold")
+    .internal()
+    .intConf
+    .createWithDefault(100)
 
   val ENABLE_SHARE_BROADCAST_JOIN_HASH_TABLE = buildConf("spark.gluten.sql.columnar.backend.omni.broadcastJoin.sharehashtable")
     .internal()
