@@ -82,8 +82,8 @@ std::string SubstraitToOmniPlanConverter::FindFuncSpec(uint64_t id)
 }
 
 void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression &joinExpression,
-    std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
-    std::vector<const ::substrait::Expression::FieldReference *> &rightExprs)
+    std::vector<const ::substrait::Expression *> &leftExprs,
+    std::vector<const ::substrait::Expression *> &rightExprs)
 {
     std::stack<const ::substrait::Expression *> expressions;
     expressions.push(&joinExpression);
@@ -99,11 +99,8 @@ void SubstraitToOmniPlanConverter::ExtractJoinKeys(const ::substrait::Expression
                 expressions.push(&args[1].value());
                 expressions.push(&args[0].value());
             } else if (funcName == "EQUAL") {
-                OMNI_CHECK(std::all_of(args.cbegin(), args.cend(), [](const ::substrait::FunctionArgument& arg) {
-                    return arg.value().has_selection();
-                    }), "args is not all selection.");
-                leftExprs.push_back(&args[0].value().selection());
-                rightExprs.push_back(&args[1].value().selection());
+                leftExprs.push_back(&args[0].value());
+                rightExprs.push_back(&args[1].value());
             } else {
                 OMNI_THROW("Substrait Error", "Join condition {} not supported.", funcName);
             }
@@ -336,24 +333,22 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
     }
 
     // extract join keys from join expression
-    std::vector<const ::substrait::Expression::FieldReference *> leftExprs;
-    std::vector<const ::substrait::Expression::FieldReference *> rightExprs;
+    std::vector<const ::substrait::Expression *> leftExprs;
+    std::vector<const ::substrait::Expression *> rightExprs;
     ExtractJoinKeys(joinRel.expression(), leftExprs, rightExprs);
     OMNI_CHECK(leftExprs.size() == rightExprs.size(), "Left expr size must equal to right expr size");
     size_t numKeys = leftExprs.size();
 
-    std::vector<std::shared_ptr<const FieldExpr>> leftKeys;
-    std::vector<std::shared_ptr<const FieldExpr>> rightKeys;
+    std::vector<TypedExprPtr> leftKeys;
+    std::vector<TypedExprPtr> rightKeys;
     leftKeys.reserve(numKeys);
     rightKeys.reserve(numKeys);
     auto inputType = getJoinInputType(leftNode, rightNode);
     for (size_t i = 0; i < numKeys; ++i) {
-        auto leftKey = dynamic_cast<const FieldExpr *>(
-            exprConverter->ToOmniExpr(*leftExprs[i], leftNode->OutputType()));
-        auto rightKey = dynamic_cast<const FieldExpr *>(
-            exprConverter->ToOmniExpr(*rightExprs[i], rightNode->OutputType()));
-        leftKeys.emplace_back(std::make_shared<const FieldExpr>(leftKey->colVal, leftKey->dataType));
-        rightKeys.emplace_back(std::make_shared<const FieldExpr>(rightKey->colVal, rightKey->dataType));
+        auto leftKey = exprConverter->ToOmniExpr(*leftExprs[i], leftNode->OutputType());
+        auto rightKey = exprConverter->ToOmniExpr(*rightExprs[i], rightNode->OutputType());
+        leftKeys.emplace_back(leftKey);
+        rightKeys.emplace_back(rightKey);
     }
 
     TypedExprPtr filter = nullptr;
@@ -366,7 +361,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
     if (joinRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
         // Create MergeJoinNode node
-        return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, buildSide, leftKeys, rightKeys,
+        return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, omniruntime::op::BuildSide::OMNI_BUILD_RIGHT, leftKeys, rightKeys,
             filter, leftNode, rightNode, leftOutputType, rightOutputType);
     } else {
         auto isBroadcast = joinRel.has_advanced_extension() &&

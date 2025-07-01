@@ -121,8 +121,8 @@ public:
     /// must only include the following operations: AND, ==, field references.
     /// Field references correspond to the direct output order of the data.
     void ExtractJoinKeys(const ::substrait::Expression &joinExpression,
-        std::vector<const ::substrait::Expression::FieldReference *> &leftExprs,
-        std::vector<const ::substrait::Expression::FieldReference *> &rightExprs);
+        std::vector<const ::substrait::Expression *> &leftExprs,
+        std::vector<const ::substrait::Expression *> &rightExprs);
 
     // /// Get aggregation step from AggregateRel.
     // /// If returned Partial, it means the aggregate generated can leveraging flushing and abandoning like

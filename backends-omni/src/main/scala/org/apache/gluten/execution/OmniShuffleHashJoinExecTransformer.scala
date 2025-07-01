@@ -3,6 +3,7 @@ package org.apache.gluten.execution
 import com.google.protobuf.{Any, StringValue}
 import io.substrait.proto.JoinRel
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.substrait.{JoinParams, SubstraitContext}
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
@@ -47,6 +48,54 @@ case class OmniShuffledHashJoinExecTransformer(
   private lazy val isBuildLeft: Int = buildSide match {
     case BuildLeft => 1
     case BuildRight => 0
+  }
+
+  override protected def doTransform(context: SubstraitContext): TransformContext = {
+    val streamedPlanContext = streamedPlan.asInstanceOf[TransformSupport].transform(context)
+    val (inputStreamedRelNode, inputStreamedOutput) =
+      (streamedPlanContext.root, streamedPlanContext.outputAttributes)
+    
+    val buildPlanContext = buildPlan.asInstanceOf[TransformSupport].transform(context)
+    val (inputBuildRelNode, inputBuildOutput) =
+      (buildPlanContext.root, buildPlanContext.outputAttributes)
+
+    // Get the operator id of this Join.
+    val operatorId = context.nextOperatorId(this.nodeName)
+
+    val joinParams = new JoinParams
+    joinParams.streamPreProjectionNeeded = false
+    joinParams.buildPreProjectionNeeded = false
+    joinParams.isBHJ = false
+
+    if (condition.isDefined) {
+      joinParams.isWithCondition = true
+    }
+
+    val joinRel = OmniJoinUtils.createJoinRel(
+      streamedKeyExprs,
+      buildKeyExprs,
+      condition,
+      substraitJoinType,
+      needSwitchChildren,
+      joinType,
+      genJoinParameters(),
+      inputStreamedRelNode,
+      inputBuildRelNode,
+      inputStreamedOutput,
+      inputBuildOutput,
+      context,
+      operatorId
+    )
+
+    context.registerJoinParam(operatorId, joinParams)
+
+    JoinUtils.createTransformContext(
+      needSwitchChildren,
+      output,
+      joinRel,
+      inputStreamedOutput,
+      inputBuildOutput
+    )
   }
 
   override def genJoinParameters(): Any = {

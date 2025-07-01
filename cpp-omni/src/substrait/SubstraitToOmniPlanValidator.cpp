@@ -832,8 +832,8 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::JoinRel &joinRel)
     auto rowType = std::make_shared<DataTypes>(std::move(types));
 
     if (joinRel.has_expression()) {
-        std::vector<const ::substrait::Expression::FieldReference *> leftExprs;
-        std::vector<const ::substrait::Expression::FieldReference *> rightExprs;
+        std::vector<const ::substrait::Expression *> leftExprs;
+        std::vector<const ::substrait::Expression *> rightExprs;
         planConverter.ExtractJoinKeys(joinRel.expression(), leftExprs, rightExprs);
     }
 
