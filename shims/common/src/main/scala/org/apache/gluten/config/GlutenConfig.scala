@@ -127,6 +127,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def scanFileSchemeValidationEnabled: Boolean =
     conf.getConf(VELOX_SCAN_FILE_SCHEME_VALIDATION_ENABLED)
 
+  def enabledVecPredicateFilter: Boolean =
+    conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER)
+
   // Whether to use GlutenShuffleManager (experimental).
   def isUseGlutenShuffleManager: Boolean =
     conf

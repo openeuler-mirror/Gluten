@@ -553,15 +553,10 @@ public class OrcColumnarBatchScanReader {
     }
 
     private String buildVecPredicateCondition(Filter filterPredicate) {
-        try {
-            Map<String, Integer> nameToIndex = IntStream.range(0, includedColumns.size())
-                    .boxed()
-                    .collect(Collectors.toMap(includedColumns::get, i -> i));
-            return buildPredicateCondition(filterPredicate, nameToIndex).reduce().toString();
-        } catch (Exception e) {
-            LOGGER.info("Unable to build vec predicate because " + e.getMessage());
-            return null;
-        }
+        Map<String, Integer> nameToIndex = IntStream.range(0, includedColumns.size())
+                .boxed()
+                .collect(Collectors.toMap(includedColumns::get, i -> i));
+        return buildPredicateCondition(filterPredicate, nameToIndex).reduce().toString();
     }
 
     private PredicateCondition buildPredicateCondition(Filter filterPredicate, Map<String, Integer> nameToIndex) {
