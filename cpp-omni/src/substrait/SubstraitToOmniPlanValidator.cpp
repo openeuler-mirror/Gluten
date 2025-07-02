@@ -495,8 +495,12 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
                 case ::substrait::Expression::RexTypeCase::kSelection:
                 case ::substrait::Expression::RexTypeCase::kLiteral:
                     break;
+                case ::substrait::Expression::RexTypeCase::kScalarFunction: {
+                    if (!ValidateScalarFunction(arg.value().scalar_function(), rowType)) return false;
+                    break;
+                }
                 default:
-                    LOG_VALIDATION_MSG("Only field or constant is supported in window functions.");
+                    LOG_VALIDATION_MSG("Only field, constant, scalar function is supported in window functions.");
                     return false;
             }
         }
