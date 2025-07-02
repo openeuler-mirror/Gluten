@@ -30,7 +30,7 @@ import org.apache.spark.sql.execution.aggregate.HashAggregateExec
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
 import org.apache.spark.sql.execution.joins.ShuffledHashJoinExec
 
-case class DedupLeftSemiJoinAQE(session: SparkSession) extends Rule[SparkPlan] {
+case class DedupLeftSemiJoin(session: SparkSession) extends Rule[SparkPlan] {
   private def matchDedupLeftSemiJoinCondition(shj: ShuffledHashJoinExec): Boolean = {
     val conf = GlutenConfig.get
     val enableDedupLeftSemiJoin: Boolean = conf.enableDedupLeftSemiJoin

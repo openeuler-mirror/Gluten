@@ -29,8 +29,7 @@ import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.RewriteAQEShuffleRead
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort}
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoinAQE, MergeSubqueryFilters, OmniRewriteSubqueryBroadcast, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, ShuffleJoinStrategy}
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, RewriteAQEShuffleRead}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
 
@@ -67,7 +66,7 @@ object OmniRuleApi {
     injector.injectPreTransform(c => FallbackOnANSIMode.apply(c.session))
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
-    injector.injectPreTransform(c => DedupLeftSemiJoinAQE(c.session))
+    injector.injectPreTransform(c => DedupLeftSemiJoin(c.session))
     injector.injectPreTransform(c => PushOrderedLimitThroughAgg(c.session))
     injector.injectPreTransform(_ => OmniRewriteSubqueryBroadcast())
     injector.injectPreTransform(_ => RewriteAQEShuffleRead())
@@ -101,6 +100,7 @@ object OmniRuleApi {
 //    injector.injectPostTransform(c => FlushableHashAggregateRule.apply(c.session))
     injector.injectPostTransform(c => InsertTransitions.create(c.outputsColumnar, OmniBatch))
     injector.injectPostTransform(_ => RewriteTopNSort())
+    injector.injectPostTransform(_ => CombineWindowSort())
     // Gluten columnar: Fallback policies.
     injector.injectFallbackPolicy(
       c => ExpandFallbackPolicy(c.ac.isAdaptiveContext(), c.ac.originalPlan()))
