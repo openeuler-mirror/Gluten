@@ -16,25 +16,21 @@
  */
 package org.apache.gluten.execution
 
+import com.google.protobuf.Any
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
-import org.apache.gluten.substrait.{AggregationParams, SubstraitContext}
 import org.apache.gluten.substrait.expression.{AggregateFunctionNode, ExpressionBuilder, ExpressionNode}
 import org.apache.gluten.substrait.extensions.{AdvancedExtensionNode, ExtensionBuilder}
 import org.apache.gluten.substrait.rel.{RelBuilder, RelNode}
-
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
+import org.apache.gluten.substrait.{AggregationParams, SubstraitContext}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.types._
 
-import com.google.protobuf.Any
-import com.google.protobuf.StringValue
-
 import java.util.{ArrayList => JArrayList, List => JList}
-
 import scala.collection.JavaConverters._
 
 case class OmniRollUpOptimizeTransformer(
@@ -344,10 +340,6 @@ case class OmniRollUpOptimizeTransformer(
     } else {
       null
     }
-    val message = StringValue
-      .newBuilder()
-      .setValue(expandNode.toString)
-      .build()
     val anyRel = Any.pack(expandNode.toProtobuf)
     ExtensionBuilder.makeAdvancedExtension(anyRel, enhancement)
   }

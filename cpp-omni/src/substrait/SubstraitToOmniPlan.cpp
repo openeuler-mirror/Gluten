@@ -433,7 +433,6 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
             ::substrait::Rel expandRel;
             optimization.UnpackTo(&expandRel);
             expandPlanNode = ToOmniPlan(expandRel);
-            childNode = expandPlanNode;
         }
     }
     const auto &sourceDataTypes = childNode->OutputType();
@@ -548,13 +547,16 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
     }
 
     outputType = std::make_shared<DataTypes>(std::move(nodeOutputTypes));
-
+    auto aggregationNode = std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys,
+        sourceDataTypes, outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial,
+        isStatisticalAggregate, outputType, childNode);
     if (expandPlanNode) {
-        childNode = expandPlanNode->Sources()[0];
+        if (auto expandNode = std::dynamic_pointer_cast<const ExpandNode>(expandPlanNode)) {
+            return std::make_shared<GroupingNode>(NextPlanNodeId(), expandNode, aggregationNode);
+        }
+        OMNI_THROW("RUNTIME_ERROR:", "Not support expandNode!");
     }
-    return std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys, sourceDataTypes,
-        outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial, isStatisticalAggregate,
-        outputType, childNode, expandPlanNode);
+    return aggregationNode;
 }
 
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectRel &projectRel)
