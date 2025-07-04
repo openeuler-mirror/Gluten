@@ -67,7 +67,9 @@ class OmniTestSettings extends BackendTestSettings {
     .exclude("Gluten - string split function with negative limit")
   enableSuite[GlutenBloomFilterAggregateQuerySuite]
     // fallback might_contain, the input argument binary is not same with vanilla spark
+    // Not support binary type
     .exclude("Test NULL inputs for might_contain")
+    .exclude("Test bloom_filter_agg filter fallback")
   enableSuite[GlutenBloomFilterAggregateQuerySuiteCGOff]
   enableSuite[GlutenDataSourceV2DataFrameSessionCatalogSuite]
   enableSuite[GlutenDataSourceV2DataFrameSuite]
@@ -78,6 +80,8 @@ class OmniTestSettings extends BackendTestSettings {
     // Rewrite the following test in GlutenDataSourceV2Suite.
     .exclude("partitioning reporting")
   enableSuite[GlutenDeleteFromTableSuite]
+    // Not support structType
+    .exclude("delete with conditions on nested columns")
   enableSuite[GlutenFileDataSourceV2FallBackSuite]
     // DISABLED: GLUTEN-4893 Vanilla UT checks scan operator by exactly matching the class type
     .exclude("Fallback Parquet V2 to V1")
@@ -92,13 +96,17 @@ class OmniTestSettings extends BackendTestSettings {
   enableSuite[GlutenTableCapabilityCheckSuite]
   enableSuite[GlutenWriteDistributionAndOrderingSuite]
   enableSuite[GlutenWriterColumnarRulesSuite]
-
+    // Not support write
+    .exclude("writing to noop")
   enableSuite[GlutenQueryCompilationErrorsDSv2Suite]
   enableSuite[GlutenQueryCompilationErrorsSuite]
   enableSuite[GlutenQueryExecutionErrorsSuite]
     // NEW SUITE: disable as it expects exception which doesn't happen when offloaded to gluten
     .exclude(
       "INCONSISTENT_BEHAVIOR_CROSS_VERSION: compatibility with Spark 2.4/3.2 in reading/writing dates")
+    // Not support structType
+    .exclude("UNSUPPORTED_FEATURE: unsupported types (map and struct) in lit()")
+    .exclude("UNSUPPORTED_FEATURE: unsupported pivot operations")
   enableSuite[GlutenQueryParsingErrorsSuite]
   enableSuite[GlutenAnsiCastSuiteWithAnsiModeOff]
     .exclude(
@@ -702,6 +710,7 @@ class OmniTestSettings extends BackendTestSettings {
   enableSuite[GlutenParquetColumnIndexSuite]
     // Rewrite by just removing test timestamp.
     .exclude("test reading unaligned pages - test all types")
+    .exclude("reading unaligned pages - struct type")
   enableSuite[GlutenParquetCompressionCodecPrecedenceSuite]
   enableSuite[GlutenParquetDeltaByteArrayEncodingSuite]
   enableSuite[GlutenParquetDeltaEncodingInteger]
@@ -753,6 +762,8 @@ class OmniTestSettings extends BackendTestSettings {
     .exclude("SPARK-35640: read binary as timestamp should throw schema incompatible error")
     // Exception msg.
     .exclude("SPARK-35640: int as long should throw schema incompatible error")
+    // Not support structType
+    .exclude("vectorized reader: struct")
   enableSuite[GlutenParquetV1PartitionDiscoverySuite]
   enableSuite[GlutenParquetV2PartitionDiscoverySuite]
   enableSuite[GlutenParquetProtobufCompatibilitySuite]
@@ -902,6 +913,13 @@ class OmniTestSettings extends BackendTestSettings {
 
   enableSuite[GlutenExistenceJoinSuite]
   enableSuite[GlutenInnerJoinSuite]
+    // Unsupport StructType
+    .exclude("SPARK-15822 - test structs as keys using ShuffledHashJoin (build=left) (whole-stage-codegen off)")
+    .exclude("SPARK-15822 - test structs as keys using ShuffledHashJoin (build=left) (whole-stage-codegen on)")
+    .exclude("SPARK-15822 - test structs as keys using ShuffledHashJoin (build=right) (whole-stage-codegen off)")
+    .exclude("SPARK-15822 - test structs as keys using ShuffledHashJoin (build=right) (whole-stage-codegen on)")
+    .exclude("SPARK-15822 - test structs as keys using SortMergeJoin (whole-stage-codegen off)")
+    .exclude("SPARK-15822 - test structs as keys using SortMergeJoin (whole-stage-codegen on)")
   enableSuite[GlutenOuterJoinSuite]
   enableSuite[FallbackStrategiesSuite]
   enableSuite[GlutenBroadcastExchangeSuite]
@@ -1001,6 +1019,15 @@ class OmniTestSettings extends BackendTestSettings {
         " before using it"
     )
   enableSuite[GlutenDataFrameAsOfJoinSuite]
+    // Unsupport StructType
+    .exclude("as-of join - simple")
+    .exclude("as-of join - usingColumns")
+    .exclude("as-of join - usingColumns, left outer")
+    .exclude("as-of join - tolerance = 1")
+    .exclude("as-of join - allowExactMatches = false")
+    .exclude("as-of join - direction = \"forward\"")
+    .exclude("as-of join - direction = \"nearest\"")
+    .exclude("as-of join - self")
   enableSuite[GlutenDataFrameComplexTypeSuite]
   enableSuite[GlutenDataFrameFunctionsSuite]
     // blocked by Omni-5768
@@ -1026,6 +1053,20 @@ class OmniTestSettings extends BackendTestSettings {
     // Result depends on the implementation for nondeterministic expression rand.
     // Not really an issue.
     .exclude("SPARK-10740: handle nondeterministic expressions correctly for set operations")
+    // Unsupport StructType
+    .exclude(
+      "SPARK-32376: Make unionByName null-filling behavior work with struct columns - simple")
+    .exclude(
+      "SPARK-32376: Make unionByName null-filling behavior work with struct columns - nested")
+    .exclude("SPARK-32376: Make unionByName null-filling behavior work with struct columns - case-sensitive cases")
+    .exclude(
+      "SPARK-32376: Make unionByName null-filling behavior work with struct columns - edge case")
+    .exclude("SPARK-35290: Make unionByName null-filling behavior work with struct columns - sorting edge case")
+    .exclude(
+      "SPARK-32376: Make unionByName null-filling behavior work with struct columns - deep expr")
+    .exclude("SPARK-35756: unionByName support struct having same col names but different sequence")
+    .exclude("SPARK-36673: Only merge nullability for Unions of struct")
+    .exclude("SPARK-36797: Union should resolve nested columns as top-level columns")
   enableSuite[GlutenDataFrameStatSuite]
   enableSuite[GlutenDataFrameSuite]
     // Rewrite these tests because it checks Spark's physical operators.
@@ -1051,6 +1092,17 @@ class OmniTestSettings extends BackendTestSettings {
     // We can enable the below test for spark 3.4 and higher versions.
     .excludeGlutenTest("describe")
   enableSuite[GlutenDataFrameTimeWindowingSuite]
+    // Unsupport StructType
+    .exclude("simple tumbling window with record at window start")
+    .exclude("SPARK-21590: tumbling window using negative start time")
+    .exclude("tumbling window groupBy statement")
+    .exclude("tumbling window groupBy statement with startTime")
+    .exclude("SPARK-21590: tumbling window groupBy statement with negative startTime")
+    .exclude("tumbling window with multi-column projection")
+    .exclude("sliding window grouping")
+    .exclude("time window joins")
+    .exclude("negative timestamps")
+    .exclude("millisecond precision sliding windows")
   enableSuite[GlutenDataFrameTungstenSuite]
   enableSuite[GlutenDataFrameWindowFunctionsSuite]
   enableSuite[GlutenDataFrameWindowFramesSuite]
