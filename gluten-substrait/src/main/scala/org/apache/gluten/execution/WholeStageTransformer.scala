@@ -211,8 +211,8 @@ case class WholeStageTransformer(child: SparkPlan, materializeInput: Boolean = f
 
   val sparkConf: SparkConf = sparkContext.getConf
 
-  lazy val brSerializableHadoopConf = sparkContext.broadcast(new SerializableConfiguration(
-    sparkContext.hadoopConfiguration))
+  @transient lazy val serializableHadoopConf = new SerializableConfiguration(
+    sparkContext.hadoopConfiguration)
 
   val numaBindingInfo: GlutenNumaBindingInfo = GlutenConfig.get.numaBindingInfo
 
@@ -385,7 +385,7 @@ case class WholeStageTransformer(child: SparkPlan, materializeInput: Boolean = f
                 val newPaths = ViewFileSystemUtils.convertViewfsToHdfs(
                   splitInfo.getPaths.asScala.toSeq,
                   viewfsToHdfsCache,
-                  brSerializableHadoopConf.value.value)
+                  serializableHadoopConf.value)
                 splitInfo.setPaths(newPaths.asJava)
             }
         }

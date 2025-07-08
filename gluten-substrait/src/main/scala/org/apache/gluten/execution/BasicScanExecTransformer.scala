@@ -78,7 +78,7 @@ trait BasicScanExecTransformer extends LeafTransformSupport with BaseDataSource 
           getProperties))
   }
 
-  val serializableHadoopConf: SerializableConfiguration = new SerializableConfiguration(
+  @transient lazy val serializableHadoopConf: SerializableConfiguration = new SerializableConfiguration(
     sparkContext.hadoopConfiguration)
 
   override protected def doValidateInternal(): ValidationResult = {
