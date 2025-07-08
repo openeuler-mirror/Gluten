@@ -21,8 +21,6 @@ import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
 import org.apache.gluten.expression.{ExpressionMappings, ExpressionTransformer, GenericExpressionTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
-import org.apache.gluten.utils.OmniAdaptorUtil.transColBatchToOmniVecs
-
 import org.apache.spark.{ShuffleDependency, SparkException}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
@@ -34,16 +32,13 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
-import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, FileSourceScanExec, GenerateExec, OmniColumnarShuffleExchangeExec, SparkPlan}
+import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, FileSourceScanExec, GenerateExec, OmniColumnarShuffleExchangeExec, OmniExecUtil, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{FileFormat, HadoopFsRelation}
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
-import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode}
+import org.apache.spark.sql.execution.joins.{BuildSideRelation}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
-
-import nova.hetu.omniruntime.vector.VecBatch
-import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
 import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
@@ -339,55 +334,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       numOutputRows: SQLMetric,
       dataSize: SQLMetric): BuildSideRelation = {
 
-    val sparkContext = child.session.sparkContext
-    val nullBatchCount = sparkContext.longAccumulator("nullBatchCount")
-
-    var nullRelationFlag = false
-
-    val input = child
-      .executeColumnar()
-      .mapPartitions {
-        iter =>
-          val serializer = VecBatchSerializerFactory.create()
-          mode match {
-            case hashRelMode: HashedRelationBroadcastMode =>
-              nullRelationFlag = hashRelMode.isNullAware
-            case _ =>
-          }
-          new Iterator[OmniSerializerResult] {
-            override def hasNext: Boolean = {
-              iter.hasNext
-            }
-
-            override def next(): OmniSerializerResult = {
-              val batch = iter.next()
-              var index = 0
-              // When nullRelationFlag is true, it means anti-join
-              // Only one column of data is involved in the anti-
-              if (nullRelationFlag && batch.numCols() > 0) {
-                val vec = batch.column(0)
-                if (vec.hasNull) {
-                  try {
-                    nullBatchCount.add(1)
-                  } catch {
-                    case e: Exception =>
-                      throw new SparkException(s"compute null BatchCount error : ${e.getMessage}.")
-                  }
-                }
-              }
-              val vectors = transColBatchToOmniVecs(batch)
-              val vecBatch = new VecBatch(vectors, batch.numRows())
-
-              val vecBatchSer = serializer.serialize(vecBatch)
-
-              val result = OmniSerializerResult(vecBatch.getRowCount, vecBatchSer)
-              // close omni vec
-              vecBatch.releaseAllVectors()
-              vecBatch.close()
-              result
-            }
-          }
-      }
+    val input = OmniExecUtil.buildSideRDD(mode, child)
       .collect()
     val relation = OmniColumnarBuildSideRelation(mode, child.output, input.map(_.getBatches))
     dataSize.add(input.map(_.getBatches.length).sum)
