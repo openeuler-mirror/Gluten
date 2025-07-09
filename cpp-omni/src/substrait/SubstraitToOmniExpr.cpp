@@ -131,6 +131,13 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             }
             auto literalExpr = static_cast<LiteralExpr *>(secondArg);
         }
+        if (funcName == "mm3hash" || funcName == "xxhash64") {
+            auto *func = new FuncExpr(funcName, {args[0], args[args.size() - 1]}, outputType);
+            for (int32_t i = 1; i < args.size() - 1; i++) {
+                func = new FuncExpr(funcName, {args[i], func}, outputType);
+            }
+            return func;
+        }
         // check the signature matches
         std::vector<DataTypeId> argTypes(args.size());
         std::transform(args.begin(), args.end(), argTypes.begin(),
@@ -278,27 +285,30 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
 }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
-    const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType)
+    const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType, const int32_t index)
 {
-    auto ifs = substraitIfThen.ifs();
-    if (ifs.size() > 1) {
-        throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR, "IF size >1");
-    }
-    Expr *cond = ToOmniExpr(ifs.Get(0).if_(), inputType);
+    const auto& ifs = substraitIfThen.ifs();
+    Expr *cond = ToOmniExpr(ifs.Get(index).if_(), inputType);
     if (cond == nullptr) {
         return nullptr;
     }
-    Expr *trueExpr = (ToOmniExpr(ifs.Get(0).then(), inputType));
+    Expr *trueExpr = ToOmniExpr(ifs.Get(index).then(), inputType);
     if (trueExpr == nullptr) {
         delete cond;
         return nullptr;
     }
-    Expr *falseExpr = (ToOmniExpr(substraitIfThen.else_(), inputType));
+    Expr *falseExpr = nullptr;
+    if (index == ifs.size() - 1) {
+        falseExpr = ToOmniExpr(substraitIfThen.else_(), inputType);
+    } else {
+        falseExpr = ToOmniExpr(substraitIfThen, inputType, index + 1);
+    }
     if (falseExpr == nullptr) {
         delete cond;
         delete trueExpr;
         return nullptr;
     }
+
     if (TypeUtil::IsStringType(falseExpr->GetReturnTypeId()) && falseExpr->GetType() == ExprType::LITERAL_E &&
         static_cast<LiteralExpr *>(falseExpr)->stringVal->compare("null") == 0) {
         delete falseExpr;

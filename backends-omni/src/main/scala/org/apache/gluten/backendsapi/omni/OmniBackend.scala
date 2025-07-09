@@ -28,8 +28,8 @@ import org.apache.gluten.substrait.rel.LocalFilesNode
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.gluten.validate.NativePlanValidationInfo
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator
-import org.apache.spark.sql.catalyst.expressions.Attribute
-import org.apache.spark.sql.catalyst.expressions.NamedExpression
+import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Average, Count, First, Max, Min, StddevSamp, Sum}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, Literal, NamedExpression, Rank, RowNumber, WindowExpression}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution.SparkPlan
@@ -40,6 +40,7 @@ import org.apache.spark.util.SerializableConfiguration
 
 import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.Seq
+import scala.collection.mutable.ArrayBuffer
 
 class OmniBackend extends SubstraitBackend {
 //  import OmniBackend._
@@ -125,7 +126,32 @@ object OmniBackendSettings extends BackendSettingsApi {
 
   override def supportExpandExec(): Boolean = true
 
-  override def supportWindowExec(windowFunctions: Seq[NamedExpression]): Boolean = true
+  override def supportWindowExec(windowFunctions: Seq[NamedExpression]): Boolean = {
+    var isSupport: Boolean  = true
+    windowFunctions.foreach {
+      windowExpr =>
+        val aliasExpr = windowExpr.asInstanceOf[Alias]
+        val wExpression = aliasExpr.child.asInstanceOf[WindowExpression]
+        wExpression.windowFunction match {
+          case RowNumber() | Rank(_) =>
+          case AggregateExpression(aggFunction, _, false, _, _) =>
+            aggFunction match {
+              case _: Sum =>
+              case _: Max =>
+              case _: Average =>
+              case _: Min =>
+              case _: StddevSamp =>
+              case Count(Literal(1, IntegerType) :: Nil) | Count(ArrayBuffer(Literal(1, IntegerType))) =>
+              case Count(_) if aggFunction.children.size == 1 =>
+              case _: First =>
+              case _ => isSupport = false
+            }
+          case _ =>
+            isSupport = false
+        }
+    }
+    isSupport
+  }
 
   override def transformCheckOverflow: Boolean = false
 
@@ -188,9 +214,8 @@ class OmniValidatorApi extends ValidatorApi {
       case struct: StructType =>
         struct.fields.foreach {
           f =>
-            val reason = doSchemaValidate(f.dataType)
-            if (reason.isDefined) {
-              return reason
+            if (!isPrimitiveType(f.dataType)) {
+              return Some(s"Schema / data type not supported: $schema")
             }
         }
         None

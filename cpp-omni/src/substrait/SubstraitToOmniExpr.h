@@ -54,7 +54,7 @@ public:
     TypedExprPtr ToOmniExpr(const ::substrait::Expression &substraitExpr, const DataTypesPtr &inputType);
 
     /// Convert Substrait IfThen into switch or if expression.
-    TypedExprPtr ToOmniExpr(const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType);
+    TypedExprPtr ToOmniExpr(const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType, const int32_t index = 0);
 
     TypedExprPtr UnfoldConcatStringFunc(std::vector<Expr *> args, DataTypePtr outputType);
 

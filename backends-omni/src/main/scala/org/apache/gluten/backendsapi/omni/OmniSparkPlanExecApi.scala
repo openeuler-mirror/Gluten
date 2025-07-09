@@ -19,7 +19,7 @@ package org.apache.gluten.backendsapi.omni
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.{ExpressionMappings, ExpressionTransformer, GenericExpressionTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer}
+import org.apache.gluten.expression.{ExpressionConverter, ExpressionMappings, ExpressionTransformer, GenericExpressionTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer}
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.spark.{ShuffleDependency, SparkException}
 import org.apache.spark.rdd.RDD
@@ -27,7 +27,7 @@ import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Cast, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, HashExpression, Like, NamedExpression, PosExplode, PythonUDF, UnixTimestamp}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Cast, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, HashExpression, Like, Md5, NamedExpression, PosExplode, PythonUDF, UnixTimestamp}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
@@ -37,10 +37,11 @@ import org.apache.spark.sql.execution.datasources.{FileFormat, HadoopFsRelation}
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BuildSideRelation}
 import org.apache.spark.sql.execution.metric.SQLMetric
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{BinaryType, StringType, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
+import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
@@ -111,6 +112,30 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       initialInputBufferOffset,
       resultExpressions,
       child)
+  }
+
+  override def extraExpressionConverter(
+      substraitExprName: String,
+      expr: Expression,
+      attributeSeq: Seq[Attribute]): Option[ExpressionTransformer] = expr match {
+    case md5: Md5 =>
+      md5.child match {
+        case Cast(inputExpression, outputType, _, _) if outputType == BinaryType =>
+          inputExpression match {
+            case AttributeReference(_, dataType, _, _) if dataType == StringType =>
+              val newCast = Cast(inputExpression, md5.dataType)
+              Some(GenericExpressionTransformer(
+                substraitExprName,
+                newCast.children.map(ExpressionConverter.replaceWithExpressionTransformer(_, attributeSeq)),
+                newCast
+              ))
+            case _ =>
+              throw new GlutenNotSupportException(s"Not supported: $expr.")
+          }
+        case _ =>
+          throw new GlutenNotSupportException(s"Not supported: $expr.")
+      }
+    case _ => None
   }
 
   /** Generate HashAggregateExecPullOutHelper */
@@ -386,7 +411,9 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       requiredChildOutput: Seq[Attribute],
       outer: Boolean,
       generatorOutput: Seq[Attribute],
-      child: SparkPlan): GenerateExecTransformerBase = null
+      child: SparkPlan): GenerateExecTransformerBase = {
+    OmniGenerateExecTransformer(generator, requiredChildOutput, outer, generatorOutput, child)
+  }
 
   override def genPreProjectForGenerate(generate: GenerateExec): SparkPlan = null
 

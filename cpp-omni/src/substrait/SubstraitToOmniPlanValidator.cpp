@@ -233,10 +233,6 @@ bool SubstraitToOmniPlanValidator::ValidateIfThen(
     const ::substrait::Expression_IfThen &ifThen, const DataTypesPtr &inputType)
 {
     auto ifs = ifThen.ifs();
-    if (ifs.size() > 1) {
-        LOG_VALIDATION_MSG("IFS size > 1");
-        return false;
-    }
     for (const auto &subIfThen : ifs) {
         if (!ValidateExpression(subIfThen.if_(), inputType) || !ValidateExpression(subIfThen.then(), inputType)) {
             return false;
@@ -906,7 +902,60 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::CrossRel &crossRe
 
 bool SubstraitToOmniPlanValidator::Validate(const ::substrait::AggregateRel &aggRel)
 {
-    // impl the expr check here
+    if (aggRel.has_input() && !Validate(aggRel.input())) {
+        LOG_VALIDATION_MSG("Input validation fails in AggregateRel.");
+        return false;
+    }
+
+    // Get and Validate the input types from extension.
+    if (!aggRel.has_advanced_extension()) {
+        LOG_VALIDATION_MSG("Input types are expected in AggregateRel.");
+        return false;
+    }
+    const auto &extension = aggRel.advanced_extension();
+    DataTypePtr inputRowType;
+    std::vector<DataTypePtr> types;
+    if (!ParseOmniType(extension, inputRowType) || !FlattenSingleLevel(inputRowType, types)) {
+        LOG_VALIDATION_MSG("Validation failed for input types in AggregateRel.");
+        return false;
+    }
+
+    auto rowType = std::make_shared<DataTypes>(std::move(types));
+
+    // Validate aggregate function expressions.
+    ExprVerifier ev;
+    for (const auto &smea : aggRel.measures()) {
+        // Validate the filter expression
+        if (smea.has_filter()) {
+            const ::substrait::Expression& substraitFilter = smea.filter();
+            if (substraitFilter.ByteSizeLong() > 0) {
+                if (!ValidateExpression(substraitFilter, rowType)) {
+                    LOG_VALIDATION_MSG("substraitFilter validation fail!");
+                    return false;
+                }
+                auto omniFilter = exprConverter_->ToOmniExpr(substraitFilter, rowType);
+                if (!ev.VisitExpr(*omniFilter)) {
+                    LOG_VALIDATION_MSG("omniFilter validation fail!");
+                    return false;
+                }
+            }
+        }
+
+        // Validate arg expression
+        const auto &aggFunction = smea.measure();
+        for (const auto &arg : aggFunction.arguments()) {
+            const auto& argValue = arg.value();
+            if (!ValidateExpression(argValue, rowType)) {
+                LOG_VALIDATION_MSG("substrait aggFunExpression validation fail!");
+                return false;
+            }
+            auto omniExpr = exprConverter_->ToOmniExpr(argValue, rowType);
+            if (!ev.VisitExpr(*omniExpr)) {
+                LOG_VALIDATION_MSG("aggFunExpression validation fail!");
+                return false;
+            }
+        }
+    }
     return true;
 }
 
