@@ -35,16 +35,16 @@ object OmniExecUtil extends Logging {
     val sparkContext = newChild.session.sparkContext
     val nullBatchCount = sparkContext.longAccumulator("nullBatchCount")
     var nullRelationFlag = false
-    val serializer = VecBatchSerializerFactory.create()
-    mode match {
-      case hashRelMode: HashedRelationBroadcastMode =>
-         nullRelationFlag = hashRelMode.isNullAware
-      case _ =>
-    }
     newChild
       .executeColumnar()
       .mapPartitionsInternal {
         iter =>
+          val serializer = VecBatchSerializerFactory.create()
+          mode match {
+            case hashRelMode: HashedRelationBroadcastMode =>
+              nullRelationFlag = hashRelMode.isNullAware
+            case _ =>
+          }
           new Iterator[OmniSerializerResult] {
             override def hasNext: Boolean = {
               iter.hasNext
