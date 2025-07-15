@@ -48,6 +48,7 @@ object OmniRuleApi {
   private def injectSpark(injector: SparkInjector): Unit = {
     // Inject the regular Spark rules directly.
     injector.injectQueryStagePrepRule(FallbackBroadcastHashJoinPrepQueryStage.apply)
+    injector.injectQueryStagePrepRule(DedupLeftSemiJoin.apply)
     injector.injectPlannerStrategy(_ => ShuffleJoinStrategy)
 //    injector.injectOptimizerRule(CollectRewriteRule.apply)
 //    injector.injectOptimizerRule(HLLRewriteRule.apply)
@@ -66,7 +67,6 @@ object OmniRuleApi {
     injector.injectPreTransform(c => FallbackOnANSIMode.apply(c.session))
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
-    injector.injectPreTransform(c => DedupLeftSemiJoin(c.session))
     injector.injectPreTransform(c => PushOrderedLimitThroughAgg(c.session))
     injector.injectPreTransform(_ => OmniRewriteSubqueryBroadcast())
     injector.injectPreTransform(_ => RewriteAQEShuffleRead())

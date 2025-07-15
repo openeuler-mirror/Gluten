@@ -84,8 +84,8 @@ object ShuffleJoinStrategy extends Strategy
                     planLater(right)))
               }.getOrElse(Nil)
           } else {
-            var leftBuildable = false
-            var rightBuildable = false
+            var leftBuildable = canBuildShuffledHashJoinLeft(joinType)
+            var rightBuildable = canBuildShuffledHashJoinRight(joinType)
             getBuildSide(
               leftBuildable,
               rightBuildable,
