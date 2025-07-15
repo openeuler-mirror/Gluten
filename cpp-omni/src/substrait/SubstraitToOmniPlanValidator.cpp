@@ -950,6 +950,10 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::AggregateRel &agg
                 return false;
             }
             auto omniExpr = exprConverter_->ToOmniExpr(argValue, rowType);
+            if (dynamic_cast<const LiteralExpr *>(omniExpr) != nullptr ||
+                dynamic_cast<const FieldExpr *>(omniExpr) != nullptr) {
+                continue;
+            }
             if (!ev.VisitExpr(*omniExpr)) {
                 LOG_VALIDATION_MSG("aggFunExpression validation fail!");
                 return false;
