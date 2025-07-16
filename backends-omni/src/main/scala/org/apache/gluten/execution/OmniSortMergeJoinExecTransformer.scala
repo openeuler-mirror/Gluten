@@ -1,5 +1,6 @@
 package org.apache.gluten.execution
 
+import io.substrait.proto.JoinRel
 import org.apache.gluten.extension.ValidationResult
 import org.apache.spark.sql.catalyst.expressions.{Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.JoinType
@@ -25,6 +26,11 @@ case class OmniSortMergeJoinExecTransformer(
     projectList) {
     
   override protected def doValidateInternal(): ValidationResult = {
+    if (substraitJoinType == JoinRel.JoinType.JOIN_TYPE_RIGHT) {
+      return ValidationResult
+        .failed(s"SMJ unsupported join type of $joinType for substrait: $substraitJoinType")
+    }
+
     super.doValidateInternal()
   }
 
