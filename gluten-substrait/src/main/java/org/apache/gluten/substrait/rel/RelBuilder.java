@@ -57,8 +57,11 @@ public class RelBuilder {
       RelNode input,
       List<ExpressionNode> expressionNodes,
       SubstraitContext context,
-      Long operatorId) {
-    context.registerRelToOperator(operatorId);
+      Long operatorId,
+      boolean needRegisterRel2Operator) {
+    if (needRegisterRel2Operator) {
+        context.registerRelToOperator(operatorId);
+    }
     return new ProjectRelNode(input, expressionNodes, -1);
   }
 

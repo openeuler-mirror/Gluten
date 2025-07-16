@@ -119,7 +119,7 @@ case class OmniTopNTransformer(
           .replaceWithExpressionTransformer(_, attributeSeq = child.output)
           .doTransform(args))
       .asJava
-    val projectRel = RelBuilder.makeProjectRel(null, partitionsExpressions, context, operatorId)
+    val projectRel = RelBuilder.makeProjectRel(null, partitionsExpressions, context, operatorId, false)
 
     if (!validation) {
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(

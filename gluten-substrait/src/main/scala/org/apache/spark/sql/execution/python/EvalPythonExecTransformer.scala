@@ -79,7 +79,7 @@ case class EvalPythonExecTransformer(
           ExpressionConverter.replaceWithExpressionTransformer(udf, child.output).doTransform(args))
       })
 
-    val relNode = RelBuilder.makeProjectRel(null, expressionNodes, context, operatorId)
+    val relNode = RelBuilder.makeProjectRel(null, expressionNodes, context, operatorId, true)
 
     doNativeValidation(context, relNode)
   }
@@ -110,7 +110,7 @@ case class EvalPythonExecTransformer(
       inputAttributes: Seq[Attribute],
       validation: Boolean): RelNode = {
     if (!validation) {
-      RelBuilder.makeProjectRel(input, expressionNodes, context, operatorId)
+      RelBuilder.makeProjectRel(input, expressionNodes, context, operatorId, true)
     } else {
       // Use a extension node to send the input types through Substrait plan for validation.
       val inputTypeNodeList = new JArrayList[TypeNode]()
