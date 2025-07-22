@@ -17,11 +17,26 @@
 package org.apache.spark.sql.execution.datasources.parquet
 
 import org.apache.spark.sql._
+import java.util.UUID
+import java.io.{File, FileNotFoundException, InputStream}
+import java.nio.file.{Files, StandardCopyOption}
 
 /** A test suite that tests basic Parquet I/O. */
 class GlutenParquetIOSuite extends ParquetIOSuite with GlutenSQLTestsBaseTrait {
   override protected def testFile(fileName: String): String = {
-    getWorkspaceFilePath("sql", "core", "src", "test", "resources").toString + "/" + fileName
+    val in: InputStream = getClass.getClassLoader.getResourceAsStream(fileName)
+    if (in == null) throw new FileNotFoundException(fileName)
+
+    try {
+      val tempDir = System.getProperty("java.io.tmpdir")
+      val tempFile = new File(tempDir, s"spark-test-${UUID.randomUUID()}-${new File(fileName).getName}")
+
+      Files.copy(in, tempFile.toPath, StandardCopyOption.REPLACE_EXISTING)
+      tempFile.deleteOnExit()
+      tempFile.getAbsolutePath
+    } finally {
+      in.close()
+    }
   }
 
   override protected def readResourceParquetFile(name: String): DataFrame = {

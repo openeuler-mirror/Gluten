@@ -41,15 +41,15 @@ abstract class GlutenTextSuite
   override protected def dataSourceFormat = "text"
 
   testGluten("reading text file") {
-    verifyFrame(spark.read.format("text").load(testFile))
+    verifyFrame(spark.read.format("text").load(testFile("test-data/text-suite.txt")))
   }
 
   testGluten("SQLContext.read.text() API") {
-    verifyFrame(spark.read.text(testFile))
+    verifyFrame(spark.read.text(testFile("test-data/text-suite.txt")))
   }
 
   testGluten("SPARK-12562 verify write.text() can handle column name beyond `value`") {
-    val df = spark.read.text(testFile).withColumnRenamed("value", "adwrasdf")
+    val df = spark.read.text(testFile("test-data/text-suite.txt")).withColumnRenamed("value", "adwrasdf")
 
     val tempFile = Utils.createTempDir()
     tempFile.delete()
@@ -74,7 +74,7 @@ abstract class GlutenTextSuite
   }
 
   testGluten("reading partitioned data using read.textFile()") {
-    val ds = spark.read.textFile(textPartitioned)
+    val ds = spark.read.textFile(testFile("test-data/text-partitioned"))
     val data = ds.collect()
 
     assert(ds.schema == new StructType().add("value", StringType))
@@ -82,7 +82,7 @@ abstract class GlutenTextSuite
   }
 
   testGluten("support for partitioned reading using read.text()") {
-    val df = spark.read.text(textPartitioned)
+    val df = spark.read.text(testFile("test-data/text-partitioned"))
     val data = df.filter("year = '2015'").select("value").collect()
 
     assert(data(0) == Row("2015-test"))
@@ -90,7 +90,7 @@ abstract class GlutenTextSuite
   }
 
   testGluten("SPARK-13503 Support to specify the option for compression codec for TEXT") {
-    val testDf = spark.read.text(testFile)
+    val testDf = spark.read.text(testFile("test-data/text-suite.txt"))
     val extensionNameMap = Map("bzip2" -> ".bz2", "deflate" -> ".deflate", "gzip" -> ".gz")
     extensionNameMap.foreach {
       case (codecName, extension) =>
@@ -121,7 +121,7 @@ abstract class GlutenTextSuite
     )
     withTempDir {
       dir =>
-        val testDf = spark.read.text(testFile)
+        val testDf = spark.read.text(testFile("test-data/text-suite.txt"))
         val tempDirPath = dir.getAbsolutePath
         testDf.write
           .option("compression", "none")
@@ -144,7 +144,7 @@ abstract class GlutenTextSuite
     )
     withTempDir {
       dir =>
-        val testDf = spark.read.text(testFile)
+        val testDf = spark.read.text(testFile("test-data/text-suite.txt"))
         val tempDirPath = dir.getAbsolutePath
         testDf.write
           .option("CoMpReSsIoN", "none")
@@ -232,24 +232,21 @@ abstract class GlutenTextSuite
   }
   // scalastyle:on nonascii
 
-  // Rewrite for file locating.
-  private def testFile: String = {
-    getWorkspaceFilePath(
-      "sql",
-      "core",
-      "src",
-      "test",
-      "resources").toString + "/test-data/text-suite.txt"
-  }
+  // Get for file locating.
+  override protected def testFile(fileName: String): String = {
+    val in: InputStream = getClass.getClassLoader.getResourceAsStream(fileName)
+    if (in == null) throw new FileNotFoundException(fileName)
 
-  // Added for file locating.
-  private def textPartitioned: String = {
-    getWorkspaceFilePath(
-      "sql",
-      "core",
-      "src",
-      "test",
-      "resources").toString + "/test-data/text-partitioned"
+    try {
+      val tempDir = System.getProperty("java.io.tmpdir")
+      val tempFile = new File(tempDir, s"spark-test-${UUID.randomUUID()}-${new File(fileName).getName}")
+
+      Files.copy(in, tempFile.toPath, StandardCopyOption.REPLACE_EXISTING)
+      tempFile.deleteOnExit()
+      tempFile.getAbsolutePath
+    } finally {
+      in.close()
+    }
   }
 
   /** Verifies data and schema. */

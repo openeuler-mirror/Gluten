@@ -32,6 +32,9 @@ import org.apache.spark.sql.internal.SQLConf.ParquetOutputTimestampType.INT96
 import org.apache.spark.sql.types._
 import org.apache.spark.tags.ExtendedSQLTest
 import org.apache.spark.util.Utils
+import java.util.UUID
+import java.io.{File, FileNotFoundException, InputStream}
+import java.nio.file.{Files, StandardCopyOption}
 
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.filter2.predicate.{FilterApi, FilterPredicate}
@@ -62,9 +65,24 @@ abstract class GlutenParquetFilterSuite extends ParquetFilterSuite with GlutenSQ
     checkFilterPredicate(predicate, filterClass, Seq(Row(expected)))(df)
   }
 
+  override protected def testFile(fileName: String): String = {
+    val in: InputStream = getClass.getClassLoader.getResourceAsStream(fileName)
+    if (in == null) throw new FileNotFoundException(fileName)
+
+    try {
+      val tempDir = System.getProperty("java.io.tmpdir")
+      val tempFile = new File(tempDir, s"spark-test-${UUID.randomUUID()}-${new File(fileName).getName}")
+
+      Files.copy(in, tempFile.toPath, StandardCopyOption.REPLACE_EXISTING)
+      tempFile.deleteOnExit()
+      tempFile.getAbsolutePath
+    } finally {
+      in.close()
+    }
+  }
+
   override protected def readResourceParquetFile(name: String): DataFrame = {
-    spark.read.parquet(
-      getWorkspaceFilePath("sql", "core", "src", "test", "resources").toString + "/" + name)
+    spark.read.parquet(testFile(name))
   }
 
   testGluten("filter pushdown - timestamp") {

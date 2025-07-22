@@ -19,12 +19,27 @@ package org.apache.spark.sql.execution.datasources.csv
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.GlutenSQLTestsBaseTrait
 import org.apache.spark.sql.internal.SQLConf
+import java.util.UUID
+import java.io.{File, FileNotFoundException, InputStream}
+import java.nio.file.{Files, StandardCopyOption}
 
 class GlutenCSVSuite extends CSVSuite with GlutenSQLTestsBaseTrait {
 
   /** Returns full path to the given file in the resource folder */
   override protected def testFile(fileName: String): String = {
-    getWorkspaceFilePath("sql", "core", "src", "test", "resources").toString + "/" + fileName
+    val in: InputStream = getClass.getClassLoader.getResourceAsStream(fileName)
+    if (in == null) throw new FileNotFoundException(fileName)
+
+    try {
+      val tempDir = System.getProperty("java.io.tmpdir")
+      val tempFile = new File(tempDir, s"spark-test-${UUID.randomUUID()}-${new File(fileName).getName}")
+
+      Files.copy(in, tempFile.toPath, StandardCopyOption.REPLACE_EXISTING)
+      tempFile.deleteOnExit()
+      tempFile.getAbsolutePath
+    } finally {
+      in.close()
+    }
   }
 }
 
