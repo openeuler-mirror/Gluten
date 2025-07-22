@@ -155,7 +155,7 @@ class OmniColumnarShuffleWriter[K, V](
       .add(
         System.nanoTime() - startTime - splitResult.getTotalSpillTime -
           splitResult.getTotalWriteTime - splitResult.getTotalComputePidTime)
-    dep.metrics("splitTime").add(splitResult.getTotalSpillTime)
+    dep.metrics("spillTime").add(splitResult.getTotalSpillTime)
     dep.metrics("bytesSpilled").add(splitResult.getTotalBytesSpilled)
     writeMetrics.incBytesWritten(splitResult.getTotalBytesWritten)
     writeMetrics.incWriteTime(splitResult.getTotalWriteTime + splitResult.getTotalSpillTime)
