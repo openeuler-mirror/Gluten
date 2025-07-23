@@ -170,7 +170,7 @@ case class FallbackBroadcastHashJoin(session: SparkSession) extends Rule[SparkPl
                   case BuildRight => bhj.right
                 }
 
-              if (!enableColumnarBroadcastJoin) {
+              if (!enableColumnarBroadcastJoin || FallbackTags.nonEmpty(bhj)) {
                 FallbackTags.add(
                   bhj,
                   "columnar BroadcastJoin is not enabled in BroadcastHashJoinExec")
@@ -207,7 +207,7 @@ case class FallbackBroadcastHashJoin(session: SparkSession) extends Rule[SparkPl
   }
 
   private def applyBNLJFallback(bnlj: BroadcastNestedLoopJoinExec) = {
-    if (!enableColumnarBroadcastNestedLoopJoin) {
+    if (!enableColumnarBroadcastNestedLoopJoin || FallbackTags.nonEmpty(bnlj)) {
       FallbackTags.add(bnlj, "columnar BroadcastJoin is not enabled in BroadcastNestedLoopJoinExec")
     }
 

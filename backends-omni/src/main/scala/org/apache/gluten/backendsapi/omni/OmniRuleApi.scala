@@ -30,7 +30,7 @@ import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.RewriteAQEShuffleRead
 import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast}
-import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, RewriteAQEShuffleRead}
+import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, RewriteAQEShuffleRead, OmniRewriteJoin}
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenFallbackReporter}
 
 class OmniRuleApi extends RuleApi {
@@ -47,6 +47,7 @@ class OmniRuleApi extends RuleApi {
 object OmniRuleApi {
   private def injectSpark(injector: SparkInjector): Unit = {
     // Inject the regular Spark rules directly.
+    injector.injectQueryStagePrepRule(FallbackMultiCodegens.apply)
     injector.injectQueryStagePrepRule(FallbackBroadcastHashJoinPrepQueryStage.apply)
     injector.injectQueryStagePrepRule(DedupLeftSemiJoin.apply)
     injector.injectPlannerStrategy(_ => ShuffleJoinStrategy)
@@ -65,6 +66,7 @@ object OmniRuleApi {
     injector.injectPreTransform(_ => RemoveTransitions)
     injector.injectPreTransform(_ => PushDownInputFileExpression.PreOffload)
     injector.injectPreTransform(c => FallbackOnANSIMode.apply(c.session))
+    injector.injectPreTransform(_ => OmniRewriteJoin())
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
     injector.injectPreTransform(c => PushOrderedLimitThroughAgg(c.session))
@@ -82,7 +84,6 @@ object OmniRuleApi {
       Seq(
         RewriteIn,
         RewriteMultiChildrenCount,
-        RewriteJoin,
         PullOutPostProject,
         ProjectColumnPruning)
     injector.injectTransform(
