@@ -248,7 +248,7 @@ case class OmniRollUpOptimizeTransformer(
       aggParams: AggregationParams,
       input: RelNode = null,
       validation: Boolean = false): RelNode = {
-    val originalInputAttributes = child.output
+    val originalInputAttributes = expandExecTransformer.output
     val aggRel = getAggRelInternal(
       context,
       originalInputAttributes,
