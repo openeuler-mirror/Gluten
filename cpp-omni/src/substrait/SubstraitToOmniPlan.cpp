@@ -358,11 +358,29 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
 
     auto [leftOutputType, rightOutputType] = getJoinOutputType(leftNode, rightNode);
 
+    uint32_t idx = 0;
+    std::shared_ptr<DataTypes> firstType;
+    std::shared_ptr<DataTypes> secondType;
+    auto exchangeTable = buildSide == omniruntime::op::BuildSide::OMNI_BUILD_LEFT;
+    if (exchangeTable) {
+        firstType = rightNode->OutputType();
+        secondType = leftNode->OutputType();
+    } else {
+        firstType = leftNode->OutputType();
+        secondType = rightNode->OutputType();
+    }
+
+    auto vector1 = firstType->Get();
+    auto vector2 = secondType->Get();
+    vector1.insert(vector1.end(), vector2.begin(), vector2.end());
+    auto ptr = std::make_shared<DataTypes>(vector1);
+    std::vector<omniruntime::TypedExprPtr> keys = ProcessTopNSortPartitionKeys(joinRel.advanced_extension(), ptr);
+
     if (joinRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
         // Create MergeJoinNode node
         return std::make_shared<MergeJoinNode>(NextPlanNodeId(), joinType, omniruntime::op::BuildSide::OMNI_BUILD_RIGHT, leftKeys, rightKeys,
-            filter, leftNode, rightNode, leftOutputType, rightOutputType);
+            filter, leftNode, rightNode, leftOutputType, rightOutputType, keys);
     } else {
         auto isBroadcast = joinRel.has_advanced_extension() &&
             SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isBHJ=");
@@ -370,7 +388,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
         // Create HashJoinNode node
         // FIX ME param isShuffle is not used, please delete.
         return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin, false,
-            leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType);
+            leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType, keys);
     }
 }
 

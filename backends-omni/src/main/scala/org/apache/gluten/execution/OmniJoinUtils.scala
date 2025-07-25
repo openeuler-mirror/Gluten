@@ -2,7 +2,12 @@ package org.apache.gluten.execution
 
 import com.google.protobuf.Any
 import io.substrait.proto.JoinRel
-import org.apache.gluten.execution.JoinUtils.createProjectRelPostJoinRel
+import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.expression.ExpressionTransformer
+import org.apache.spark.sql.catalyst.expressions.NamedExpression
+
+import scala.collection.JavaConverters.seqAsJavaListConverter
+import scala.collection.Seq
 import org.apache.gluten.expression.{AttributeReferenceTransformer, ExpressionConverter}
 import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.expression.ExpressionNode
@@ -44,11 +49,15 @@ object OmniJoinUtils {
 
   private def createJoinExtensionNode(
       joinParameters: Any,
-      output: Seq[Attribute]): AdvancedExtensionNode = {
+      output: RelNode): AdvancedExtensionNode = {
     // Use field [optimization] in a extension node
     // to send some join parameters through Substrait plan.
-    val enhancement = SubstraitUtil.createEnhancement(output)
-    ExtensionBuilder.makeAdvancedExtension(joinParameters, enhancement)
+    if (output == null) {
+      ExtensionBuilder.makeAdvancedExtension(joinParameters, null)
+    } else {
+      val enhancement = BackendsApiManager.getTransformerApiInstance.packPBMessage(output.toProtobuf)
+      ExtensionBuilder.makeAdvancedExtension(joinParameters, enhancement)
+    }
   }
 
   // scalastyle:off argcount
@@ -66,7 +75,9 @@ object OmniJoinUtils {
       inputBuildOutput: Seq[Attribute],
       substraitContext: SubstraitContext,
       operatorId: java.lang.Long,
-      validation: Boolean = false): RelNode = {
+      projectList: Seq[NamedExpression],
+      validation: Boolean = false
+      ): RelNode = {
     // scalastyle:on argcount
     // transform join keys.
     val (streamedKeys, streamedRelNode, streamedOutput) = transformKeys(
@@ -103,6 +114,28 @@ object OmniJoinUtils {
         SubstraitUtil.toSubstraitExpression(_, streamedOutput ++ buildOutput, substraitContext)
       }
 
+    val args = substraitContext.registeredFunction
+    var attributeSeq: Seq[Attribute] = null
+    if (exchangeTable) {
+      attributeSeq = buildOutput ++ streamedOutput
+    } else {
+      attributeSeq = streamedOutput ++ buildOutput
+    }
+    var relNode: RelNode = null
+    if (projectList != null) {
+      val columnarProjExprs: Seq[ExpressionTransformer] = ExpressionConverter
+        .replaceWithExpressionTransformer(projectList, attributeSeq)
+      val projExprNodeList = columnarProjExprs.map(_.doTransform(args)).asJava
+
+      relNode = RelBuilder.makeProjectRel(
+        null,
+        projExprNodeList,
+        substraitContext,
+        operatorId,
+        false
+      )
+    }
+
     // Create JoinRel.
     val joinRel = RelBuilder.makeJoinRel(
       streamedRelNode,
@@ -110,22 +143,11 @@ object OmniJoinUtils {
       substraitJoinType,
       joinExpressionNode,
       postJoinFilter.orNull,
-      createJoinExtensionNode(joinParameters, streamedOutput ++ buildOutput),
+      createJoinExtensionNode(joinParameters, relNode),
       substraitContext,
       operatorId
     )
 
-    createProjectRelPostJoinRel(
-      exchangeTable,
-      joinType,
-      inputStreamedOutput,
-      inputBuildOutput,
-      substraitContext,
-      operatorId,
-      joinRel,
-      streamedOutput,
-      buildOutput,
-      validation
-    )
+    joinRel
   }
 }

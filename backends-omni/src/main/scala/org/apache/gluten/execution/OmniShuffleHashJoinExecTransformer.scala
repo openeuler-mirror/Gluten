@@ -4,10 +4,12 @@ import com.google.protobuf.{Any, StringValue}
 import io.substrait.proto.JoinRel
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.substrait.{JoinParams, SubstraitContext}
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.execution.SparkPlan
+
+import scala.collection.Seq
 
 case class OmniShuffledHashJoinExecTransformer(
     leftKeys: Seq[Expression], 
@@ -17,7 +19,8 @@ case class OmniShuffledHashJoinExecTransformer(
     condition: Option[Expression], 
     left: SparkPlan, 
     right: SparkPlan, 
-    isSkewJoin: Boolean)
+    isSkewJoin: Boolean,
+    projectList: Seq[NamedExpression])
   extends ShuffledHashJoinExecTransformerBase(
     leftKeys, 
     rightKeys, 
@@ -84,7 +87,8 @@ case class OmniShuffledHashJoinExecTransformer(
       inputStreamedOutput,
       inputBuildOutput,
       context,
-      operatorId
+      operatorId,
+      projectList
     )
 
     context.registerJoinParam(operatorId, joinParams)
@@ -96,6 +100,14 @@ case class OmniShuffledHashJoinExecTransformer(
       inputStreamedOutput,
       inputBuildOutput
     )
+  }
+
+  override def output: Seq[Attribute] = {
+    if (projectList == null) {
+      super.output
+    } else {
+      projectList.map(f => f.toAttribute)
+    }
   }
 
   override def genJoinParameters(): Any = {

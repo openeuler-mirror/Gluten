@@ -6,12 +6,14 @@ import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.{JoinParams, SubstraitContext}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.joins.BuildSideRelation
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.Seq
 
 case class OmniBroadcastHashJoinExecTransformer(
     leftKeys: Seq[Expression], 
@@ -21,7 +23,8 @@ case class OmniBroadcastHashJoinExecTransformer(
     condition: Option[Expression], 
     left: SparkPlan, 
     right: SparkPlan, 
-    isNullAwareAntiJoin: Boolean)
+    isNullAwareAntiJoin: Boolean,
+    projectList: Seq[NamedExpression]              )
   extends BroadcastHashJoinExecTransformerBase(
     leftKeys, 
     rightKeys, 
@@ -96,7 +99,8 @@ case class OmniBroadcastHashJoinExecTransformer(
       inputStreamedOutput,
       inputBuildOutput,
       context,
-      operatorId
+      operatorId,
+      projectList
     )
 
     context.registerJoinParam(operatorId, joinParams)
@@ -108,6 +112,14 @@ case class OmniBroadcastHashJoinExecTransformer(
       inputStreamedOutput,
       inputBuildOutput
     )
+  }
+
+  override def output: Seq[Attribute] = {
+    if (projectList == null) {
+      super.output
+    } else {
+      projectList.map(f => f.toAttribute)
+    }
   }
 
   override def genJoinParameters(): Any = {

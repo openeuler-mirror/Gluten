@@ -177,7 +177,8 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       condition, 
       left, 
       right, 
-      isSkewJoin
+      isSkewJoin,
+      null
     )
   }
 
@@ -199,7 +200,8 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       condition,
       left,
       right,
-      isNullAwareAntiJoin
+      isNullAwareAntiJoin,
+      null
     )
   }
 
