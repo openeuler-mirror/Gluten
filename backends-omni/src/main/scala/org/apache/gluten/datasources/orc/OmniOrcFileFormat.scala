@@ -105,6 +105,13 @@ class OmniOrcFileFormat extends FileFormat with DataSourceRegister with Serializ
     }
   }
 
+  override def isSplitable(
+      sparkSession: SparkSession,
+      options: Map[String, String],
+      path: Path): Boolean = {
+    true
+  }
+
   override def prepareWrite(
                              sparkSession: SparkSession,
                              job: Job,
