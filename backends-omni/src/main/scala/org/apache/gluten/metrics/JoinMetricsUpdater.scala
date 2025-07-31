@@ -18,17 +18,12 @@ trait JoinMetricsUpdater extends MetricsUpdater {
 abstract class JoinMetricsUpdaterBase(val metrics: Map[String, SQLMetric]) 
   extends JoinMetricsUpdater {
   val numOutputRows: SQLMetric = metrics("numOutputRows")
-  val numOutputVectors: SQLMetric = metrics("numOutputVectorBatches")
   val numOutputBytes: SQLMetric = metrics("numOutputBytes")
 
   final override def updateJoinMetrics(
     joinMetrics: util.ArrayList[OperatorMetrics], 
     singleMetrics: SingleMetric, 
     joinParams: JoinParams): Unit = {
-    val postProjectMetrics = joinMetrics.remove(0);
-    numOutputRows += postProjectMetrics.getNumOutputRows
-    numOutputVectors += postProjectMetrics.getNumOutputVecBatches
-    numOutputBytes += postProjectMetrics.getNumOutputBytes
 
     updateJoinMetricsInternal(joinMetrics, joinParams)
   }
@@ -56,14 +51,6 @@ class HashJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     joinMetrics: util.ArrayList[OperatorMetrics], 
     joinParams: JoinParams): Unit = {
     var idx = 0;
-    // hashBuild
-    val hashBuildMetrics = joinMetrics.get(idx)
-    hashBuildInputRows += hashBuildMetrics.getBuildInputRows
-    hashBuildNumInputVecBatches += hashBuildMetrics.getBuildNumInputVecBatches
-    hashBuildAddInputTime += hashBuildMetrics.getBuildAddInputTime
-    hashBuildGetOutputTime += hashBuildMetrics.getBuildGetOutputTime
-
-    idx += 1
     // lookUpJoin
     val hashProbeMetrics = joinMetrics.get(idx);
     lookUpJoinInputRows += hashProbeMetrics.getLookupInputRows
@@ -72,6 +59,15 @@ class HashJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     lookUpJoinNumOutputVecBatches += hashProbeMetrics.getLookupNumOutputVecBatches
     lookUpJoinAddInputTime += hashProbeMetrics.getLookupAddInputTime
     lookUpJoinGetOutputTime += hashProbeMetrics.getLookupGetOutputTime
+
+    idx += 1
+    // hashBuild
+    val hashBuildMetrics = joinMetrics.get(idx)
+    hashBuildInputRows += hashBuildMetrics.getBuildInputRows
+    hashBuildNumInputVecBatches += hashBuildMetrics.getBuildNumInputVecBatches
+    hashBuildAddInputTime += hashBuildMetrics.getBuildAddInputTime
+    hashBuildGetOutputTime += hashBuildMetrics.getBuildGetOutputTime
+
 
     if (TaskResources.inSparkTask()) {
       SparkMetricsUtil.incMemoryBytesSpilled(
@@ -107,7 +103,6 @@ class SortMergeJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     val numInputVectorBatches: SQLMetric = metrics("numInputVectorBatches")
     val numInputRows: SQLMetric = metrics("numInputRows")
     val numInputBytes: SQLMetric = metrics("numInputBytes")
-
 
     val idx = 0
     val operatorMetrics = joinMetrics.get(idx)
