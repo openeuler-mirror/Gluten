@@ -140,6 +140,9 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ExpandRe
             } else if (projectExpr.has_literal()) {
                 auto expression = exprConverter->ToOmniExpr(projectExpr.literal());
                 projectExprs.emplace_back(expression);
+            } else if (projectExpr.has_scalar_function()) {
+                auto expression = exprConverter->ToOmniExpr(projectExpr.scalar_function(), inputType);
+                projectExprs.emplace_back(expression);
             } else {
                 OMNI_THROW("Substrait error:", "The project in Expand Operator only support field or literal.");
             }

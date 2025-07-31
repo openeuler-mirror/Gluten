@@ -406,6 +406,9 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ExpandRel &expand
                 switch (typeCase) {
                     case ::substrait::Expression::RexTypeCase::kSelection:
                     case ::substrait::Expression::RexTypeCase::kLiteral:
+                    case ::substrait::Expression::RexTypeCase::kScalarFunction: {
+                        if (!ValidateScalarFunction(projectExpr.scalar_function(), rowType)) return false;
+                    }
                         break;
                     default:
                         LOG_VALIDATION_MSG("Only field or literal is supported in project of ExpandRel.");
