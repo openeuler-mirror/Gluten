@@ -187,9 +187,9 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "dataSize" -> SQLMetrics.createSizeMetric(sparkContext, "data size"),
       "bytesSpilled" -> SQLMetrics.createSizeMetric(sparkContext, "shuffle bytes spilled"),
-      "splitTime" -> SQLMetrics.createTimingMetric(sparkContext, "totaltime_split"),
-      "spillTime" -> SQLMetrics.createTimingMetric(sparkContext, "shuffle spill time"),
-      "compressTime" -> SQLMetrics.createTimingMetric(sparkContext, "totaltime_compress"),
+      "splitTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "totaltime_split"),
+      "spillTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "shuffle spill time"),
+      "compressTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "totaltime_compress"),
       "avgReadBatchNumRows" -> SQLMetrics
         .createAverageMetric(sparkContext, "avg read batch num rows"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
