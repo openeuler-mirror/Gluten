@@ -444,9 +444,9 @@ bool ValidateBoundType(::substrait::Expression_WindowFunction_Bound boundType)
         case ::substrait::Expression_WindowFunction_Bound::kUnboundedFollowing:
         case ::substrait::Expression_WindowFunction_Bound::kUnboundedPreceding:
         case ::substrait::Expression_WindowFunction_Bound::kCurrentRow:
+            break;
         case ::substrait::Expression_WindowFunction_Bound::kFollowing:
         case ::substrait::Expression_WindowFunction_Bound::kPreceding:
-            break;
         default:
             return false;
     }
