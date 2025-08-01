@@ -537,6 +537,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableJoinReorderEnhance: Boolean = conf.getConf(ENABLE_JOIN_REORDER_ENHANCE)
 
+  def joinOutputStringTypeCost: Int = conf.getConf(JOIN_OUTPUT_STRING_COST_ESTIMATE)
+
   def enableRewriteSelfJoinInInPredicate: Boolean = conf.getConf(ENABLE_REWRITE_SELF_JOIN_IN_IN_PREDICATE)
 
   def combineJoinedAggregatesEnabled: Boolean = conf.getConf(COMBINE_JOINED_AGGREGATES_ENABLED)
@@ -2450,6 +2452,12 @@ object GlutenConfig {
     .doc("enable or disable join reorder enhance")
     .booleanConf
     .createWithDefault(true)
+
+  val JOIN_OUTPUT_STRING_COST_ESTIMATE = buildConf("spark.omni.sql.columnar.join.reorder.stringtype.cost")
+    .internal()
+    .doc("set string type in join output cost")
+    .intConf
+    .createWithDefault(9)
 
   val ENABLE_DEDUP_LEFT_SEMI_JOIN = buildConf("spark.gluten.sql.columnar.backend.omni.dedupLeftSemiJoin")
     .internal()
