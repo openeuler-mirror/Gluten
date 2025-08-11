@@ -59,7 +59,7 @@ case class FallbackBroadcastHashJoinPrepQueryStage(session: SparkSession) extend
                   "columnar broadcast exchange is disabled or " +
                     "columnar broadcast join is disabled")
               } else {
-                if (FallbackTags.nonEmpty(bhj)) {
+                if (FallbackTags.nonEmpty(bhj) || FallbackTags.nonEmpty(exchange)) {
                   ValidationResult.failed("broadcast join is already tagged as not transformable")
                 } else {
                   val bhjTransformer = BackendsApiManager.getSparkPlanExecApiInstance
@@ -113,7 +113,7 @@ case class FallbackBroadcastHashJoinPrepQueryStage(session: SparkSession) extend
               "columnar broadcast exchange is disabled or " +
                 "columnar broadcast join is disabled")
           } else {
-            if (FallbackTags.nonEmpty(bnlj)) {
+            if (FallbackTags.nonEmpty(bnlj) || FallbackTags.nonEmpty(exchange)) {
               ValidationResult.failed("broadcast join is already tagged as not transformable")
             } else {
               val bnljTransformer = BackendsApiManager.getSparkPlanExecApiInstance
