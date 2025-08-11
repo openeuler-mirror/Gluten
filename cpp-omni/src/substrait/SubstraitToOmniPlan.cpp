@@ -237,7 +237,7 @@ const WindowFrameInfo SubstraitToOmniPlanConverter::createWindowFrameInfo(
         default:
             OMNI_THROW("Substrait Error", "Unsupported WindowRel WindowType: " + std::to_string(type));
     }
-    auto boundTypeConversion = [&](::substrait::Expression_WindowFunction_Bound boundType)
+    auto boundTypeConversion = [ ](::substrait::Expression_WindowFunction_Bound boundType)
         -> std::tuple<op::FrameBoundType, int32_t> {
         if (boundType.has_current_row()) {
             return std::make_tuple(op::OMNI_FRAME_BOUND_CURRENT_ROW, -1);
@@ -377,7 +377,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
     auto vector2 = secondType->Get();
     vector1.insert(vector1.end(), vector2.begin(), vector2.end());
     auto ptr = std::make_shared<DataTypes>(vector1);
-    std::vector<omniruntime::TypedExprPtr> keys = ProcessTopNSortPartitionKeys(joinRel.advanced_extension(), ptr);
+    std::vector<omniruntime::TypedExprPtr> keys = ProcessExtensionProjectNode(joinRel.advanced_extension(), ptr);
 
     if (joinRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isSMJ=")) {
@@ -619,8 +619,10 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectR
 PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::FilterRel &filterRel)
 {
     auto childNode = ConvertSingleInput<::substrait::FilterRel>(filterRel);
+    auto ptr = childNode->OutputType();
+    std::vector<omniruntime::TypedExprPtr> keys = ProcessExtensionProjectNode(filterRel.advanced_extension(), ptr);
     auto filterNode = std::make_shared<FilterNode>(
-        NextPlanNodeId(), exprConverter->ToOmniExpr(filterRel.condition(), childNode->OutputType()), childNode);
+        NextPlanNodeId(), exprConverter->ToOmniExpr(filterRel.condition(), childNode->OutputType()), childNode, keys);
     if (filterRel.has_common()) {
         return ProcessEmit(filterRel.common(), std::move(filterNode));
     } else {
@@ -640,7 +642,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::TopNRel 
     auto childNode = ConvertSingleInput<::substrait::TopNRel>(topNRel);
     auto [sortingKeys, sortingOrders, sortNullFirsts] =
         ProcessSortFieldWithExpr(topNRel.sorts(), childNode->OutputType());
-    auto partitionKeys = ProcessTopNSortPartitionKeys(topNRel.advanced_extension(), childNode->OutputType());
+    auto partitionKeys = ProcessExtensionProjectNode(topNRel.advanced_extension(), childNode->OutputType());
     if (topNRel.has_advanced_extension() &&
         SubstraitParser::ConfigSetInOptimization(topNRel.advanced_extension(), "isTopNSort=")) {
         // Create TopNSort node
@@ -780,7 +782,7 @@ SortWithExprTuple SubstraitToOmniPlanConverter::ProcessSortFieldWithExpr(
     return {sortingKeys, sortingOrders, sortNullFirsts};
 }
 
-std::vector<TypedExprPtr> SubstraitToOmniPlanConverter::ProcessTopNSortPartitionKeys(
+std::vector<TypedExprPtr> SubstraitToOmniPlanConverter::ProcessExtensionProjectNode(
     const ::substrait::extensions::AdvancedExtension &extension, const DataTypesPtr &inputType)
 {
     std::vector<TypedExprPtr> partitionKeys;

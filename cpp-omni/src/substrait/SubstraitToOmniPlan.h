@@ -147,7 +147,7 @@ public:
     SortWithExprTuple ProcessSortFieldWithExpr(
         const ::google::protobuf::RepeatedPtrField<::substrait::SortField> &sortFields, const DataTypesPtr &inputType);
 
-    std::vector<TypedExprPtr> ProcessTopNSortPartitionKeys(
+    std::vector<TypedExprPtr> ProcessExtensionProjectNode(
         const ::substrait::extensions::AdvancedExtension &extension, const DataTypesPtr &inputType);
 
 private:
