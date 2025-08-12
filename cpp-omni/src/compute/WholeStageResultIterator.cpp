@@ -82,6 +82,7 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         }
         configs[config::QueryConfig::kAggregationSpillEnabled] = BoolToString(
             omniCfg_->Get<bool>(kAggregationSpillEnabled, true));
+        configs[config::QueryConfig::kMemFraction] = std::to_string(omniCfg_->Get<int32_t>(kMemFraction, 90));
         configs[config::QueryConfig::kJoinSpillEnabled] = BoolToString(omniCfg_->Get<bool>(kJoinSpillEnabled, true));
         configs[config::QueryConfig::kOrderBySpillEnabled] = BoolToString(omniCfg_->Get<bool>(kOrderBySpillEnabled,
             true));

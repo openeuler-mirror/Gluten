@@ -791,6 +791,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_SHUFFLE_TASK_SPILL_MEMORY_THRESHOLD.key,
       COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM.key,
       COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD.key,
+      ENABLE_OMNI_AGGREGATION_SPILL.key,
       ENABLE_OMNI_EXP_CHECK.key,
       ENABLE_OMNI_UNIXTIME_FUNCTION.key,
       ENABLE_COLUMNAR_TOP_N_SORT.key,
@@ -2410,6 +2411,13 @@ object GlutenConfig {
         " associate with the \"spark.memory.offHeap\" together")
       .intConf
       .createWithDefault(90)
+
+  val ENABLE_OMNI_AGGREGATION_SPILL =
+    buildConf("spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled")
+      .internal()
+      .doc("enable omni aggregation spill")
+      .booleanConf
+      .createWithDefault(true)
 
   val ENABLE_OMNI_EXP_CHECK =
     buildConf("spark.gluten.sql.columnar.backend.omni.omniExpCheck")

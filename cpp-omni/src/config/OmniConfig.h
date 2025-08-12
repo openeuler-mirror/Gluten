@@ -65,6 +65,7 @@ const std::string kSpillStrategy = "spark.gluten.sql.columnar.backend.omni.spill
 const std::string kSpillStrategyDefaultValue = "auto";
 const std::string kSpillThreadNum = "spark.gluten.sql.columnar.backend.omni.spillThreadNum";
 const uint32_t kSpillThreadNumDefaultValue = 0;
+const std::string kMemFraction = "spark.gluten.sql.columnar.backend.omni.memFraction";
 const std::string kAggregationSpillEnabled = "spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled";
 const std::string kJoinSpillEnabled = "spark.gluten.sql.columnar.backend.omni.joinSpillEnabled";
 const std::string kOrderBySpillEnabled = "spark.gluten.sql.columnar.backend.omni.orderBySpillEnabled";
