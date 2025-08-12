@@ -798,9 +798,15 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::JoinRel &joinRel)
         case ::substrait::JoinRel_JoinType_JOIN_TYPE_OUTER:
         case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT:
         case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT:
+        case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT_ANTI:
+            break;
         case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT_SEMI:
         case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
-        case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT_ANTI:
+            if (joinRel.has_advanced_extension() &&
+                SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isExistenceJoin=")) {
+                LOG_VALIDATION_MSG("ExistenceJoin is not supported: " + std::to_string(joinRel.type()));
+                return false;
+            }
             break;
         default:
             LOG_VALIDATION_MSG("Join type is not supported: " + std::to_string(joinRel.type()));

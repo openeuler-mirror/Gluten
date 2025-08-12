@@ -131,20 +131,24 @@ object OmniBackendSettings extends BackendSettingsApi {
     windowFunctions.foreach {
       windowExpr =>
         val aliasExpr = windowExpr.asInstanceOf[Alias]
-        val wExpression = aliasExpr.child.asInstanceOf[WindowExpression]
-        wExpression.windowFunction match {
-          case RowNumber() | Rank(_) =>
-          case AggregateExpression(aggFunction, _, false, _, _) =>
-            aggFunction match {
-              case _: Sum =>
-              case _: Max =>
-              case _: Average =>
-              case _: Min =>
-              case _: StddevSamp =>
-              case Count(Literal(1, IntegerType) :: Nil) | Count(ArrayBuffer(Literal(1, IntegerType))) =>
-              case Count(_) if aggFunction.children.size == 1 =>
-              case _: First =>
-              case _ => isSupport = false
+        aliasExpr.child match {
+          case wExpression: WindowExpression =>
+            wExpression.windowFunction match {
+              case RowNumber() | Rank(_) =>
+              case AggregateExpression(aggFunction, _, false, _, _) =>
+                aggFunction match {
+                  case _: Sum =>
+                  case _: Max =>
+                  case _: Average =>
+                  case _: Min =>
+                  case _: StddevSamp =>
+                  case Count(Literal(1, IntegerType) :: Nil) | Count(ArrayBuffer(Literal(1, IntegerType))) =>
+                  case Count(_) if aggFunction.children.size == 1 =>
+                  case _: First =>
+                  case _ => isSupport = false
+                }
+              case _ =>
+                isSupport = false
             }
           case _ =>
             isSupport = false
