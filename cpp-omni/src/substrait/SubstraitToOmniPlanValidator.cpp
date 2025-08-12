@@ -348,16 +348,6 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::TopNRel &topNRel)
         return false;
     }
 
-    auto [sortingKeys, sortingOrders, sortNullFirsts] = planConverter.ProcessSortField(topNRel.sorts(), rowType);
-    std::set<int> sortingKeyNames;
-    for (const auto &sortingKey : sortingKeys) {
-        auto result = sortingKeyNames.insert(sortingKey);
-        if (!result.second) {
-            LOG_VALIDATION_MSG("Duplicate sort keys were found in TopNRel.");
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -663,8 +653,9 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::SortRel &sortRel)
         if (sort.has_expr()) {
             auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
             auto exprField = dynamic_cast<const FieldExpr *>(expression);
-            if (!exprField) {
-                LOG_VALIDATION_MSG("in SortRel, the sorting key in Sort Operator only support field.");
+            auto exprFunc = dynamic_cast<const FuncExpr *>(expression);
+            if (!exprField && !exprFunc) {
+                LOG_VALIDATION_MSG("in SortRel, the sorting key in Sort Operator only support field and func.");
                 return false;
             }
             ExprVerifier ev;

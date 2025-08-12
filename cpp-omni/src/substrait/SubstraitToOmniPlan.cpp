@@ -710,7 +710,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::SortRel 
             sortExpressions.emplace_back(expression);
         }
     }
-    auto [sortingKeys, sortingOrders, sortNullFirsts] = ProcessSortField(sortRel.sorts(), childNode->OutputType());
+    auto [_, sortingOrders, sortNullFirsts] = ProcessSortFieldWithExpr(sortRel.sorts(), childNode->OutputType());
+    std::vector<int32_t> sortingKeys;
     return std::make_shared<OrderByNode>(
         NextPlanNodeId(), sortingKeys, sortingOrders, sortNullFirsts, childNode, sortExpressions);
 }
