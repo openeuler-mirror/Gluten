@@ -17,6 +17,7 @@
 package org.apache.gluten.execution
 
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.expression.OmniExpressionAdaptor.{sparkTypeToOmniType, toOmniAggFunType}
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
@@ -116,7 +117,7 @@ case class OmniHashAggregateExecTransformer(
     }
   }
 
-  protected def checkAggFuncSupport(aggFunc: AggregateFunction,
+  protected def checkAggFuncSupport(agg: AggregateExpression,
                                              mode: AggregateMode): Boolean = {
     val alwaysSupported = Set(
      classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
@@ -134,10 +135,16 @@ case class OmniHashAggregateExecTransformer(
      case other => Set.empty[Class[_]]
     }
 
-    if (supported.exists(_.isInstance(aggFunc))) {
-       true
+    child.output.zipWithIndex.foreach {
+      case (attr, _) =>
+        sparkTypeToOmniType(attr.dataType, attr.metadata)
+    }
+
+    if (supported.exists(_.isInstance(agg.aggregateFunction))) {
+      toOmniAggFunType(agg)
+      true
     } else {
-       false
+      false
     }
   }
 
@@ -193,7 +200,7 @@ case class OmniHashAggregateExecTransformer(
 
     aggregateExpressions.foreach {
        expr =>
-         if (!checkAggFuncSupport(expr.aggregateFunction, expr.mode)) {
+         if (!checkAggFuncSupport(expr, expr.mode)) {
            return ValidationResult.failed(
              s"Unsupported aggregate function: ${expr.mode} for ${expr.aggregateFunction.prettyName}")
          }

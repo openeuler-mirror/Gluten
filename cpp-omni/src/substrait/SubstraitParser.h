@@ -44,7 +44,7 @@ public:
         const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
 
     /// Parse Substrait Type to Omni type.
-    static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false);
+    static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false, bool isNest = false);
 
     /// Make names in the format of {prefix}_{index}.
     static std::vector<std::string> MakeNames(const std::string &prefix, int size);
