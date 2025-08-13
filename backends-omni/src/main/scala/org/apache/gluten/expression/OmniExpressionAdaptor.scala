@@ -23,7 +23,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Expression, _}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
-import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide, NormalizeNaNAndZero}
+import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide, NormalizeNaNAndZero, ShimUtil}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.util.CharVarcharUtils.getRawTypeString
 import org.apache.spark.sql.execution
@@ -996,13 +996,13 @@ object OmniExpressionAdaptor extends Logging {
       isHashAgg: Boolean = false,
       isMergeCount: Boolean = false): FunctionType = {
     agg.aggregateFunction match {
-//      case sum: Sum =>
-//        ShimUtil.unsupportedEvalModeCheck(sum)
-//        OMNI_AGGREGATION_TYPE_SUM
-//      case Max(_) => OMNI_AGGREGATION_TYPE_MAX
-//      case avg: Average =>
-//        ShimUtil.unsupportedEvalModeCheck(avg)
-//        OMNI_AGGREGATION_TYPE_AVG
+      case sum: Sum =>
+        ShimUtil.unsupportedEvalModeCheck(sum)
+        OMNI_AGGREGATION_TYPE_SUM
+      case Max(_) => OMNI_AGGREGATION_TYPE_MAX
+      case avg: Average =>
+        ShimUtil.unsupportedEvalModeCheck(avg)
+        OMNI_AGGREGATION_TYPE_AVG
       case Min(_) => OMNI_AGGREGATION_TYPE_MIN
       case StddevSamp(_, _) => OMNI_AGGREGATION_TYPE_SAMP
       case Count(Literal(1, IntegerType) :: Nil) | Count(ArrayBuffer(Literal(1, IntegerType))) =>
