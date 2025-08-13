@@ -654,8 +654,9 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::SortRel &sortRel)
             auto expression = exprConverter_->ToOmniExpr(sort.expr(), rowType);
             auto exprField = dynamic_cast<const FieldExpr *>(expression);
             auto exprFunc = dynamic_cast<const FuncExpr *>(expression);
-            if (!exprField && !exprFunc) {
-                LOG_VALIDATION_MSG("in SortRel, the sorting key in Sort Operator only support field and func.");
+            auto exprBinary = dynamic_cast<const BinaryExpr *>(expression);
+            if (!exprField && !exprFunc && !exprBinary) {
+                LOG_VALIDATION_MSG("in SortRel, the sorting key in Sort Operator only support field, func and binary...");
                 return false;
             }
             ExprVerifier ev;
