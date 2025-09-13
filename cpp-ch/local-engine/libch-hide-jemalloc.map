@@ -1,0 +1,8 @@
+{
+    global:
+      Java_org_apache_gluten*;
+      Java_org_apache_spark*;
+      JNI_OnLoad;
+      JNI_OnUnload;
+    local: *;
+};
