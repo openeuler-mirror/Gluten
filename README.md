@@ -49,6 +49,7 @@ mvn clean package -Pbackends-omni -Pspark-3.3 -DskipTests -Dspotless.check.skip=
 3. 检查执行计划中的算子是否包含Omni
 
 ![输入图片说明](images/image-20250916221612683.png)
+
 执行计划里面包含Omni就表示使能Gluten-Omni成功
 
 * 参考启动命令
