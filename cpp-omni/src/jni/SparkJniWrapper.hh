@@ -60,6 +60,8 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWr
     JNIEnv *env, jobject wrapper, jbyteArray planArr, jobjectArray splitInfosArr, jobjectArray iterArr, jint stageId,
     jint partitionId, jlong taskId, jboolean saveInput, jstring spillDir);
 
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeDestroyNative(JNIEnv * env, jclass);
+
 JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeHasNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 
