@@ -284,7 +284,7 @@ class Spark34Shims extends SparkShims {
     (getLimit(plan.limit, plan.offset), plan.offset)
   }
 
-  override def getExtendedColumnarPostRules(): List[SparkSession => Rule[SparkPlan]] = List()
+  override def getExtendedColumnarPostRules(): List[SparkSession => Rule[SparkPlan]] = List(session => GlutenFormatFactory.getExtendedColumnarPostRule(session))
 
   override def writeFilesExecuteTask(
       description: WriteJobDescription,
