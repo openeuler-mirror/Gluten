@@ -17,7 +17,7 @@
 package org.apache.spark.sql.execution
 
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.plans.physical.{HashPartitioningLike, Partitioning, PartitioningCollection}
+import org.apache.spark.sql.catalyst.plans.physical.{HashPartitioning, Partitioning, PartitioningCollection}
 
 import scala.collection.mutable
 
@@ -42,7 +42,7 @@ class ExpandOutputPartitioningShim(
 
   def expandPartitioning(partitioning: Partitioning): Partitioning = {
     partitioning match {
-      case h: HashPartitioningLike => expandOutputPartitioning(h)
+      case h: HashPartitioning => expandOutputPartitioning(h)
       case c: PartitioningCollection => expandOutputPartitioning(c)
       case _ => partitioning
     }
@@ -52,7 +52,7 @@ class ExpandOutputPartitioningShim(
   private def expandOutputPartitioning(
       partitioning: PartitioningCollection): PartitioningCollection = {
     PartitioningCollection(partitioning.partitionings.flatMap {
-      case h: HashPartitioningLike => expandOutputPartitioning(h).partitionings
+      case h: HashPartitioning => expandOutputPartitioning(h).partitionings
       case c: PartitioningCollection => Seq(expandOutputPartitioning(c))
       case other => Seq(other)
     })
@@ -65,7 +65,7 @@ class ExpandOutputPartitioningShim(
   // Seq("a", "b", "c"), Seq("a", "b", "y"), Seq("a", "x", "c"), Seq("a", "x", "y").
   // The expanded expressions are returned as PartitioningCollection.
   private def expandOutputPartitioning(
-      partitioning: HashPartitioningLike): PartitioningCollection = {
+      partitioning: HashPartitioning): PartitioningCollection = {
     val maxNumCombinations = expandLimit
     var currentNumCombinations = 0
 
@@ -88,6 +88,6 @@ class ExpandOutputPartitioningShim(
 
     PartitioningCollection(
       generateExprCombinations(partitioning.expressions, Nil)
-        .map(exprs => partitioning.withNewChildren(exprs).asInstanceOf[HashPartitioningLike]))
+        .map(exprs => partitioning.withNewChildren(exprs).asInstanceOf[HashPartitioning]))
   }
 }

@@ -512,7 +512,7 @@ class Spark34Shims extends SparkShims {
 
   override def extractExpressionArrayInsert(arrayInsert: Expression): Seq[Expression] = {
     val expr = arrayInsert.asInstanceOf[ArrayInsert]
-    Seq(expr.srcArrayExpr, expr.posExpr, expr.itemExpr, Literal(expr.legacyNegativeIndex))
+    Seq(expr.srcArrayExpr, expr.posExpr, expr.itemExpr)
   }
 
   override def getOperatorId(plan: QueryPlan[_]): Option[Int] = {
@@ -533,6 +533,6 @@ class Spark34Shims extends SparkShims {
       output: Seq[Attribute],
       isStreaming: Boolean,
       tatsOpt: Option[Statistics] = None): CTERelationRef = {
-    CTERelationRef(cteId, resolved, output, isStreaming, tatsOpt)
+    CTERelationRef(cteId, resolved, output, tatsOpt)
   }
 }

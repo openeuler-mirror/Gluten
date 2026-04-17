@@ -215,7 +215,7 @@ abstract class AbstractBatchScanExec(
               // could exist duplicated partition values, as partition grouping is not done
               // at the beginning and postponed to this method. It is important to use unique
               // partition values here so that grouped partitions won't get duplicated.
-              finalPartitions = p.uniquePartitionValues.map {
+              finalPartitions = p.partitionValues.map {
                 partValue =>
                   // Use empty partition for those partition values that are not present
                   partitionMapping.getOrElse(

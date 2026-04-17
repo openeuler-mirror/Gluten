@@ -35,7 +35,8 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
 import io.substrait.proto.NamedStruct
 import org.apache.spark.sql.catalyst.util.RebaseDateTime
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import scala.Option
 
 import scala.collection.JavaConverters._

@@ -45,7 +45,8 @@ import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer._
 import org.apache.spark.sql.hive.client.HiveClientImpl
 import org.apache.spark.sql.hive.execution.{AbstractHiveTableScanExec, HiveTableScanExec}
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.Utils
 
