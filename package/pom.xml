@@ -397,6 +397,9 @@
                     <ignoreClass>org.intellij.lang.annotations.*</ignoreClass>
                     <!-- backends-omni delta sources overlap delta-spark provided classes -->
                     <ignoreClass>org.apache.spark.sql.delta.*</ignoreClass>
+                    <!-- Spark 3.4 Iceberg runtime may bundle some Spark SQL exec classes -->
+                    <ignoreClass>org.apache.spark.sql.execution.datasources.v2.ReplaceDataExec</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.datasources.v2.ReplaceDataExec$</ignoreClass>
                   </ignoreClasses>
                   <scopes>
                     <scope>compile</scope>
