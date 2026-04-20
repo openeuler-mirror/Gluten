@@ -93,7 +93,7 @@ class OmniListenerApi extends ListenerApi with Logging {
     // Initial native backend with configurations.
     val parsed = GlutenConfigUtil.parseConfig(conf.getAll.toMap)
 
-    val libPath = conf.get(GlutenConfig.GLUTEN_LIB_PATH, StringUtils.EMPTY)
+    var libPath = conf.get(GlutenConfig.GLUTEN_LIB_PATH, StringUtils.EMPTY)
     if (StringUtils.isBlank(libPath)) {
       throw new IllegalArgumentException(
         "Please set spark.gluten.sql.columnar.libpath to enable omni backend")
@@ -102,7 +102,8 @@ class OmniListenerApi extends ListenerApi with Logging {
     // Load supported hive/python/scala udfs
     UDFMappings.loadFromSparkConf(conf)
 
-    if (isDriver) {
+    if(isDriver) {
+      libPath = replaceEnvVarsWithDefaults(libPath)
       JniLibLoader.loadFromPath(libPath)
     } else {
       val executorLibPath = conf.get(GlutenConfig.GLUTEN_EXECUTOR_LIB_PATH, libPath)
