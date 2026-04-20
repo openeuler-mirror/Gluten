@@ -17,6 +17,7 @@
 package org.apache.gluten.sql.shims.spark34
 
 import org.apache.gluten.config.GlutenConfig.ENABLE_FILES_SPLIT_SINGLE_FILE
+import org.apache.gluten.execution.datasource.GlutenFormatFactory
 import org.apache.gluten.expression.{ExpressionNames, Sig}
 import org.apache.gluten.expression.ExpressionNames.KNOWN_NULLABLE
 import org.apache.gluten.sql.shims.{ShimDescriptor, SparkShims}
