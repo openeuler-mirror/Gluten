@@ -50,6 +50,7 @@ import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.datasources.v2.utils.CatalogUtil
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeLike
+import org.apache.spark.sql.execution.window.{WindowGroupLimitExec, WindowGroupLimitExecShim}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
@@ -283,6 +284,35 @@ class Spark34Shims extends SparkShims {
 
   override def getLimitAndOffsetFromTopK(plan: TakeOrderedAndProjectExec): (Int, Int) = {
     (getLimit(plan.limit, plan.offset), plan.offset)
+  }
+
+  override def isWindowGroupLimitExec(plan: SparkPlan): Boolean = plan match {
+    case _: WindowGroupLimitExec => true
+    case _ => false
+  }
+
+  override def getWindowGroupLimitExecShim(plan: SparkPlan): WindowGroupLimitExecShim = {
+    val windowGroupLimitPlan = plan.asInstanceOf[WindowGroupLimitExec]
+    WindowGroupLimitExecShim(
+      windowGroupLimitPlan.partitionSpec,
+      windowGroupLimitPlan.orderSpec,
+      windowGroupLimitPlan.rankLikeFunction,
+      windowGroupLimitPlan.limit,
+      windowGroupLimitPlan.mode,
+      windowGroupLimitPlan.child
+    )
+  }
+
+  override def getWindowGroupLimitExec(windowGroupLimitPlan: SparkPlan): SparkPlan = {
+    val windowGroupLimitExecShim = windowGroupLimitPlan.asInstanceOf[WindowGroupLimitExecShim]
+    WindowGroupLimitExec(
+      windowGroupLimitExecShim.partitionSpec,
+      windowGroupLimitExecShim.orderSpec,
+      windowGroupLimitExecShim.rankLikeFunction,
+      windowGroupLimitExecShim.limit,
+      windowGroupLimitExecShim.mode,
+      windowGroupLimitExecShim.child
+    )
   }
 
   override def getExtendedColumnarPostRules(): List[SparkSession => Rule[SparkPlan]] = List(session => GlutenFormatFactory.getExtendedColumnarPostRule(session))
