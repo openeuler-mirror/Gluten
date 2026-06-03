@@ -15,6 +15,6 @@
 
 add_library(myudf SHARED "MyUDF.cpp")
 target_link_libraries(myudf
-        boostkit-omniop-codegen-2.1.0-aarch64
-        boostkit-omniop-vector-2.1.0-aarch64
-        boostkit-omniop-operator-2.1.0-aarch64)
+        boostkit-omniop-codegen-2.2.0-aarch64
+        boostkit-omniop-vector-2.2.0-aarch64
+        boostkit-omniop-operator-2.2.0-aarch64)

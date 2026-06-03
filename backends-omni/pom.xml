@@ -14,7 +14,7 @@
   <name>Gluten Backends omni</name>
 
   <properties>
-    <omniruntime.version>2.1.0</omniruntime.version>
+    <omniruntime.version>2.2.0</omniruntime.version>
   </properties>
 
   <profiles>
