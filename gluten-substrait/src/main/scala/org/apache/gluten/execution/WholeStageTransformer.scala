@@ -43,7 +43,6 @@ import org.apache.spark.sql.execution.datasources.FilePartition
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.utils.SparkInputMetricsUtil.InputMetricsWrapper
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import org.apache.spark.util.SerializableConfiguration
 
 import com.google.common.collect.Lists
 import org.apache.hadoop.fs.viewfs.ViewFileSystemUtils
@@ -210,9 +209,6 @@ case class WholeStageTransformer(child: SparkPlan, materializeInput: Boolean = f
     BackendsApiManager.getMetricsApiInstance.genWholeStageTransformerMetrics(sparkContext)
 
   val sparkConf: SparkConf = sparkContext.getConf
-
-  val serializableHadoopConf: SerializableConfiguration = new SerializableConfiguration(
-    sparkContext.hadoopConfiguration)
 
   val numaBindingInfo: GlutenNumaBindingInfo = GlutenConfig.get.numaBindingInfo
 
@@ -385,7 +381,7 @@ case class WholeStageTransformer(child: SparkPlan, materializeInput: Boolean = f
                 val newPaths = ViewFileSystemUtils.convertViewfsToHdfs(
                   splitInfo.getPaths.asScala.toSeq,
                   viewfsToHdfsCache,
-                  serializableHadoopConf.value)
+                  sparkContext.hadoopConfiguration)
                 splitInfo.setPaths(newPaths.asJava)
             }
         }
