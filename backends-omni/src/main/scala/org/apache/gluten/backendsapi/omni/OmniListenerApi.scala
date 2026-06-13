@@ -116,11 +116,11 @@ class OmniListenerApi extends ListenerApi with Logging {
     GlutenFormatFactory.injectPostRuleFactory(
       session => OmniGlutenWriterColumnarRules.NativeWritePostRule(session))
     OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME).initialize(parsed)
-  }
 
-  if (!shutdownHookAdded) {
-    SparkShutdownManagerUtil.addHookForLibUnloading(() => destroyNative())
-    shutdownHookAdded = true
+    if (!shutdownHookAdded) {
+      SparkShutdownManagerUtil.addHookForLibUnloading(() => destroyNative())
+      shutdownHookAdded = true
+    }
   }
 }
 
