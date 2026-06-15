@@ -150,6 +150,7 @@ const std::string kLoadQuantum = "spark.gluten.sql.columnar.backend.omni.loadQua
 const std::string kMaxCoalescedDistance = "spark.gluten.sql.columnar.backend.omni.maxCoalescedDistance";
 const std::string kMaxCoalescedBytes = "spark.gluten.sql.columnar.backend.omni.maxCoalescedBytes";
 const std::string kCachePrefetchMinPct = "spark.gluten.sql.columnar.backend.omni.cachePrefetchMinPct";
+const std::string kHdfsReadMode = "spark.gluten.sql.columnar.backend.omni.hdfs.read.mode";
 
 // write fies
 const std::string kMaxPartitions = "spark.gluten.sql.columnar.backend.omni.maxPartitionsPerWritersSession";
