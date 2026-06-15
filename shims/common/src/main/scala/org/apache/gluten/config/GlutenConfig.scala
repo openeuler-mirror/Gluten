@@ -588,6 +588,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def autoAdjustStageFallenNodeThreshold: Double =
     conf.getConf(AUTO_ADJUST_STAGE_RESOURCES_FALLEN_NODE_RATIO_THRESHOLD)
+
+  def getHdfsReadMode: Int = conf.getConf(HDFS_READ_MODE)
 }
 
 object GlutenConfig {
@@ -772,6 +774,8 @@ object GlutenConfig {
 
   val GLUTEN_COST_EVALUATOR_ENABLED = "spark.gluten.sql.adaptive.costEvaluator.enabled"
   val GLUTEN_COST_EVALUATOR_ENABLED_DEFAULT_VALUE = true
+
+  val GLUTEN_HDFS_READ_MODE = "spark.gluten.sql.columnar.backend.omni.hdfs.read.mode"
 
   var ins: GlutenConfig = _
 
@@ -2688,4 +2692,10 @@ object GlutenConfig {
     .doc("enable or disable split single file when scan from hive")
     .booleanConf
     .createWithDefault(false)
+
+  val HDFS_READ_MODE =
+    buildConf(GLUTEN_HDFS_READ_MODE)
+      .internal()
+      .intConf
+      .createWithDefault(0)
 }

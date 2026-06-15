@@ -274,6 +274,8 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<bool>(KPreferVectorizationExpression, true));
         configs[config::QueryConfig::KMaxBatchSize] = std::to_string(
             omniCfg_->Get<uint64_t>(kSparkBatchSize, 4096));
+        configs[config::QueryConfig::kHdfsReadMode] = std::to_string(
+            omniCfg_->Get<int32_t>(kHdfsReadMode, 0));
         if (omniCfg_->Get<bool>(kSparkShuffleSpillCompress, true)) {
             configs[config::QueryConfig::kSpillCompressionKind] = omniCfg_->Get<std::string>(kSpillCompressionKind,
                 omniCfg_->Get<std::string>(kCompressionKind, "lz4"));
