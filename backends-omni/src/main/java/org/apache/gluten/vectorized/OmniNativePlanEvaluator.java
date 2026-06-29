@@ -22,6 +22,9 @@ import org.apache.gluten.utils.DebugUtil;
 import org.apache.gluten.runtime.OmniRuntime;
 import org.apache.gluten.runtime.OmniRuntimes;
 import org.apache.gluten.validate.NativePlanValidationInfo;
+
+import static org.apache.gluten.vectorized.OmniPlanEvaluatorJniWrapper.nativeDestroyNative;
+
 import org.apache.spark.TaskContext;
 
 import java.nio.charset.StandardCharsets;
@@ -81,5 +84,9 @@ public class OmniNativePlanEvaluator {
         OmniColumnarBatchOutIterator columnarBatchOutIterator = new OmniColumnarBatchOutIterator(itrHandle);
         columnarBatchOutIterator.setOutputTypes(outputTypes);
         return columnarBatchOutIterator;
+    }
+
+    public static void destroyNative() {
+        nativeDestroyNative();
     }
 }

@@ -28,10 +28,11 @@ import org.apache.spark.api.plugin.PluginContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.expression.UDFResolver
 import org.apache.spark.sql.internal.GlutenConfigUtil
-import org.apache.spark.util.{SparkDirectoryUtil, SparkResourceUtil}
+import org.apache.spark.util.{SparkDirectoryUtil, SparkResourceUtil, SparkShutdownManagerUtil}
 import org.apache.gluten.datasources.OmniOrcFormatWriterInjects
 import org.apache.gluten.datasources.parquet.OmniParquetFormatWriterInjects
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.vectorized.OmniNativePlanEvaluator.destroyNative
 import org.apache.spark.sql.execution.datasources.OmniGlutenWriterColumnarRules
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.matching.Regex
@@ -39,6 +40,7 @@ import scala.util.matching.Regex
 class OmniListenerApi extends ListenerApi with Logging {
 
   import OmniListenerApi._
+
   override def onDriverStart(sc: SparkContext, pc: PluginContext): Unit = {
     // Static initializers for driver.
     if (!driverInitialized.compareAndSet(false, true)) {
@@ -100,12 +102,12 @@ class OmniListenerApi extends ListenerApi with Logging {
     // Load supported hive/python/scala udfs
     UDFMappings.loadFromSparkConf(conf)
 
-    if(isDriver) {
-      JniLibLoader.loadFromPath(libPath, true)
+    if (isDriver) {
+      JniLibLoader.loadFromPath(libPath)
     } else {
       val executorLibPath = conf.get(GlutenConfig.GLUTEN_EXECUTOR_LIB_PATH, libPath)
       val actualLibPath = replaceEnvVarsWithDefaults(executorLibPath)
-      JniLibLoader.loadFromPath(actualLibPath, true)
+      JniLibLoader.loadFromPath(actualLibPath)
     }
     // Inject backend-specific implementations to override spark classes.
     GlutenFormatFactory.register(
@@ -115,6 +117,11 @@ class OmniListenerApi extends ListenerApi with Logging {
       session => OmniGlutenWriterColumnarRules.NativeWritePostRule(session))
     OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME).initialize(parsed)
   }
+
+  if (!shutdownHookAdded) {
+    SparkShutdownManagerUtil.addHookForLibUnloading(() => destroyNative())
+    shutdownHookAdded = true
+  }
 }
 
 object OmniListenerApi {
@@ -122,6 +129,7 @@ object OmniListenerApi {
   //  As spark conf may change when active Spark session is recreated.
   private val driverInitialized: AtomicBoolean = new AtomicBoolean(false)
   private val executorInitialized: AtomicBoolean = new AtomicBoolean(false)
+  private var shutdownHookAdded: Boolean = false
 
   private def inLocalMode(conf: SparkConf): Boolean = {
     SparkResourceUtil.isLocalMaster(conf)

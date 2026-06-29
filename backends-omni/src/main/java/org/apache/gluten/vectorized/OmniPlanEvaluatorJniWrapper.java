@@ -68,4 +68,6 @@ public class OmniPlanEvaluatorJniWrapper implements RuntimeAware {
             boolean saveInputToFile,
             String spillDir)
             throws RuntimeException;
+
+    static native void nativeDestroyNative();
 }

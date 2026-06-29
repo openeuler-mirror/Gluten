@@ -194,18 +194,13 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     return JNI_VERSION;
 }
 
+/**
+ * manually destroy native in 'Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeDestroyNative' method,
+ * since doesn't allow unload jni for built-in classloader.
+ * jdk17 reference commit: https://github.com/openjdk/jdk17u-dev/commit/75a8b7fa831ec22a149f271c119a2496c1c5ee87
+ */
 void JNI_OnUnload(JavaVM* vm, void* reserved)
 {
-    JNIEnv* env;
-    vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION);
-
-    gluten::finalizeOmniJniUDF(env);
-
-    env->DeleteGlobalRef(runtimeExceptionClass);
-    env->DeleteGlobalRef(splitResultClass);
-    env->DeleteGlobalRef(jsonClass);
-    env->DeleteGlobalRef(arrayListClass);
-    env->DeleteGlobalRef(threadClass);
 }
 
 omniruntime::Runtime *GetRuntime(JNIEnv *env, jobject runtimeAware)

@@ -327,6 +327,17 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWr
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeDestroyNative(JNIEnv * env, jclass)
+{
+    gluten::finalizeOmniJniUDF(env);
+
+    env->DeleteGlobalRef(runtimeExceptionClass);
+    env->DeleteGlobalRef(splitResultClass);
+    env->DeleteGlobalRef(jsonClass);
+    env->DeleteGlobalRef(arrayListClass);
+    env->DeleteGlobalRef(threadClass);
+}
+
 JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeHasNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle)
 {
