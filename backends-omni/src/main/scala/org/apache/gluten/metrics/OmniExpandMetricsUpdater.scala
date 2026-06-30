@@ -25,6 +25,10 @@ class OmniExpandMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(
+        metrics,
+        operatorMetrics.getNumOutputRows,
+        operatorMetrics.getNumOutputVecBatches)
       metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
 
       metrics("numInputRows") += operatorMetrics.getNumInputRows

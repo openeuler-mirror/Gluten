@@ -21,10 +21,9 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.util.RebaseDateTime
 import org.apache.spark.sql.execution.FileSourceScanExec
 import org.apache.spark.sql.execution.datasources.HadoopFsRelation
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
 
@@ -103,28 +102,15 @@ case class OmniDeltaScanExecTransformer(
         StringValue.newBuilder.setValue("isMergeTree=0\n").build)
     val filter = pushedDownFilters.reduceOption(org.apache.spark.sql.sources.And(_, _))
 
-    def toLegacyBehaviorPolicy(modeStr: String): LegacyBehaviorPolicy.Value = {
-      modeStr match {
-        case "LEGACY" => LegacyBehaviorPolicy.LEGACY
-        case "CORRECTED" => LegacyBehaviorPolicy.CORRECTED
-        case "EXCEPTION" => LegacyBehaviorPolicy.EXCEPTION
-        case _ => LegacyBehaviorPolicy.LEGACY
-      }
-    }
-
     val datetimeRebaseModeStr =
       session.sessionState.conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
     val int96RebaseModeStr =
       session.sessionState.conf.getConf(SQLConf.PARQUET_INT96_REBASE_MODE_IN_READ)
-    val datetimeRebaseSpec =
-      new RebaseDateTime.RebaseSpec(toLegacyBehaviorPolicy(datetimeRebaseModeStr), scala.None)
-    val int96RebaseSpec =
-      new RebaseDateTime.RebaseSpec(toLegacyBehaviorPolicy(int96RebaseModeStr), scala.None)
     val json = new ParquetPushFilterBuilder(
       relation.dataSchema,
       requiredSchema,
-      datetimeRebaseSpec,
-      int96RebaseSpec).buildPushFilterJson(
+      datetimeRebaseModeStr,
+      int96RebaseModeStr).buildPushFilterJson(
       filter.orNull,
       session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER),
       session.sessionState.conf.parquetFilterPushDown)

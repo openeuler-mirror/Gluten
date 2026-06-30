@@ -20,8 +20,10 @@ import com.google.protobuf.StringValue
 import com.huawei.boostkit.spark.jni.{OrcPushFilterBuilder, ParquetPushFilterBuilder}
 import io.substrait.proto.NamedStruct
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER
 import org.apache.gluten.execution.{BasicScanExecTransformer, TransformContext}
+import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.expression.{ConverterUtils, ExpressionConverter}
 import org.apache.gluten.metrics.MetricsUpdater
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -35,17 +37,17 @@ import org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
 import org.apache.hadoop.hive.ql.plan.TableDesc
 import org.apache.hadoop.mapred.TextInputFormat
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
+import org.apache.spark.sql.catalyst.catalog.{CatalogTableType, HiveTableRelation}
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeReference, AttributeSeq, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.util.{MetadataColumnHelper, RebaseDateTime}
+import org.apache.spark.sql.catalyst.util.MetadataColumnHelper
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer._
 import org.apache.spark.sql.hive.client.HiveClientImpl
 import org.apache.spark.sql.hive.execution.{AbstractHiveTableScanExec, HiveTableScanExec}
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.Utils
 
@@ -88,6 +90,33 @@ case class OmniHiveTableScanExecTransformer(
   override def getPartitionSchema: StructType = relation.tableMeta.partitionSchema
 
   override def getDataSchema: StructType = relation.tableMeta.dataSchema
+
+  override protected def doValidateInternal(): ValidationResult = {
+    val qualifiedName = relation.tableMeta.qualifiedName
+    val dbName = relation.tableMeta.identifier.database.getOrElse("")
+    val tableName = relation.tableMeta.identifier.table
+    val dbTableName = s"$dbName.$tableName"
+    val glutenConfig = new GlutenConfig(session.sessionState.conf)
+    val fallbackTables = glutenConfig.hiveTableScanFallbackTables ++ glutenConfig.scanFallbackTables
+    val matchedTable = Seq(qualifiedName, dbTableName, tableName)
+      .map(GlutenConfig.normalizeTableName)
+      .find(fallbackTables.contains)
+    if (matchedTable.isDefined) {
+      logWarning(s"Table $qualifiedName (db.table: $dbTableName) is in the hive table scan " +
+        s"fallback list [${fallbackTables.mkString(", ")}], fallback to vanilla Spark")
+      return ValidationResult.failed(
+        s"Table ${matchedTable.get} is configured to fallback scan to vanilla Spark")
+    } else if (fallbackTables.nonEmpty) {
+      logWarning(s"Table $qualifiedName (db.table: $dbTableName) NOT matched in fallback list " +
+        s"[${fallbackTables.mkString(", ")}], proceeding with native scan")
+    }
+    if (relation.tableMeta.tableType == CatalogTableType.VIEW) {
+      return ValidationResult.failed(
+        s"View table $qualifiedName is not supported for native scan, " +
+          "fallback to vanilla Spark")
+    }
+    super.doValidateInternal()
+  }
 
   // TODO: get root paths from hive table.
   override def getRootPathsInternal: Seq[String] = Seq.empty
@@ -247,23 +276,8 @@ case class OmniHiveTableScanExecTransformer(
         val datetimeRebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
         val int96RebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_INT96_REBASE_MODE_IN_READ)
 
-        def toLegacyBehaviorPolicy(modeStr: String): LegacyBehaviorPolicy.Value = {
-          modeStr match {
-            case "LEGACY" => LegacyBehaviorPolicy.LEGACY
-            case "CORRECTED" => LegacyBehaviorPolicy.CORRECTED
-            case "EXCEPTION" => LegacyBehaviorPolicy.EXCEPTION
-            case _ => LegacyBehaviorPolicy.LEGACY
-          }
-        }
-
-        val datetimeRebaseMode = toLegacyBehaviorPolicy(datetimeRebaseModeStr)
-        val int96RebaseMode = toLegacyBehaviorPolicy(int96RebaseModeStr)
-
-        val datetimeRebaseSpec = new RebaseDateTime.RebaseSpec(datetimeRebaseMode, scala.None)
-        val int96RebaseSpec = new RebaseDateTime.RebaseSpec(int96RebaseMode, scala.None)
-
         val parquetBuilder = new ParquetPushFilterBuilder(relation.tableMeta.dataSchema, attributesToStructType(requestedAttributes),
-          datetimeRebaseSpec, int96RebaseSpec)
+          datetimeRebaseModeStr, int96RebaseModeStr)
         parquetBuilder.buildPushFilterJson(null,
           session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER),
           session.sessionState.conf.parquetFilterPushDown

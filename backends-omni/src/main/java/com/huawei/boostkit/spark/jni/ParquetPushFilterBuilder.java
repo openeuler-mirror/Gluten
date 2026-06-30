@@ -34,7 +34,6 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.apache.gluten.expression.OmniExpressionAdaptor;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.spark.sql.catalyst.util.RebaseDateTime;
-import org.apache.spark.sql.catalyst.util.RebaseDateTime.RebaseSpec;
 import org.apache.spark.sql.sources.And;
 import org.apache.spark.sql.sources.EqualTo;
 import org.apache.spark.sql.sources.Filter;
@@ -100,19 +99,20 @@ public class ParquetPushFilterBuilder {
     // spark required schema
     private StructType requiredSchema;
 
-    // Parquet RebaseSpec
-    private RebaseSpec datetimeRebaseSpec;
-    private RebaseSpec int96RebaseSpec;
+    // Parquet rebase modes
+    private String datetimeRebaseMode;
+    private String int96RebaseMode;
 
     private int[] vecTypeIds;
     private List<DataType> dataTypes = new ArrayList<>();
 
     public ParquetPushFilterBuilder(StructType dataSchema, StructType requiredSchema,
-                                    RebaseSpec datetimeRebaseSpec, RebaseSpec int96RebaseSpec) {
+                                    String datetimeRebaseMode,
+                                    String int96RebaseMode) {
         this.dataSchema = dataSchema;
         this.requiredSchema = requiredSchema;
-        this.datetimeRebaseSpec = datetimeRebaseSpec;
-        this.int96RebaseSpec = int96RebaseSpec;
+        this.datetimeRebaseMode = datetimeRebaseMode;
+        this.int96RebaseMode = int96RebaseMode;
 
         for (StructField field : dataSchema.fields()) {
             allFieldsNames.add(field.name());
@@ -133,8 +133,8 @@ public class ParquetPushFilterBuilder {
         }
 
         TimestampUtil instance = TimestampUtil.getInstance();
-        if (datetimeRebaseSpec != null && datetimeRebaseSpec.mode() != null) {
-            JulianGregorianRebase julianObject = instance.getJulianObject(datetimeRebaseSpec.timeZone());
+        if (datetimeRebaseMode != null) {
+            JulianGregorianRebase julianObject = instance.getJulianObject(null);
             if (julianObject != null) {
                 JSONObject timestampRebase = new JSONObject();
                 timestampRebase.put("tz", julianObject.getTz());
@@ -159,12 +159,12 @@ public class ParquetPushFilterBuilder {
                     timestampRebase.put("diffs", "");
                 }
 
-                timestampRebase.put("mode", datetimeRebaseSpec.mode().id());
+                timestampRebase.put("mode", rebaseModeId(datetimeRebaseMode));
                 job.put("timestampRebase", timestampRebase);
             }
         }
-        if (int96RebaseSpec != null && int96RebaseSpec.mode() != null) {
-            JulianGregorianRebase julianObject = instance.getJulianObject(int96RebaseSpec.timeZone());
+        if (int96RebaseMode != null) {
+            JulianGregorianRebase julianObject = instance.getJulianObject(null);
             if (julianObject != null) {
                 JSONObject int96Rebase = new JSONObject();
                 int96Rebase.put("tz", julianObject.getTz());
@@ -189,11 +189,21 @@ public class ParquetPushFilterBuilder {
                     int96Rebase.put("diffs", "");
                 }
 
-                int96Rebase.put("mode", int96RebaseSpec.mode().id());
+                int96Rebase.put("mode", rebaseModeId(int96RebaseMode));
                 job.put("int96Rebase", int96Rebase);
             }
         }
         job.put("lastSwitchJulianTs", RebaseDateTime.lastSwitchJulianTs());
+    }
+
+    private int rebaseModeId(String mode) {
+        if ("LEGACY".equals(mode)) {
+            return 1;
+        }
+        if ("CORRECTED".equals(mode)) {
+            return 2;
+        }
+        return 0;
     }
 
     private void initDataColIds() {

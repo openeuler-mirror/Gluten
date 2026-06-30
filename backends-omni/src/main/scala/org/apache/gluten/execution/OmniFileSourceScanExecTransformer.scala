@@ -34,8 +34,7 @@ import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
 import io.substrait.proto.NamedStruct
-import org.apache.spark.sql.catalyst.util.RebaseDateTime
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
 import scala.Option
 
 import scala.collection.JavaConverters._
@@ -110,7 +109,10 @@ case class OmniFileSourceScanExecTransformer(
     val optimization =
       BackendsApiManager.getTransformerApiInstance.packPBMessage(
         StringValue.newBuilder.setValue(optimizationContent).build)
-    val filter = pushedDownFilters.reduceOption(org.apache.spark.sql.sources.And(_, _))
+    val filter = SparkShimLoader
+      .getSparkShims
+      .getPushedDownFilters(relation, dataFilters)
+      .reduceOption(org.apache.spark.sql.sources.And(_, _))
 
     val json = this.fileFormat match {
       // ORC PushFilterJsonBuilder
@@ -126,23 +128,8 @@ case class OmniFileSourceScanExecTransformer(
         val datetimeRebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
         val int96RebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_INT96_REBASE_MODE_IN_READ)
 
-        def toLegacyBehaviorPolicy(modeStr: String): LegacyBehaviorPolicy.Value = {
-          modeStr match {
-            case "LEGACY" => LegacyBehaviorPolicy.LEGACY
-            case "CORRECTED" => LegacyBehaviorPolicy.CORRECTED
-            case "EXCEPTION" => LegacyBehaviorPolicy.EXCEPTION
-            case _ => LegacyBehaviorPolicy.LEGACY
-          }
-        }
-
-        val datetimeRebaseMode = toLegacyBehaviorPolicy(datetimeRebaseModeStr)
-        val int96RebaseMode = toLegacyBehaviorPolicy(int96RebaseModeStr)
-
-        val datetimeRebaseSpec = new RebaseDateTime.RebaseSpec(datetimeRebaseMode, scala.None)
-        val int96RebaseSpec = new RebaseDateTime.RebaseSpec(int96RebaseMode, scala.None)
-
         val parquetBuilder = new ParquetPushFilterBuilder(relation.dataSchema, requiredSchema,
-          datetimeRebaseSpec, int96RebaseSpec)
+          datetimeRebaseModeStr, int96RebaseModeStr)
         parquetBuilder.buildPushFilterJson(filter.orNull,
           session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER),
           session.sessionState.conf.parquetFilterPushDown
@@ -150,7 +137,6 @@ case class OmniFileSourceScanExecTransformer(
 
       case _ => "{}"
     }
-
     val extraProto = BackendsApiManager.getTransformerApiInstance.packPBMessage(
       StringValue.newBuilder.setValue(json).build)
     val extensionNode = ExtensionBuilder.makeAdvancedExtension(optimization, extraProto)

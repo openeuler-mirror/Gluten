@@ -18,6 +18,7 @@ package org.apache.spark.sql.hive
 
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution.ProjectExecTransformer
+import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
@@ -119,9 +120,9 @@ object HiveTableScanNestedColumnPruning extends Logging {
         countLeaves(metadataSchema) > countLeaves(prunedMetadataSchema)
       ) {
         val leafNode = leafNodeBuilder(prunedDataSchema, prunedMetadataSchema)
-        val projectionOverSchema = ProjectionOverSchema(
+        val projectionOverSchema = SparkShimLoader.getSparkShims.createProjectionOverSchema(
           prunedDataSchema.merge(prunedMetadataSchema),
-          AttributeSet(relation.output))
+          leafNode.output)
         Some(
           buildNewProjection(
             projects,

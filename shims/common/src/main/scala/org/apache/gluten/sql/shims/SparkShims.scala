@@ -26,23 +26,26 @@ import org.apache.spark.sql.{AnalysisException, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.csv.CSVOptions
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BinaryExpression, Expression}
-import org.apache.spark.sql.catalyst.expressions.aggregate.TypedImperativeAggregate
-import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.plans.logical.{CTERelationRef, LogicalPlan, Statistics}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BinaryExpression, Expression, NamedExpression, ProjectionOverSchema}
+import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, TypedImperativeAggregate}
+import org.apache.spark.sql.catalyst.plans.{JoinType, QueryPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{CTERelationRef, Join, JoinHint, LogicalPlan, Statistics}
 import org.apache.spark.sql.catalyst.plans.physical.{Distribution, Partitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.connector.catalog.Table
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.{InputPartition, Scan}
+import org.apache.spark.sql.connector.write.WriterCommitMessage
 import org.apache.spark.sql.execution.{FileSourceScanExec, GlobalLimitExec, SparkPlan, TakeOrderedAndProjectExec}
-import org.apache.spark.sql.execution.command.DataWritingCommandExec
+import org.apache.spark.sql.execution.command.{DataWritingCommand, DataWritingCommandExec}
+import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeLike}
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.SaveMode
 import org.apache.spark.sql.types.{DecimalType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.storage.{BlockId, BlockManagerId}
@@ -247,6 +250,70 @@ trait SparkShims {
       conf: SQLConf,
       schema: MessageType,
       caseSensitive: Option[Boolean] = None): ParquetFilters
+
+  def getPushedDownFilters(
+      relation: HadoopFsRelation,
+      dataFilters: Seq[Expression]): Seq[org.apache.spark.sql.sources.Filter]
+
+  def extractEquiJoinKeys(
+      join: Join): Option[
+    (JoinType, Seq[Expression], Seq[Expression], Option[Expression], LogicalPlan, LogicalPlan,
+      JoinHint)]
+
+  def executeWriteFiles(
+      plan: SparkPlan,
+      writeFilesSpec: Any): org.apache.spark.rdd.RDD[WriterCommitMessage]
+
+  def checkColumnNameDuplication(
+      columnNames: Seq[String],
+      colType: String,
+      caseSensitiveAnalysis: Boolean): Unit
+
+  def unsupportedSaveModeError(mode: SaveMode, pathExists: Boolean): Throwable
+
+  def taskFailedWhileWritingRowsError(path: String, cause: Throwable): Throwable
+
+  def createHashAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]] = None,
+      isStreaming: Boolean = false,
+      numShufflePartitions: Option[Int] = None,
+      groupingExpressions: Seq[NamedExpression] = Nil,
+      aggregateExpressions: Seq[AggregateExpression] = Nil,
+      aggregateAttributes: Seq[Attribute] = Nil,
+      initialInputBufferOffset: Int = 0,
+      resultExpressions: Seq[NamedExpression] = Nil,
+      child: SparkPlan): HashAggregateExec
+
+  def createObjectHashAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]] = None,
+      isStreaming: Boolean = false,
+      numShufflePartitions: Option[Int] = None,
+      groupingExpressions: Seq[NamedExpression] = Nil,
+      aggregateExpressions: Seq[AggregateExpression] = Nil,
+      aggregateAttributes: Seq[Attribute] = Nil,
+      initialInputBufferOffset: Int = 0,
+      resultExpressions: Seq[NamedExpression] = Nil,
+      child: SparkPlan): ObjectHashAggregateExec
+
+  def createSortAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]] = None,
+      isStreaming: Boolean = false,
+      numShufflePartitions: Option[Int] = None,
+      groupingExpressions: Seq[NamedExpression] = Nil,
+      aggregateExpressions: Seq[AggregateExpression] = Nil,
+      aggregateAttributes: Seq[Attribute] = Nil,
+      initialInputBufferOffset: Int = 0,
+      resultExpressions: Seq[NamedExpression] = Nil,
+      child: SparkPlan): SortAggregateExec
+
+  def createProjectionOverSchema(
+      schema: StructType,
+      output: Seq[Attribute]): ProjectionOverSchema
+
+  def getNativeWriteFormatForHiveCommand(
+      cmd: DataWritingCommand,
+      formatMapping: Map[String, String],
+      isRegistered: String => Boolean): Option[String] = None
 
   def genDecimalRoundExpressionOutput(decimalType: DecimalType, toScale: Int): DecimalType = {
     val p = decimalType.precision

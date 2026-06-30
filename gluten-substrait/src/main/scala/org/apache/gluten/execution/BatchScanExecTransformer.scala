@@ -17,6 +17,7 @@
 package org.apache.gluten.execution
 
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.expression.ExpressionConverter
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.metrics.MetricsUpdater
@@ -147,6 +148,13 @@ abstract class BatchScanExecTransformerBase(
   protected[this] def supportsBatchScan(scan: Scan): Boolean
 
   override def doValidateInternal(): ValidationResult = {
+    GlutenConfig
+      .scanFallbackTableMatched(BatchScanExecTransformerBase.tableNameCandidates(table))
+      .foreach { matchedTable =>
+        return ValidationResult.failed(
+          s"Table $matchedTable is configured to fallback scan to vanilla Spark")
+      }
+
     if (!supportsBatchScan(scan)) {
       return ValidationResult.failed(s"Unsupported scan $scan")
     }
@@ -185,5 +193,18 @@ abstract class BatchScanExecTransformerBase(
     val result = s"$nodeName$truncatedOutputString ${scan.description()}" +
       s" $runtimeFiltersString $nativeFiltersString"
     redact(result)
+  }
+}
+
+object BatchScanExecTransformerBase {
+  def tableNameCandidates(table: Table): Seq[String] = {
+    Option(table).map(_.name()).toSeq.flatMap { name =>
+      val parts = name.split("\\.").filter(_.nonEmpty)
+      Seq(
+        name,
+        parts.takeRight(2).mkString("."),
+        parts.lastOption.getOrElse("")
+      )
+    }
   }
 }

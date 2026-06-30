@@ -33,6 +33,10 @@ class OmniWindowMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
 
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(
+        metrics,
+        operatorMetrics.getNumOutputRows,
+        operatorMetrics.getNumOutputVecBatches)
       metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
       metrics("getOutputCount") += operatorMetrics.getOutputCpuCount
       metrics("getOutputTime") += operatorMetrics.getGetOutputTime

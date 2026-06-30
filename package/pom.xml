@@ -78,11 +78,6 @@
         </dependency>
         <dependency>
           <groupId>io.delta</groupId>
-          <artifactId>delta-spark_${scala.binary.version}</artifactId>
-          <version>${delta.version}</version>
-        </dependency>
-        <dependency>
-          <groupId>io.delta</groupId>
           <artifactId>delta-storage</artifactId>
           <version>${delta.version}</version>
         </dependency>
@@ -328,6 +323,10 @@
                     <ignoreClass>org.apache.spark.sql.execution.columnar.ByteBufferHelper</ignoreClass>
                     <ignoreClass>org.apache.spark.sql.execution.columnar.ByteBufferHelper$</ignoreClass>
                     <!-- The overridden class list by Gluten. Carefully add entries to this list only when you knew exactly what is going to happen -->
+                    <ignoreClass>org.apache.spark.sql.execution.adaptive.CoalesceShufflePartitions</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.adaptive.CoalesceShufflePartitions$</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.adaptive.ShuffleStageInfo</ignoreClass>
+                    <ignoreClass>org.apache.spark.sql.execution.adaptive.ShuffleStageInfo$</ignoreClass>
                     <ignoreClass>org.apache.spark.rdd.EmptyRDD</ignoreClass>
                     <ignoreClass>org.apache.spark.sql.hive.execution.HiveFileFormat</ignoreClass>
                     <ignoreClass>org.apache.spark.sql.hive.execution.HiveFileFormat$$$$anon$1</ignoreClass>

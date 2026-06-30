@@ -35,6 +35,10 @@ class OmniSortMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metric
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
       metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(
+        metrics,
+        operatorMetrics.getNumOutputRows,
+        operatorMetrics.getNumOutputVecBatches)
       metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
       metrics("getOutputTime") += operatorMetrics.getGetOutputTime
     }

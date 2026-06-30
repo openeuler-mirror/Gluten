@@ -215,7 +215,7 @@ abstract class BaseDynamicPartitionDataWriter(
   protected val isPartitioned = description.partitionColumns.nonEmpty
 
   /** Flag saying whether or not the data to be written out is bucketed. */
-  protected val isBucketed = description.bucketSpec.isDefined
+  protected val isBucketed = description.bucketIdExpression.isDefined
 
   assert(isPartitioned || isBucketed,
     s"""DynamicPartitionWriteTask should be used for writing out data that's either
@@ -260,7 +260,7 @@ abstract class BaseDynamicPartitionDataWriter(
   /** Given an input row, returns the corresponding `bucketId` */
   protected lazy val getBucketId: InternalRow => Int = {
     val proj =
-      UnsafeProjection.create(Seq(description.bucketSpec.get.bucketIdExpression),
+      UnsafeProjection.create(Seq(description.bucketIdExpression.get),
         description.allColumns)
     row => proj(row).getInt(0)
   }
@@ -297,10 +297,7 @@ abstract class BaseDynamicPartitionDataWriter(
     // The prefix and suffix must be in a form that matches our bucketing format. See BucketingUtils
     // for details. The prefix is required to represent bucket id when writing Hive-compatible
     // bucketed table.
-    val prefix = bucketId match {
-      case Some(id) => description.bucketSpec.get.bucketFileNamePrefix(id)
-      case _ => ""
-    }
+    val prefix = bucketId.map(description.bucketFileNamePrefix).getOrElse("")
     val suffix = f"$bucketIdStr.c$fileCounter%03d" +
       description.outputWriterFactory.getFileExtension(taskAttemptContext)
     val fileNameSpec = FileNameSpec(prefix, suffix)
@@ -690,6 +687,19 @@ class WriteJobDescription(
                            val timeZoneId: String,
                            val statsTrackers: Seq[WriteJobStatsTracker])
   extends Serializable {
+
+  def bucketIdExpression: Option[Expression] = {
+    bucketSpec.asInstanceOf[Option[Any]].map {
+      case spec: WriterBucketSpec => spec.bucketIdExpression
+      case expression: Expression => expression
+    }
+  }
+
+  def bucketFileNamePrefix(bucketId: Int): String = {
+    bucketSpec.asInstanceOf[Option[Any]].collect {
+      case spec: WriterBucketSpec => spec.bucketFileNamePrefix(bucketId)
+    }.getOrElse("")
+  }
 
   assert(AttributeSet(allColumns) == AttributeSet(partitionColumns ++ dataColumns),
     s"""

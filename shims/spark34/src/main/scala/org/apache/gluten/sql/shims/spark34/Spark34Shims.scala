@@ -26,14 +26,14 @@ import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.paths.SparkPath
 import org.apache.spark.scheduler.TaskInfo
 import org.apache.spark.shuffle.ShuffleHandle
-import org.apache.spark.sql.{AnalysisException, SparkSession}
+import org.apache.spark.sql.{AnalysisException, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
-import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.plans.logical.{CTERelationRef, LogicalPlan, Statistics}
+import org.apache.spark.sql.catalyst.plans.{JoinType, QueryPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{CTERelationRef, Join, JoinHint, LogicalPlan, Statistics}
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution, KeyGroupedPartitioning, Partitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, InternalRowComparableWrapper, TimestampFormatter}
@@ -41,19 +41,24 @@ import org.apache.spark.sql.catalyst.util.RebaseDateTime.RebaseSpec
 import org.apache.spark.sql.connector.catalog.Table
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.{HasPartitionKey, InputPartition, Scan}
+import org.apache.spark.sql.connector.write.WriterCommitMessage
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.DataWritingCommandExec
+import org.apache.spark.sql.execution.command.DataWritingCommand
 import org.apache.spark.sql.execution.datasources._
+import org.apache.spark.sql.execution.datasources.DataSourceStrategy
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.datasources.v2.utils.CatalogUtil
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeLike
+import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.sql.util.{CaseInsensitiveStringMap, SchemaUtils}
 import org.apache.spark.storage.{BlockId, BlockManagerId}
+import org.apache.spark.sql.hive.execution.{InsertIntoHiveDirCommand, InsertIntoHiveTable}
 
 import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.parquet.schema.MessageType
@@ -508,6 +513,135 @@ class Spark34Shims extends SparkShims {
       caseSensitive.getOrElse(conf.caseSensitiveAnalysis),
       RebaseSpec(LegacyBehaviorPolicy.CORRECTED)
     )
+  }
+
+  override def getPushedDownFilters(
+      relation: HadoopFsRelation,
+      dataFilters: Seq[Expression]): Seq[org.apache.spark.sql.sources.Filter] = {
+    val supportNestedPredicatePushdown = DataSourceUtils.supportNestedPredicatePushdown(relation)
+    dataFilters.flatMap(DataSourceStrategy.translateFilter(_, supportNestedPredicatePushdown))
+  }
+
+  override def extractEquiJoinKeys(
+      join: Join): Option[
+    (JoinType, Seq[Expression], Seq[Expression], Option[Expression], LogicalPlan, LogicalPlan,
+      JoinHint)] = {
+    ExtractEquiJoinKeys.unapply(join).map {
+      case (
+            joinType,
+            leftKeys,
+            rightKeys,
+            otherPredicates,
+            _,
+            left,
+            right,
+            hint) =>
+        (joinType, leftKeys, rightKeys, otherPredicates, left, right, hint)
+    }
+  }
+
+  override def executeWriteFiles(
+      plan: SparkPlan,
+      writeFilesSpec: Any): org.apache.spark.rdd.RDD[WriterCommitMessage] = {
+    plan.executeWrite(writeFilesSpec.asInstanceOf[WriteFilesSpec])
+  }
+
+  override def checkColumnNameDuplication(
+      columnNames: Seq[String],
+      colType: String,
+      caseSensitiveAnalysis: Boolean): Unit = {
+    SchemaUtils.checkColumnNameDuplication(columnNames, colType, caseSensitiveAnalysis)
+  }
+
+  override def unsupportedSaveModeError(mode: SaveMode, pathExists: Boolean): Throwable = {
+    QueryExecutionErrors.saveModeUnsupportedError(mode, pathExists)
+  }
+
+  override def taskFailedWhileWritingRowsError(path: String, cause: Throwable): Throwable = {
+    QueryExecutionErrors.taskFailedWhileWritingRowsError(path, cause)
+  }
+
+  override def createHashAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]],
+      isStreaming: Boolean,
+      numShufflePartitions: Option[Int],
+      groupingExpressions: Seq[NamedExpression],
+      aggregateExpressions: Seq[AggregateExpression],
+      aggregateAttributes: Seq[Attribute],
+      initialInputBufferOffset: Int,
+      resultExpressions: Seq[NamedExpression],
+      child: SparkPlan): HashAggregateExec = {
+    HashAggregateExec(
+      requiredChildDistributionExpressions = requiredChildDistributionExpressions,
+      groupingExpressions = groupingExpressions,
+      aggregateExpressions = aggregateExpressions,
+      aggregateAttributes = aggregateAttributes,
+      initialInputBufferOffset = initialInputBufferOffset,
+      resultExpressions = resultExpressions,
+      child = child
+    )
+  }
+
+  override def createObjectHashAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]],
+      isStreaming: Boolean,
+      numShufflePartitions: Option[Int],
+      groupingExpressions: Seq[NamedExpression],
+      aggregateExpressions: Seq[AggregateExpression],
+      aggregateAttributes: Seq[Attribute],
+      initialInputBufferOffset: Int,
+      resultExpressions: Seq[NamedExpression],
+      child: SparkPlan): ObjectHashAggregateExec = {
+    ObjectHashAggregateExec(
+      requiredChildDistributionExpressions = requiredChildDistributionExpressions,
+      groupingExpressions = groupingExpressions,
+      aggregateExpressions = aggregateExpressions,
+      aggregateAttributes = aggregateAttributes,
+      initialInputBufferOffset = initialInputBufferOffset,
+      resultExpressions = resultExpressions,
+      child = child
+    )
+  }
+
+  override def createSortAggregateExec(
+      requiredChildDistributionExpressions: Option[Seq[Expression]],
+      isStreaming: Boolean,
+      numShufflePartitions: Option[Int],
+      groupingExpressions: Seq[NamedExpression],
+      aggregateExpressions: Seq[AggregateExpression],
+      aggregateAttributes: Seq[Attribute],
+      initialInputBufferOffset: Int,
+      resultExpressions: Seq[NamedExpression],
+      child: SparkPlan): SortAggregateExec = {
+    SortAggregateExec(
+      requiredChildDistributionExpressions = requiredChildDistributionExpressions,
+      groupingExpressions = groupingExpressions,
+      aggregateExpressions = aggregateExpressions,
+      aggregateAttributes = aggregateAttributes,
+      initialInputBufferOffset = initialInputBufferOffset,
+      resultExpressions = resultExpressions,
+      child = child
+    )
+  }
+
+  override def createProjectionOverSchema(
+      schema: StructType,
+      output: Seq[Attribute]): ProjectionOverSchema = {
+    ProjectionOverSchema(schema)
+  }
+
+  override def getNativeWriteFormatForHiveCommand(
+      cmd: DataWritingCommand,
+      formatMapping: Map[String, String],
+      isRegistered: String => Boolean): Option[String] = {
+    cmd match {
+      case command: InsertIntoHiveDirCommand =>
+        command.storage.outputFormat.flatMap(formatMapping.get).filter(isRegistered)
+      case command: InsertIntoHiveTable =>
+        command.table.storage.outputFormat.flatMap(formatMapping.get).filter(isRegistered)
+      case _ =>
+        None
+    }
   }
 
   override def extractExpressionArrayInsert(arrayInsert: Expression): Seq[Expression] = {

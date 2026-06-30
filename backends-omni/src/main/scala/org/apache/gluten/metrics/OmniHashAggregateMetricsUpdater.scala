@@ -54,6 +54,10 @@ class OmniHashAggregateMetricsUpdaterImpl(val metrics: Map[String, SQLMetric])
     val aggMetrics = aggregationMetrics.get(idx)
     numOutputRows += aggMetrics.getNumOutputRows
     numOutputVecBatches += aggMetrics.getNumOutputVecBatches
+    OmniRowCountPerVecBatchMetrics.update(
+      metrics,
+      aggMetrics.getNumOutputRows,
+      aggMetrics.getNumOutputVecBatches)
     numOutputBytes += aggMetrics.getNumOutputBytes
     numInputRows += aggMetrics.getNumInputRows
     numInputVecBatches += aggMetrics.getNumInputVecBatches

@@ -17,6 +17,7 @@
 package org.apache.gluten.execution
 
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.expression.ExpressionConverter
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.metrics.MetricsUpdater
@@ -137,6 +138,19 @@ abstract class FileSourceScanExecTransformerBase(
   }
 
   override protected def doValidateInternal(): ValidationResult = {
+    GlutenConfig
+      .scanFallbackTableMatched(tableIdentifier.toSeq.flatMap { table =>
+        Seq(
+          table.unquotedString,
+          table.table,
+          table.database.map(db => s"$db.${table.table}").getOrElse("")
+        )
+      })
+      .foreach { matchedTable =>
+        return ValidationResult.failed(
+          s"Table $matchedTable is configured to fallback scan to vanilla Spark")
+      }
+
     if (
       !metadataColumns.isEmpty && !BackendsApiManager.getSettings.supportNativeMetadataColumns()
     ) {

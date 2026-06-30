@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution.datasources
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.execution.{ColumnarToRowExecBase}
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -26,7 +27,7 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.command.{CreateDataSourceTableAsSelectCommand, DataWritingCommand, DataWritingCommandExec}
 import org.apache.spark.sql.execution.datasources.v2.{AppendDataExec, OverwriteByExpressionExec}
-import org.apache.spark.sql.hive.execution.{CreateHiveTableAsSelectCommand, InsertIntoHiveDirCommand, InsertIntoHiveTable, OmniInsertIntoHiveTable}
+import org.apache.spark.sql.hive.execution.OmniInsertIntoHiveTable
 import org.apache.spark.sql.sources.DataSourceRegister
 
 object OmniGlutenWriterColumnarRules {
@@ -63,24 +64,15 @@ object OmniGlutenWriterColumnarRules {
             Some(register.shortName())
           case _ => None
         }
-      case command: InsertIntoHiveDirCommand =>
-        command.storage.outputFormat
-          .flatMap(formatMapping.get)
-          .filter(GlutenFormatFactory.isRegistered)
-      case command: InsertIntoHiveTable =>
-        command.table.storage.outputFormat
-          .flatMap(formatMapping.get)
-          .filter(GlutenFormatFactory.isRegistered)
       case command: OmniInsertIntoHiveTable =>
         command.table.storage.outputFormat
           .flatMap(formatMapping.get)
           .filter(GlutenFormatFactory.isRegistered)
-      case command: CreateHiveTableAsSelectCommand =>
-        command.tableDesc.storage.outputFormat
-          .flatMap(formatMapping.get)
-          .filter(GlutenFormatFactory.isRegistered)
       case _ =>
-        None
+        SparkShimLoader.getSparkShims.getNativeWriteFormatForHiveCommand(
+          cmd,
+          formatMapping,
+          GlutenFormatFactory.isRegistered)
     }
   }
 

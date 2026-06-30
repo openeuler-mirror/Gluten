@@ -4,6 +4,7 @@
 package org.apache.gluten.extension.columnar.offload
 
 import org.apache.gluten.execution.OmniHudiScanExecTransformer
+import org.apache.gluten.extension.columnar.FallbackTags
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -12,6 +13,8 @@ import org.apache.spark.sql.execution.{FileSourceScanExec, SparkPlan}
 /** Pre-offload Hudi scan before generic [[org.apache.gluten.extension.columnar.offload.OffloadOthers]]. */
 case class OffloadOmniHudiScan() extends OffloadSingleNode with Logging {
   override def offload(plan: SparkPlan): SparkPlan = plan match {
+    case p if FallbackTags.nonEmpty(p) =>
+      p
     case scan: FileSourceScanExec if OmniHudiScanExecTransformer.isHudiTableScan(scan) =>
       logWarning(
         s"[Gluten][Hudi] OffloadOmniHudiScan: FileSourceScanExec -> OmniHudiScanExecTransformer, " +

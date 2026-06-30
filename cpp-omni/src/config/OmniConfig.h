@@ -49,6 +49,7 @@ const std::string kMemoryReservationBlockSize = "spark.gluten.memory.reservation
 const uint64_t kMemoryReservationBlockSizeDefault = 8 << 20;
 
 const std::string kSparkBatchSize = "spark.gluten.sql.columnar.maxBatchSize";
+const std::string kSparkMaxBatchRowCount = "spark.gluten.sql.columnar.maxBatchRowCount";
 
 const std::string kParquetBlockSize = "parquet.block.size";
 

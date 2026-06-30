@@ -148,11 +148,8 @@ case class OmniRollUpOptimizeTransformer(
       classOf[StddevPop],
       classOf[VarianceSamp],
       classOf[VariancePop],
-      classOf[ApproximatePercentile],
-      classOf[RegrReplacement],
-      classOf[RegrCount], classOf[RegrSlope], classOf[RegrIntercept], classOf[RegrR2],
-      classOf[RegrSXY]
-    )
+      classOf[ApproximatePercentile]
+    ) ++ SparkShimLoader.getSparkShims.aggregateExpressionMappings.map(_.expClass)
 
     val completeOnlySupported = Set(
       classOf[Sum],
@@ -338,7 +335,7 @@ case class OmniRollUpOptimizeTransformer(
                       .replaceWithExpressionTransformer(expr, originalInputAttributes)
                       .doTransform(args))
               case _ =>
-                if (aggregateFunc.isInstanceOf[RegrReplacement]) {
+                if (OmniRegrMeasureBuilder.isRegrReplacement(aggregateFunc)) {
                   val valueExpr =
                     OmniRegrMeasureBuilder.extractRegrReplacementPartialValueExpr(
                       aggregateFunc.children.head)

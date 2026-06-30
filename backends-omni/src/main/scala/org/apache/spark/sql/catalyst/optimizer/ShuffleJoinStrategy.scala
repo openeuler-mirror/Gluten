@@ -18,11 +18,11 @@
 package org.apache.spark.sql.catalyst.optimizer
 
 import scala.sys.process._
+import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.config.GlutenConfig
 import org.apache.spark.sql.Strategy
 import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.execution.{SparkPlan, joins}
@@ -158,9 +158,6 @@ object ExtractEquiJoinKeysShim {
       Option[Expression], LogicalPlan, LogicalPlan, JoinHint)
 
   def unapply(join: Join): Option[ReturnType] = {
-    ExtractEquiJoinKeys.unapply(join).map {
-      case (joinType, leftKeys, rightKeys, otherPredicates, predicatesOfJoinKeys, left, right, hint) =>
-        (joinType, leftKeys, rightKeys, otherPredicates, left, right, hint)
-    }
+    SparkShimLoader.getSparkShims.extractEquiJoinKeys(join)
   }
 }
