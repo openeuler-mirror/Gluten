@@ -44,7 +44,7 @@ abstract class HashAggregateExecTransformer(
     groupingExpressions: Seq[NamedExpression],
     aggregateExpressions: Seq[AggregateExpression],
     aggregateAttributes: Seq[Attribute],
-    initialInputBufferOffset: Int,
+    val initialInputBufferOffset: Int,
     resultExpressions: Seq[NamedExpression],
     child: SparkPlan)
   extends HashAggregateExecBaseTransformer(
@@ -145,14 +145,12 @@ abstract class HashAggregateExecTransformer(
     val alwaysSupported = Set(
       classOf[Sum], classOf[Min], classOf[Max], classOf[Count], classOf[MinBy], classOf[MaxBy],
       classOf[Average], classOf[First], classOf[Last], classOf[StddevSamp], classOf[StddevPop],
-      classOf[VarianceSamp], classOf[VariancePop], classOf[BloomFilterAggregate],
+      classOf[VarianceSamp], classOf[VariancePop],
       classOf[BitAndAgg], classOf[BitOrAgg], classOf[BitXorAgg], classOf[OmniHLLAdapter],
       classOf[Corr], classOf[CovPopulation], classOf[CovSample], classOf[CollectSet], classOf[OmniCollectSet],
-      classOf[CollectList], classOf[OmniCollectList], classOf[Skewness], classOf[Kurtosis], classOf[ApproximatePercentile],
-      classOf[RegrReplacement],
-      classOf[RegrCount], classOf[RegrSlope], classOf[RegrIntercept], classOf[RegrR2],
-      classOf[RegrSXY],
-    )
+      classOf[CollectList], classOf[OmniCollectList], classOf[Skewness], classOf[Kurtosis], classOf[ApproximatePercentile]
+    ) ++ SparkShimLoader.getSparkShims.bloomFilterExpressionMappings().map(_.expClass) ++
+      SparkShimLoader.getSparkShims.aggregateExpressionMappings.map(_.expClass)
 
     var completeOnlySupported = Set(
       classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
@@ -171,6 +169,7 @@ abstract class HashAggregateExecTransformer(
     }
 
     if (supported.exists(_.isInstance(agg.aggregateFunction)) ||
+      OmniExpressionAdaptor.isRegrAggregateByClassName(agg.aggregateFunction) ||
       SparkShimLoader.getSparkShims.isTrySum(agg.aggregateFunction)) {
       agg.aggregateFunction match {
         case ap: ApproximatePercentile =>
@@ -345,7 +344,7 @@ abstract class HashAggregateExecTransformer(
                       .replaceWithExpressionTransformer(expr, originalInputAttributes)
                       .doTransform(args))
               case _ =>
-                if (aggregateFunc.isInstanceOf[RegrReplacement]) {
+                if (OmniRegrMeasureBuilder.isRegrReplacement(aggregateFunc)) {
                   val valueExpr =
                     OmniRegrMeasureBuilder.extractRegrReplacementPartialValueExpr(
                       aggregateFunc.children.head)
@@ -423,7 +422,7 @@ case class OmniAdaptiveHashAggregateExecTransformer(
   groupingExpressions: Seq[NamedExpression],
   aggregateExpressions: Seq[AggregateExpression],
   aggregateAttributes: Seq[Attribute],
-  initialInputBufferOffset: Int,
+  override val initialInputBufferOffset: Int,
   resultExpressions: Seq[NamedExpression],
   child: SparkPlan)
   extends HashAggregateExecTransformer(
@@ -453,7 +452,7 @@ case class OmniHashAggregateExecTransformer(
   groupingExpressions: Seq[NamedExpression],
   aggregateExpressions: Seq[AggregateExpression],
   aggregateAttributes: Seq[Attribute],
-  initialInputBufferOffset: Int,
+  override val initialInputBufferOffset: Int,
   resultExpressions: Seq[NamedExpression],
   child: SparkPlan)
   extends HashAggregateExecTransformer(

@@ -17,7 +17,6 @@
 package org.apache.gluten.extension.columnar
 
 import org.apache.gluten.config.GlutenConfig
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.aggregate.{Complete, Final, Partial}
@@ -64,37 +63,26 @@ case class MergeTwoPhasesHashBaseAggregate(session: SparkSession)
       plan
     } else {
       plan.transformDown {
-        case hashAgg @ HashAggregateExec(
-              _,
-              isStreaming,
-              _,
-              _,
-              aggregateExpressions,
-              aggregateAttributes,
-              _,
-              resultExpressions,
-              child: HashAggregateExec) if !isStreaming && isPartialAgg(child, hashAgg) =>
+        case hashAgg: HashAggregateExec
+            if hashAgg.child.isInstanceOf[HashAggregateExec] &&
+              isPartialAgg(hashAgg.child.asInstanceOf[HashAggregateExec], hashAgg) =>
+          val child = hashAgg.child.asInstanceOf[HashAggregateExec]
           // convert to complete mode aggregate expressions
-          val completeAggregateExpressions = aggregateExpressions.map(_.copy(mode = Complete))
+          val completeAggregateExpressions =
+            hashAgg.aggregateExpressions.map(_.copy(mode = Complete))
           hashAgg.copy(
             groupingExpressions = child.groupingExpressions,
             aggregateExpressions = completeAggregateExpressions,
             initialInputBufferOffset = 0,
             child = child.child
           )
-        case objectHashAgg @ ObjectHashAggregateExec(
-              _,
-              isStreaming,
-              _,
-              _,
-              aggregateExpressions,
-              aggregateAttributes,
-              _,
-              resultExpressions,
-              child: ObjectHashAggregateExec)
-            if !isStreaming && isPartialAgg(child, objectHashAgg) =>
+        case objectHashAgg: ObjectHashAggregateExec
+            if objectHashAgg.child.isInstanceOf[ObjectHashAggregateExec] &&
+              isPartialAgg(objectHashAgg.child.asInstanceOf[ObjectHashAggregateExec], objectHashAgg) =>
+          val child = objectHashAgg.child.asInstanceOf[ObjectHashAggregateExec]
           // convert to complete mode aggregate expressions
-          val completeAggregateExpressions = aggregateExpressions.map(_.copy(mode = Complete))
+          val completeAggregateExpressions =
+            objectHashAgg.aggregateExpressions.map(_.copy(mode = Complete))
           objectHashAgg.copy(
             requiredChildDistributionExpressions = None,
             groupingExpressions = child.groupingExpressions,
@@ -102,19 +90,14 @@ case class MergeTwoPhasesHashBaseAggregate(session: SparkSession)
             initialInputBufferOffset = 0,
             child = child.child
           )
-        case sortAgg @ SortAggregateExec(
-              _,
-              isStreaming,
-              _,
-              _,
-              aggregateExpressions,
-              aggregateAttributes,
-              _,
-              resultExpressions,
-              child: SortAggregateExec)
-            if replaceSortAggWithHashAgg && !isStreaming && isPartialAgg(child, sortAgg) =>
+        case sortAgg: SortAggregateExec
+            if replaceSortAggWithHashAgg &&
+              sortAgg.child.isInstanceOf[SortAggregateExec] &&
+              isPartialAgg(sortAgg.child.asInstanceOf[SortAggregateExec], sortAgg) =>
+          val child = sortAgg.child.asInstanceOf[SortAggregateExec]
           // convert to complete mode aggregate expressions
-          val completeAggregateExpressions = aggregateExpressions.map(_.copy(mode = Complete))
+          val completeAggregateExpressions =
+            sortAgg.aggregateExpressions.map(_.copy(mode = Complete))
           sortAgg.copy(
             requiredChildDistributionExpressions = None,
             groupingExpressions = child.groupingExpressions,

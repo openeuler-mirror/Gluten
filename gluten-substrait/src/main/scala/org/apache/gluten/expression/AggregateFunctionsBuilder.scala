@@ -70,8 +70,6 @@ object AggregateFunctionsBuilder {
         ExpressionNames.FIRST_IGNORE_NULL
       case Last(_, ignoreNulls) if ignoreNulls =>
         ExpressionNames.LAST_IGNORE_NULL
-      case BloomFilterAggregate(_, _, _, _, _) =>
-        ExpressionNames.BLOOM_FILTER_AGG
       case BitAndAgg(_) =>
         ExpressionNames.BIT_AND_AGG
       case BitOrAgg(_) =>
@@ -100,18 +98,6 @@ object AggregateFunctionsBuilder {
         ExpressionNames.KURTOSIS
       case ApproximatePercentile(_, _, _, _, _) =>
         ExpressionNames.APPROX_PERCENTILE
-      case RegrCount(_, _) =>
-        ExpressionNames.REGR_COUNT
-      case RegrSlope(_, _) =>
-        ExpressionNames.REGR_SLOPE
-      case RegrIntercept(_, _) =>
-        ExpressionNames.REGR_INTERCEPT
-      case RegrR2(_, _) =>
-        ExpressionNames.REGR_R2
-      case RegrSXY(_, _) =>
-        ExpressionNames.REGR_SXY
-      case RegrReplacement(_) =>
-        ExpressionNames.REGR_REPLACEMENT
       case _ =>
         val nameOpt = ExpressionMappings.expressionsMap.get(aggregateFunc.getClass)
         if (nameOpt.isDefined) {
@@ -123,6 +109,20 @@ object AggregateFunctionsBuilder {
           // RegrSxx/RegrSyy may not exist in all Spark versions (e.g. missing in some 3.5);
           // resolve by class name so Substrait gets regr_sxx/regr_syy when the class exists.
           aggregateFunc.getClass.getName match {
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate" =>
+              ExpressionNames.BLOOM_FILTER_AGG
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrCount" =>
+              ExpressionNames.REGR_COUNT
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSlope" =>
+              ExpressionNames.REGR_SLOPE
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrIntercept" =>
+              ExpressionNames.REGR_INTERCEPT
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrR2" =>
+              ExpressionNames.REGR_R2
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXY" =>
+              ExpressionNames.REGR_SXY
+            case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrReplacement" =>
+              ExpressionNames.REGR_REPLACEMENT
             case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXX" =>
               ExpressionNames.REGR_SXX
             case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSYY" =>

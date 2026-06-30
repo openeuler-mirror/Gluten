@@ -1074,6 +1074,12 @@ object OmniExpressionAdaptor extends Logging {
 
   /** Class names for regr aggregates resolved by name (version / shim differences). */
   private val REGR_AGG_CLASS_NAMES = Set(
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrReplacement",
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrCount",
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSlope",
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrIntercept",
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrR2",
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXY",
     "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXX",
     "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSYY",
     "org.apache.spark.sql.catalyst.expressions.aggregate.RegrAvgX",
@@ -1104,6 +1110,18 @@ object OmniExpressionAdaptor extends Logging {
         Some(OMNI_AGGREGATION_TYPE_REGR_AVGX)
       case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrAvgY" =>
         Some(OMNI_AGGREGATION_TYPE_REGR_AVGY)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrReplacement" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_REPLACEMENT)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrCount" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_COUNT)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSlope" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_SLOPE)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrIntercept" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_INTERCEPT)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrR2" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_R2)
+      case "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXY" =>
+        Some(OMNI_AGGREGATION_TYPE_REGR_SXY)
       case _ => None
     }
 
@@ -1146,7 +1164,9 @@ object OmniExpressionAdaptor extends Logging {
       case Last(_, false) =>
         checkLastParamType(agg)
         OMNI_AGGREGATION_TYPE_LAST_INCLUDENULL
-      case _: BloomFilterAggregate => OMNI_AGGREGATION_TYPE_BLOOM_FILTER
+      case aggFunc if aggFunc.getClass.getName ==
+          "org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate" =>
+        OMNI_AGGREGATION_TYPE_BLOOM_FILTER
       case _: BitAndAgg => OMNI_AGGREGATION_TYPE_BIT_AND
       case _: BitOrAgg => OMNI_AGGREGATION_TYPE_BIT_OR
       case _: BitXorAgg => OMNI_AGGREGATION_TYPE_BIT_XOR
@@ -1163,12 +1183,6 @@ object OmniExpressionAdaptor extends Logging {
       case _: Skewness => OMNI_AGGREGATION_TYPE_SKEWNESS
       case _: Kurtosis => OMNI_AGGREGATION_TYPE_KURTOSIS
       case _: ApproximatePercentile => OMNI_AGGREGATION_TYPE_APPROX_PERCENTILE
-      case _: RegrReplacement => OMNI_AGGREGATION_TYPE_REGR_REPLACEMENT
-      case _: RegrCount => OMNI_AGGREGATION_TYPE_REGR_COUNT
-      case _: RegrSlope => OMNI_AGGREGATION_TYPE_REGR_SLOPE
-      case _: RegrIntercept => OMNI_AGGREGATION_TYPE_REGR_INTERCEPT
-      case _: RegrR2 => OMNI_AGGREGATION_TYPE_REGR_R2
-      case _: RegrSXY => OMNI_AGGREGATION_TYPE_REGR_SXY
       case _ =>
         // Only try class-name resolution for regr aggregates (RegrSXX/RegrSYY may be absent in Spark 3.5).
         // Other aggregates are unchanged: they either match above or throw here.

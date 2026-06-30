@@ -26,7 +26,7 @@ import org.apache.spark.sql.internal.SQLConf
 
 case class OmniRewriteSubqueryBroadcast() extends Rule[SparkPlan] {
   override def apply(plan: SparkPlan): SparkPlan = {
-    val out = plan.transformWithSubqueries {
+    val out = plan.transformUp {
       case p =>
         // When AQE is on, the AQE sub-query cache should already be filled with
         // row-based SubqueryBroadcastExec for reusing. Thus we are doing the same

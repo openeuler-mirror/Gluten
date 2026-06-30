@@ -20,7 +20,6 @@ import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.execution.WriteFilesExecTransformer
 import org.apache.gluten.extension.ValidationResult
 import org.apache.spark.TaskContext
-import org.apache.spark.internal.io.SparkHadoopWriterUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
@@ -65,15 +64,15 @@ case class OmniColumnarWriteFilesExec private (
     val concurrentOutputWriterSpec = writeFilesSpec.concurrentOutputWriterSpecFunc(child)
     val description = writeFilesSpec.description
     val committer = writeFilesSpec.committer
-    val jobTrackerID = SparkHadoopWriterUtils.createJobTrackerID(new Date())
+    val jobIdInstant = new Date().getTime
     rddWithNonEmptyPartitions.mapPartitionsInternal { iterator =>
       val sparkStageId = TaskContext.get().stageId()
       val sparkPartitionId = TaskContext.get().partitionId()
       val sparkAttemptNumber = TaskContext.get().taskAttemptId().toInt & Int.MaxValue
 
-      val ret = FileFormatWriter.executeTask(
+      val ret = OmniFileFormatWriter.executeTask(
         description,
-        jobTrackerID,
+        jobIdInstant,
         sparkStageId,
         sparkPartitionId,
         sparkAttemptNumber,

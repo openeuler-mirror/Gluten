@@ -9,7 +9,6 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.trees.TreePattern._
 import org.apache.spark.sql.types._
 
 import scala.collection.mutable.ArrayBuffer
@@ -34,22 +33,13 @@ case class CombineJoinedAggregates(spark: SparkSession)
   private def maxTreeNodeNumOfPredicate: Int = 10
 
   private def isCheapPredicate(e: Expression): Boolean = {
-    !e.containsAnyPattern(
-      PYTHON_UDF,
-      SCALA_UDF,
-      INVOKE,
-      JSON_TO_STRUCT,
-      LIKE_FAMLIY,
-      REGEXP_EXTRACT_FAMILY,
-      REGEXP_REPLACE,
-      DYNAMIC_PRUNING_SUBQUERY,
-      DYNAMIC_PRUNING_EXPRESSION,
-      HIGH_ORDER_FUNCTION,
-      IN_SUBQUERY,
-      IN,
-      INSET,
-      EXISTS_SUBQUERY
-    )
+    e.find {
+      case _: PythonUDF | _: ScalaUDF | _: JsonToStructs | _: Like | _: RLike |
+           _: RegExpExtract | _: RegExpReplace | _: DynamicPruningSubquery |
+           _: ListQuery | _: In | _: InSet | _: Exists =>
+        true
+      case _ => false
+    }.isEmpty
   }
 
   private def checkCondition(leftCondition: Expression, rightCondition: Expression): Boolean = {
@@ -349,7 +339,7 @@ case class CombineJoinedAggregates(spark: SparkSession)
   def apply(plan: LogicalPlan): LogicalPlan = {
     if (!GlutenConfig.get.combineJoinedAggregatesEnabled) return plan
     // apply rule on children first then itself
-    plan.transformUpWithPruning(_.containsAnyPattern(JOIN, AGGREGATE)) {
+    plan.transformUp {
       case j @ Join(left: Aggregate, right: Aggregate, joinType, None, _)
           if isSupportedJoinType(joinType) &&
             left.groupingExpressions.isEmpty && right.groupingExpressions.isEmpty =>
