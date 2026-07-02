@@ -82,7 +82,7 @@ object OmniExpressionAdaptor extends Logging {
     "yyyy-MM", "yyyy-MM-dd", "yyyy-MM-dd HH", "yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss",
     "yyyyMM", "yyyyMMdd", "yyyyMMddHH", "yyyyMMddHHmm", "yyyyMMddHHmmss"
   )
-  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Beijing", "Asia/Shanghai")
+  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Beijing", "Asia/Shanghai", "UTC")
 
   private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
     if (!GlutenConfig.get.enableOmniUnixTimeFunc) {
