@@ -29,7 +29,7 @@ import org.apache.gluten.extension.columnar.transition.{InsertTransitions, Remov
 import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
-import org.apache.gluten.extension.{OmniHLLRewriteRule, RewriteAQEShuffleRead}
+import org.apache.gluten.extension.{OmniHLLRewriteRule, OmniPartialProjectRule, RewriteAQEShuffleRead}
 import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast, CombineProject}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, OmniRewriteCollectFuncRule, RewriteAQEShuffleRead, OmniRewriteJoin, AdaptiveHashAggregateRule}
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -56,6 +56,7 @@ object OmniRuleApi {
     injector.injectQueryStagePrepRule(FallbackMultiCodegens.apply)
     injector.injectQueryStagePrepRule(FallbackBroadcastHashJoinPrepQueryStage.apply)
     injector.injectQueryStagePrepRule(DedupLeftSemiJoin.apply)
+    injector.injectQueryStagePrepRule(s => OmniPartialProjectRule(s))
     injector.injectPlannerStrategy(_ => ShuffleJoinStrategy)
     injector.injectOptimizerRule(OmniRewriteCollectFuncRule.apply)
     injector.injectOptimizerRule(OmniHLLRewriteRule.apply)
@@ -99,13 +100,13 @@ object OmniRuleApi {
     // Legacy: Post-transform rules.
     injector.injectPostTransform(_ => V2WritePostRule())
     injector.injectPostTransform(_ => UnionTransformerRule())
-//    injector.injectPostTransform(c => PartialProjectRule.apply(c.session))
     injector.injectPostTransform(_ => RemoveNativeWriteFilesSortAndProject())
     injector.injectPostTransform(_ => PushDownFilterToOmniScan)
     injector.injectPostTransform(_ => PushDownInputFileExpression.PostOffload)
     injector.injectPostTransform(_ => EnsureLocalSortRequirements)
     injector.injectPostTransform(_ => EliminateLocalSort)
     injector.injectPostTransform(_ => CollapseProjectExecTransformer)
+    injector.injectPostTransform(c => OmniPartialProjectRule(c.session))
     injector.injectPostTransform(_ => CombineProject())
 //    injector.injectPostTransform(c => FlushableHashAggregateRule.apply(c.session))
     injector.injectPostTransform(c => AdaptiveHashAggregateRule.apply(c.session))
