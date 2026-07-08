@@ -42,4 +42,12 @@ trait BuildSideRelation extends Serializable {
    * Post-processed relation transforms can use this mode to obtain the desired format.
    */
   def mode: BroadcastMode
+
+  /**
+   * Called when the associated broadcast variable is cleaned up (unpersisted or GC'd).
+   * Backends can override this to release native resources tied to this relation,
+   * e.g. executor-level hash table caches.
+   * Default is a no-op.
+   */
+  def reset(): Unit = {}
 }

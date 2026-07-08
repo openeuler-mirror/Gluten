@@ -254,6 +254,30 @@ bool SubstraitParser::ConfigExistInOptimization(
     return false;
 }
 
+std::string SubstraitParser::GetStringFromOptimization(
+    const ::substrait::extensions::AdvancedExtension &extension, const std::string &key)
+{
+    if (!extension.has_optimization()) {
+        return {};
+    }
+    if (!extension.optimization().Is<google::protobuf::StringValue>()) {
+        return {};
+    }
+    google::protobuf::StringValue msg;
+    extension.optimization().UnpackTo(&msg);
+    const std::string &text = msg.value();
+    std::size_t keyPos = text.find(key);
+    if (keyPos == std::string::npos) {
+        return {};
+    }
+    std::size_t valueStart = keyPos + key.size();
+    std::size_t valueEnd = text.find('\n', valueStart);
+    if (valueEnd == std::string::npos) {
+        return text.substr(valueStart);
+    }
+    return text.substr(valueStart, valueEnd - valueStart);
+}
+
 template <typename T>
 T SubstraitParser::GetLiteralValue(const ::substrait::Expression::Literal & /* literal */)
 {

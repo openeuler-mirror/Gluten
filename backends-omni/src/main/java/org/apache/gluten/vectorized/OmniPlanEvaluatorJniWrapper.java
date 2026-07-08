@@ -70,4 +70,13 @@ public class OmniPlanEvaluatorJniWrapper implements RuntimeAware {
             throws RuntimeException;
 
     static native void nativeDestroyNative();
+
+    /**
+     * Invalidate the executor-level BHJ hash table cache entry for the given id.
+     * Must be called when the corresponding Spark broadcast relation is unpersisted,
+     * so that the native cache frees the hash table memory.
+     *
+     * @param buildHashTableId the unique id of the built hash table (e.g. "BuiltHashTable-42").
+     */
+    public static native void nativeInvalidateBroadcastHashTable(String buildHashTableId);
 }

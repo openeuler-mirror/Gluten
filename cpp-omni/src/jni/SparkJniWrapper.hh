@@ -101,6 +101,14 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatchOu
 
 JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatchOutIterator_nativeMetaInfo(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
+
+/**
+ * Invalidate a BHJ hash table in the executor-level cache.
+ * Called from Scala when the Spark broadcast relation is unpersisted.
+ */
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeInvalidateBroadcastHashTable(
+    JNIEnv *env, jclass, jstring buildHashTableId);
+
 #ifdef __cplusplus
 }
 #endif

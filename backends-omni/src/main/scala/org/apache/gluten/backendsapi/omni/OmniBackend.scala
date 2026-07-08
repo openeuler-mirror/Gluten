@@ -89,6 +89,15 @@ object OmniBackendSettings extends BackendSettingsApi {
   val GLUTEN_OMNI_INTERNAL_UDF_LIB_PATHS = OmniBackend.CONF_PREFIX + ".internal.udfLibraryPaths"
   val GLUTEN_OMNI_UDF_ALLOW_TYPE_CONVERSION = OmniBackend.CONF_PREFIX + ".udfAllowTypeConversion"
 
+  /**
+   * When true, the BHJ hash table is built only once per executor and shared across all tasks
+   * that probe the same broadcast relation. This matches the ClickHouse/Velox optimization and
+   * reduces both CPU (no redundant builds) and peak memory (only one copy per executor).
+   * Corresponds to the native config key "spark.gluten.omni.buildHashTableOncePerExecutor.enabled".
+   */
+  val GLUTEN_OMNI_BUILD_HASH_TABLE_ONCE_PER_EXECUTOR =
+    "spark.gluten.omni.buildHashTableOncePerExecutor.enabled"
+
   /** The columnar-batch type this backend is by default using. */
   override def primaryBatchType: Convention.BatchType = OmniBatch
 

@@ -36,6 +36,17 @@
 #include "compute/OmniBackend.h"
 #include "JniUdf.h"
 
+// Forward declaration only — implementation lives in lib boostkit-omniop-operator.
+namespace omniruntime {
+namespace op {
+class BroadcastHashTableCache {
+public:
+    static BroadcastHashTableCache& getInstance();
+    void invalidate(const std::string& buildHashTableId);
+};
+} // namespace op
+} // namespace omniruntime
+
 using namespace spark;
 using namespace google::protobuf::io;
 using namespace omniruntime::vec;
@@ -615,4 +626,13 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatch
     auto* shuffleIter = static_cast<spark::ShuffleReaderDeserializer*>(innerIter);
     return shuffleIter->getMetaInfo(env);
     JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeInvalidateBroadcastHashTable(
+    JNIEnv *env, jclass, jstring buildHashTableId)
+{
+    JNI_FUNC_START
+    std::string htId = JStringToCString(env, buildHashTableId);
+    omniruntime::op::BroadcastHashTableCache::getInstance().invalidate(htId);
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
