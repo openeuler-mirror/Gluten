@@ -20,6 +20,7 @@ import com.google.protobuf.StringValue
 import com.huawei.boostkit.spark.jni.{OrcPushFilterBuilder, ParquetPushFilterBuilder}
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER
+import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE
 import org.apache.gluten.expression.{ConverterUtils, ExpressionConverter}
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.SubstraitContext
@@ -118,7 +119,8 @@ case class OmniFileSourceScanExecTransformer(
         val orcBuilder = new OrcPushFilterBuilder(relation.dataSchema, requiredSchema)
         orcBuilder.buildPushFilterJson(filter.orNull,
           session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER),
-          session.sessionState.conf.orcFilterPushDown
+          session.sessionState.conf.orcFilterPushDown,
+          session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE)
         )
 
       // Parquet PushFilterJsonBuilder

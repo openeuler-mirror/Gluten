@@ -2651,6 +2651,13 @@ object GlutenConfig {
     .booleanConf
     .createWithDefault(true)
 
+  val COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE =
+    buildConf("spark.gluten.sql.columnar.backend.omni.scan.filterWhileDecode.enabled")
+    .internal()
+    .doc("enable ORC scan filter-while-decode path in the omni native reader (T0, default off during rollout)")
+    .booleanConf
+    .createWithDefault(false)
+
   val COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT = buildConf("spark.gluten.sql.columnar.backend.omni.enableDelayCartesianProduct.enabled")
     .internal()
     .doc("enable or disable delay cartesian product")
