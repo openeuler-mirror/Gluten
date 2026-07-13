@@ -67,12 +67,12 @@ private:
 
     std::string toSubstraitTypeStr(int32_t numArgs, const char **args);
 
-    fbhive::HiveTypeParser parser_{};
+    omniruntime::type::fbhive::HiveTypeParser parser_{};
 
     std::unordered_map<std::string, void *> handles_;
     google::protobuf::Arena arena_{};
 
-    OmniToSubstraitTypeConvertor convertor_{};
+    omniruntime::OmniToSubstraitTypeConvertor convertor_{};
 
     std::unordered_set<std::shared_ptr<UdfSignature>> signatures_;
     std::unordered_set<std::string> names_;

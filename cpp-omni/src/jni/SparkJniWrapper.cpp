@@ -74,7 +74,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
                 inputDataPrecisions[i] = std::dynamic_pointer_cast<DecimalDataType>(inputDataTypes[i])->GetPrecision();
             }
             if (inputDataTypes[i]->GetId() == OMNI_ARRAY) {
-                auto elementType = std::dynamic_pointer_cast<type::ArrayType>(inputDataTypes[i])->ElementType();
+                auto elementType = std::dynamic_pointer_cast<omniruntime::type::ArrayType>(inputDataTypes[i])->ElementType();
                 elementTypIds[i] = elementType->GetId();
                 if (elementType->GetId() == OMNI_DECIMAL64 || elementType->GetId() == OMNI_DECIMAL128) {
                     elementPrecisions[i] = std::dynamic_pointer_cast<DecimalDataType>(elementType)->GetPrecision();
@@ -548,7 +548,7 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_init_OmniNativeBackendInitializer_
         auto length = env->GetArrayLength(conf);
         // Create a global allocation listener that reserves global off-heap memory from Java-side GlobalOffHeapMemory utility
         // class.
-        auto sparkConf = ParseConfMap(safeArray, length);
+        auto sparkConf = omniruntime::ParseConfMap(safeArray, length);
         gluten::OmniBackend::create(sparkConf);
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
@@ -606,7 +606,7 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatch
 {
     JNI_FUNC_START
     auto* resultIter = reinterpret_cast<omniruntime::ResultIterator*>(iterHandle);
-    auto* innerIter = *reinterpret_cast<ColumnarBatchIterator**>(resultIter);
+    auto* innerIter = *reinterpret_cast<omniruntime::ColumnarBatchIterator**>(resultIter);
 
     if (!innerIter) {
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),

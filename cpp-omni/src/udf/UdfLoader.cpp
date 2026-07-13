@@ -111,12 +111,12 @@ std::string UdfLoader::toSubstraitTypeStr(const std::string &type)
 
 std::string UdfLoader::toSubstraitTypeStr(int32_t numArgs, const char **args)
 {
-    std::vector<DataTypePtr> argTypes;
+    std::vector<omniruntime::type::DataTypePtr> argTypes;
     argTypes.resize(numArgs);
     for (auto i = 0; i < numArgs; ++i) {
         argTypes[i] = parser_.parse(args[i]);
     }
-    auto rowType = std::make_shared<RowType>(argTypes);
+    auto rowType = std::make_shared<omniruntime::type::RowType>(argTypes);
     auto substraitType = convertor_.toSubstraitType(arena_, rowType);
 
     std::string output;
