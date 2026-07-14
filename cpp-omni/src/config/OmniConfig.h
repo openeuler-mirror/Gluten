@@ -194,6 +194,13 @@ const std::string KEnableAdaptivePartialAggregation = "spark.gluten.sql.columnar
 
 // BHJ optimization: build hash table only once per executor
 const std::string kBuildHashTableOncePerExecutor = "spark.gluten.omni.buildHashTableOncePerExecutor.enabled";
+
+// BHJ optimization: Velox-style parallel hash table build (single table, bucket-range partitioning)
+const std::string kBroadcastParallelBuildEnabled = "spark.gluten.omni.broadcastParallelBuild.enabled";
+const std::string kMinTableRowsForParallelJoinBuild = "spark.gluten.omni.broadcastParallelBuild.minTableRows";
+const std::string kBroadcastParallelBuildTargetBytesPerThread =
+    "spark.gluten.omni.broadcastParallelBuild.targetBytesPerThread";
+
 const std::string KAdaptivePartialAggregationMinRows = "spark.gluten.sql.columnar.backend.omni.adaptivePartialAggregationMinRows";
 const std::string KAdaptivePartialAggregationRatio = "spark.gluten.sql.columnar.backend.omni.adaptivePartialAggregationRatio";
 

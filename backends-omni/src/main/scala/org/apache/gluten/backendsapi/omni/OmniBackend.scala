@@ -98,6 +98,21 @@ object OmniBackendSettings extends BackendSettingsApi {
   val GLUTEN_OMNI_BUILD_HASH_TABLE_ONCE_PER_EXECUTOR =
     "spark.gluten.omni.buildHashTableOncePerExecutor.enabled"
 
+  /**
+   * Enable Velox-style parallel BHJ hash table build (single hash table, bucket-range partitioning).
+   * Corresponds to native config key "broadcast_parallel_build_enabled".
+   */
+  val GLUTEN_OMNI_BROADCAST_PARALLEL_BUILD_ENABLED =
+    "spark.gluten.omni.broadcastParallelBuild.enabled"
+
+  /** Minimum build rows per partition to trigger parallel hash table build. Default 1000. */
+  val GLUTEN_OMNI_BROADCAST_PARALLEL_BUILD_MIN_TABLE_ROWS =
+    "spark.gluten.omni.broadcastParallelBuild.minTableRows"
+
+  /** Target build-side bytes per parallel build thread. Default 16MB. */
+  val GLUTEN_OMNI_BROADCAST_PARALLEL_BUILD_TARGET_BYTES_PER_THREAD =
+    "spark.gluten.omni.broadcastParallelBuild.targetBytesPerThread"
+
   /** The columnar-batch type this backend is by default using. */
   override def primaryBatchType: Convention.BatchType = OmniBatch
 
