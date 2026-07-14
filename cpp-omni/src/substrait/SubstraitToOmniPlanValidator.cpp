@@ -279,7 +279,7 @@ bool SubstraitToOmniPlanValidator::IsAllowedCast(const DataTypePtr &fromType, co
             }
             break;
         case OMNI_TIMESTAMP:
-            if (fromTypeId != OMNI_DATE32) {
+            if (fromTypeId != OMNI_DATE32 && fromTypeId != OMNI_VARCHAR) {
                 return false;
             }
             break;
@@ -302,6 +302,21 @@ bool SubstraitToOmniPlanValidator::ValidateCast(
 
     const auto &toType = SubstraitParser::ParseType(castExpr.type());
     auto input = exprConverter_->ToOmniExpr(castExpr.input(), inputType);
+
+    const auto inputTypeId = input->GetReturnTypeId();
+    const auto targetTypeId = toType->GetId();
+    const auto failureBehavior = castExpr.failure_behavior();
+
+    const bool isVarcharToTimestamp = inputTypeId == OMNI_VARCHAR && targetTypeId == OMNI_TIMESTAMP;
+    const bool isReturnNullOnFailure =
+        failureBehavior == ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL;
+
+    if (isVarcharToTimestamp && !isReturnNullOnFailure) {
+        LOG_VALIDATION_MSG(
+            "Omni native VARCHAR to TIMESTAMP cast supports only FAILURE_BEHAVIOR_RETURN_NULL; "
+            "FAILURE_BEHAVIOR_THROW_EXCEPTION and FAILURE_BEHAVIOR_UNSPECIFIED require fallback.");
+        return false;
+    }
     if (IsAllowedCast(input->dataType, toType)) {
         return true;
     }
