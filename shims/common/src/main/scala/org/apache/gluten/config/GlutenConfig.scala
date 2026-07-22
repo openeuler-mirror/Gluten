@@ -822,6 +822,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES.key,
       COLUMNAR_OMNI_MAX_ROW_COUNT.key,
       COLUMNAR_MAX_BATCH_SIZE.key,
+      HASHAGG_NORMALIZED_KEY_ENABLED.key,
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
@@ -2698,4 +2699,13 @@ object GlutenConfig {
       .internal()
       .intConf
       .createWithDefault(0)
+
+  val HASHAGG_NORMALIZED_KEY_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.omni.hashAgg.normalizedKey.enabled")
+      .internal()
+      .doc(
+        "Enable range normalized-key hash mode for eligible multi-column fixed-width " +
+          "hash aggregation keys.")
+      .booleanConf
+      .createWithDefault(false)
 }
