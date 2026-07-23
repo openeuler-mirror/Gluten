@@ -186,7 +186,7 @@ object GlutenWriterColumnarRules {
                   aqe.isSubquery,
                   supportsColumnar = true
                 ))))
-        case other => command
+        case other => command.withNewChildren(Array(FakeRowAdaptor(other)))
       }
     }
   }

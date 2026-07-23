@@ -26,7 +26,7 @@ import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, SparkPla
 import org.apache.spark.sql.execution.ColumnarCollapseTransformStages.transformStageCounter
 
 trait GlutenFormatWriterInjectsBase extends GlutenFormatWriterInjects {
-  protected lazy val transform = HeuristicTransform.static()
+  private lazy val transform = HeuristicTransform.static()
 
   /**
    * FileFormatWriter wraps some Project & Sort on the top of the original output spark plan, we

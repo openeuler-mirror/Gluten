@@ -170,13 +170,6 @@
       </properties>
     </profile>
     <profile>
-      <id>backends-omni</id>
-      <properties>
-        <backend.type>omni</backend.type>
-        <backend.home>${project.basedir}/../cpp-omni/Omni</backend.home>
-      </properties>
-    </profile>
-    <profile>
       <id>backends-clickhouse</id>
       <properties>
         <backend.type>ch</backend.type>

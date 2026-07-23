@@ -35,13 +35,9 @@ case class FallbackOnANSIMode(session: SparkSession) extends Rule[SparkPlan] {
 }
 
 case class FallbackMultiCodegens(session: SparkSession) extends Rule[SparkPlan] {
-  /**
-  * Fetch the current configuration eatch time it is called, ensuring that the latest
-  * settings are used.
-  */
-  def glutenConf: GlutenConfig = GlutenConfig.get
-  def physicalJoinOptimize = glutenConf.enablePhysicalJoinOptimize
-  def optimizeLevel: Integer = glutenConf.physicalJoinOptimizationThrottle
+  lazy val glutenConf: GlutenConfig = GlutenConfig.get
+  lazy val physicalJoinOptimize = glutenConf.enablePhysicalJoinOptimize
+  lazy val optimizeLevel: Integer = glutenConf.physicalJoinOptimizationThrottle
 
   def existsMultiCodegens(plan: SparkPlan, count: Int = 0): Boolean =
     plan match {

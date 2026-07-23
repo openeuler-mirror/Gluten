@@ -86,9 +86,9 @@ abstract class ColumnarWriteFilesExec protected (
 
   /** Fallback to use vanilla Spark write files to generate an empty file for metadata only. */
   protected def writeFilesForEmptyRDD(
-                                       description: WriteJobDescription,
-                                       committer: FileCommitProtocol,
-                                       jobTrackerID: String): RDD[WriterCommitMessage] = {
+      description: WriteJobDescription,
+      committer: FileCommitProtocol,
+      jobTrackerID: String): RDD[WriterCommitMessage] = {
     val rddWithNonEmptyPartitions = session.sparkContext.parallelize(Seq.empty[InternalRow], 1)
     rddWithNonEmptyPartitions.mapPartitionsInternal {
       iterator =>

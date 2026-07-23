@@ -17,7 +17,7 @@
 package org.apache.gluten.extension.columnar.rewrite
 
 import org.apache.spark.sql.catalyst.expressions.{EqualTo, Expression, In, Or}
-import org.apache.spark.sql.execution.{FilterExec, SparkPlan}
+import org.apache.spark.sql.execution.{FileSourceScanExec, FilterExec, SparkPlan}
 import org.apache.spark.sql.types.StructType
 
 /**
@@ -63,6 +63,9 @@ object RewriteIn extends RewriteSingleNode {
   override def rewrite(plan: SparkPlan): SparkPlan = {
     plan match {
       // TODO: Support datasource v2
+      case scan: FileSourceScanExec if scan.dataFilters.exists(_.find(shouldRewrite).isDefined) =>
+        val newDataFilters = scan.dataFilters.map(rewriteIn)
+        scan.copy(dataFilters = newDataFilters)
       case f: FilterExec if f.condition.find(shouldRewrite).isDefined =>
         val newCondition = rewriteIn(f.condition)
         f.copy(condition = newCondition)

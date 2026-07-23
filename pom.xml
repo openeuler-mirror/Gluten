@@ -336,7 +336,7 @@
       <properties>
         <sparkbundle.version>3.5</sparkbundle.version>
         <sparkshim.artifactId>spark-sql-columnar-shims-spark35</sparkshim.artifactId>
-        <spark.version>3.5.1</spark.version>
+        <spark.version>3.5.2</spark.version>
         <iceberg.version>1.5.0</iceberg.version>
         <delta.package.name>delta-spark</delta.package.name>
         <delta.version>3.2.0</delta.version>
@@ -802,20 +802,6 @@
       </modules>
       <properties>
         <backend_type>velox</backend_type>
-      </properties>
-    </profile>
-    <profile>
-      <id>backends-omni</id>
-      <activation>
-        <activeByDefault>true</activeByDefault>
-      </activation>
-      <modules>
-        <module>gluten-arrow</module>
-        <module>backends-omni</module>
-      </modules>
-      <properties>
-        <backend_type>omni</backend_type>
-        <omniruntime.version>2.2.0</omniruntime.version>
       </properties>
     </profile>
     <profile>

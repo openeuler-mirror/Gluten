@@ -192,7 +192,7 @@ object JoinUtils {
       buildKeyExprs,
       inputBuildRelNode,
       inputBuildOutput,
-      inputBuildOutput,
+      streamedOutput ++ inputBuildOutput,
       substraitContext,
       operatorId,
       validation)

@@ -18,7 +18,6 @@ package org.apache.gluten.backendsapi
 
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
 import org.apache.gluten.expression._
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, WindowFunctionNode}
@@ -145,19 +144,6 @@ trait SparkPlanExecApi {
       child: ExpressionTransformer,
       original: Expression): ExpressionTransformer =
     AliasTransformer(substraitExprName, child, original)
-
-  def genFromUnixTimeTransformer(
-      substraitExprName: String,
-      children: Seq[ExpressionTransformer],
-      original: FromUnixTime): ExpressionTransformer =
-    GenericExpressionTransformer(substraitExprName, children, original)
-
-  def genUnixTimestampTransformer(
-      substraitExprName: String,
-      children: Seq[ExpressionTransformer],
-      original: UnixTimestamp): ExpressionTransformer =
-    GenericExpressionTransformer(substraitExprName, children, ToUnixTimestamp(original.timeExp,
-      original.format, original.timeZoneId, original.failOnError))
 
   /** Generate an expression transformer to transform GetMapValue to Substrait. */
   def genGetMapValueTransformer(
@@ -427,12 +413,6 @@ trait SparkPlanExecApi {
       left: ExpressionTransformer,
       right: ExpressionTransformer,
       original: Like): ExpressionTransformer
-
-  def genPromotePrecisionTransformer(
-                                      cast: Cast,
-                                      attributeSeq: Seq[Attribute]): ExpressionTransformer = {
-    replaceWithExpressionTransformer(cast.child, attributeSeq)
-  }
 
   /**
    * Generate an ExpressionTransformer to transform TruncTimestamp expression.
@@ -714,20 +694,4 @@ trait SparkPlanExecApi {
       limitExpr: ExpressionTransformer,
       original: StringSplit): ExpressionTransformer =
     GenericExpressionTransformer(substraitExprName, Seq(srcExpr, regexExpr, limitExpr), original)
-
-
-  def genFileSourceScanExecTransformer(
-      scanExec: FileSourceScanExec): FileSourceScanExecTransformerBase = {
-    FileSourceScanExecTransformer(
-      scanExec.relation,
-      scanExec.output,
-      scanExec.requiredSchema,
-      scanExec.partitionFilters,
-      scanExec.optionalBucketSet,
-      scanExec.optionalNumCoalescedBuckets,
-      scanExec.dataFilters,
-      scanExec.tableIdentifier,
-      scanExec.disableBucketedScan
-    )
-  }
 }
