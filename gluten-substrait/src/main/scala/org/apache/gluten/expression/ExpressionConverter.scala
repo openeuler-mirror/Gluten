@@ -25,7 +25,6 @@ import org.apache.gluten.utils.DecimalArithmeticUtil
 import org.apache.spark.{SPARK_REVISION, SPARK_VERSION_SHORT}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.SQLConfHelper
-import org.apache.spark.sql.catalyst.expressions.EvalMode.TRY
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.NormalizeNaNAndZero
@@ -663,7 +662,7 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_MULTIPLY
         )
       case a: Add =>
-        if (a.evalMode == TRY) {
+        if (SparkShimLoader.getSparkShims.withTryEvalMode(a)) {
           throw new GlutenNotSupportException(
             s"Add with TRY evalMode (try_add) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
           )
@@ -676,7 +675,7 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_ADD
         )
       case a: Subtract =>
-        if (a.evalMode == TRY) {
+        if (SparkShimLoader.getSparkShims.withTryEvalMode(a)) {
           throw new GlutenNotSupportException(
             s"Subtract with TRY evalMode (try_subtract) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
           )
@@ -689,7 +688,7 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_SUBTRACT
         )
       case a: Multiply =>
-        if (a.evalMode == TRY) {
+        if (SparkShimLoader.getSparkShims.withTryEvalMode(a)) {
           throw new GlutenNotSupportException(
             s"Multiply with TRY evalMode (try_multiply) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
           )
@@ -702,7 +701,7 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_MULTIPLY
         )
       case a: Divide =>
-        if (a.evalMode == TRY) {
+        if (SparkShimLoader.getSparkShims.withTryEvalMode(a)) {
           throw new GlutenNotSupportException(
             s"Divide with TRY evalMode (try_divide) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
           )

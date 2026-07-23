@@ -28,8 +28,8 @@ import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
-import org.apache.spark.sql.catalyst.expressions.{ArrayExists, ArrayFilter, ArrayForAll, ArrayTransform, Attribute, AttributeReference, BloomFilterMightContain, Cast, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, GetStructField, HashExpression, IsNotNull, LambdaFunction, Like, MapFilter, Md5, NamedExpression, PosExplode, PythonUDF, SortOrder, UnixTimestamp, Uuid}
-import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, ApproximatePercentile, CollectList, CollectSet, BloomFilterAggregate, MaxBy, MinBy, BitAndAgg, BitOrAgg, BitXorAgg, Skewness, Kurtosis, RegrCount, RegrSlope, RegrIntercept, RegrR2, RegrSXY, RegrReplacement}
+import org.apache.spark.sql.catalyst.expressions.{ArrayExists, ArrayFilter, ArrayForAll, ArrayTransform, Attribute, AttributeReference, Cast, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, GetStructField, HashExpression, IsNotNull, LambdaFunction, Like, MapFilter, Md5, NamedExpression, PosExplode, PythonUDF, SortOrder, UnixTimestamp, Uuid}
+import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, ApproximatePercentile, CollectList, CollectSet, MaxBy, MinBy, BitAndAgg, BitOrAgg, BitXorAgg, Skewness, Kurtosis}
 import org.apache.spark.sql.catalyst.optimizer.BuildSide
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
@@ -60,8 +60,6 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
 
   override def extraExpressionMappings: Seq[Sig] = {
     Seq(
-      Sig[BloomFilterMightContain](ExpressionNames.MIGHT_CONTAIN),
-      Sig[BloomFilterAggregate](ExpressionNames.BLOOM_FILTER_AGG),
       Sig[BitAndAgg](ExpressionNames.BIT_AND_AGG),
       Sig[BitOrAgg](ExpressionNames.BIT_OR_AGG),
       Sig[BitXorAgg](ExpressionNames.BIT_XOR_AGG),
@@ -74,14 +72,9 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       Sig[OmniCollectList](ExpressionNames.COLLECT_LIST),
       Sig[Skewness](ExpressionNames.SKEWNESS),
       Sig[Kurtosis](ExpressionNames.KURTOSIS),
-      Sig[ApproximatePercentile](ExpressionNames.APPROX_PERCENTILE),
-      Sig[RegrCount](ExpressionNames.REGR_COUNT),
-      Sig[RegrSlope](ExpressionNames.REGR_SLOPE),
-      Sig[RegrIntercept](ExpressionNames.REGR_INTERCEPT),
-      Sig[RegrR2](ExpressionNames.REGR_R2),
-      Sig[RegrSXY](ExpressionNames.REGR_SXY),
-      Sig[RegrReplacement](ExpressionNames.REGR_REPLACEMENT),
-    )
+      Sig[ApproximatePercentile](ExpressionNames.APPROX_PERCENTILE)
+    ) ++ SparkShimLoader.getSparkShims.bloomFilterExpressionMappings() ++
+      SparkShimLoader.getSparkShims.aggregateExpressionMappings
   }
 
   /**

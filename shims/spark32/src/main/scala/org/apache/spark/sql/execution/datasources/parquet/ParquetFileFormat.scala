@@ -30,6 +30,7 @@ import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector}
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types._
 import org.apache.spark.util.{SerializableConfiguration, ThreadUtils}
@@ -285,6 +286,8 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
     val parquetOptions = new ParquetOptions(options, sparkSession.sessionState.conf)
     val datetimeRebaseModeInRead = parquetOptions.datetimeRebaseModeInRead
     val int96RebaseModeInRead = parquetOptions.int96RebaseModeInRead
+    val datetimeRebasePolicyInRead = LegacyBehaviorPolicy.withName(datetimeRebaseModeInRead)
+    val int96RebasePolicyInRead = LegacyBehaviorPolicy.withName(int96RebaseModeInRead)
 
     (file: PartitionedFile) => {
       assert(file.partitionValues.numFields == partitionSchema.size)
@@ -296,9 +299,6 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
 
       lazy val footerFileMetaData =
         ParquetFooterReader.readFooter(sharedConf, filePath, SKIP_ROW_GROUPS).getFileMetaData
-      val datetimeRebaseSpec = DataSourceUtils.datetimeRebaseSpec(
-        footerFileMetaData.getKeyValueMetaData.get,
-        datetimeRebaseModeInRead)
       // Try to push down filters when filter push-down is enabled.
       val pushed = if (enableParquetFilterPushDown) {
         val parquetSchema = footerFileMetaData.getSchema
@@ -310,7 +310,7 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
           pushDownStringStartWith,
           pushDownInFilterThreshold,
           isCaseSensitive,
-          datetimeRebaseSpec)
+          datetimeRebasePolicyInRead)
         filters
           // Collects all converted Parquet filter predicates. Notice that not all predicates can be
           // converted (`ParquetFilters.createFilter` returns an `Option`). That's why a `flatMap`
@@ -336,10 +336,6 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
           None
         }
 
-      val int96RebaseSpec = DataSourceUtils.int96RebaseSpec(
-        footerFileMetaData.getKeyValueMetaData.get,
-        int96RebaseModeInRead)
-
       val attemptId = new TaskAttemptID(new TaskID(new JobID(), TaskType.MAP, 0), 0)
       val hadoopAttemptContext =
         new TaskAttemptContextImpl(broadcastedHadoopConf.value.value, attemptId)
@@ -353,10 +349,8 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
       if (enableVectorizedReader) {
         val vectorizedReader = new VectorizedParquetRecordReader(
           convertTz.orNull,
-          datetimeRebaseSpec.mode.toString,
-          datetimeRebaseSpec.timeZone,
-          int96RebaseSpec.mode.toString,
-          int96RebaseSpec.timeZone,
+          datetimeRebaseModeInRead,
+          int96RebaseModeInRead,
           enableOffHeapColumnVector && taskContext.isDefined,
           capacity
         )
@@ -391,8 +385,8 @@ class ParquetFileFormat extends FileFormat with DataSourceRegister with Logging 
         val readSupport = new ParquetReadSupport(
           convertTz,
           enableVectorizedReader = false,
-          datetimeRebaseSpec,
-          int96RebaseSpec)
+          datetimeRebasePolicyInRead,
+          int96RebasePolicyInRead)
         val reader = if (pushed.isDefined && enableRecordFilter) {
           val parquetFilter = FilterCompat.get(pushed.get, null)
           new ParquetRecordReader[InternalRow](readSupport, parquetFilter)

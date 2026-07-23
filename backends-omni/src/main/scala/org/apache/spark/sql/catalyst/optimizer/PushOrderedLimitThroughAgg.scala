@@ -68,20 +68,12 @@ case class PushOrderedLimitThroughAgg(session: SparkSession)
             orderAndProjectChild,
             offset) => {
         orderAndProjectChild match {
-          case finalAgg @ HashAggregateExec(_, _, _, _, _, _, _, _, finalAggChild) =>
-            finalAggChild match {
+          case finalAgg: HashAggregateExec =>
+            finalAgg.child match {
               case shuffleExchange @ ShuffleExchangeExecShim(_, shuffleExchangeChild, _, _) =>
                 shuffleExchangeChild match {
-                  case partialAgg @ HashAggregateExec(
-                        _,
-                        _,
-                        _,
-                        partialAggGroupingExpressions,
-                        _,
-                        _,
-                        _,
-                        _,
-                        _) =>
+                  case partialAgg: HashAggregateExec =>
+                    val partialAggGroupingExpressions = partialAgg.groupingExpressions
                     val validSortOrder = sortOrder.takeWhile {
                       order =>
                         partialAggGroupingExpressions.exists(
@@ -107,25 +99,12 @@ case class PushOrderedLimitThroughAgg(session: SparkSession)
                       session.sparkContext.setLocalProperty(
                         "pushOrderedLimitThroughAggApplied",
                         "true");
+                      val updatedShuffle = shuffleExchange.withNewChildren(Array(newTopNSort))
                       TakeOrderedAndProjectExec(
                         limit,
                         sortOrder,
                         projectList,
-                        child = HashAggregateExec(
-                          finalAgg.requiredChildDistributionExpressions,
-                          finalAgg.isStreaming,
-                          finalAgg.numShufflePartitions,
-                          finalAgg.groupingExpressions,
-                          finalAgg.aggregateExpressions,
-                          finalAgg.aggregateAttributes,
-                          finalAgg.initialInputBufferOffset,
-                          finalAgg.resultExpressions,
-                          child = ShuffleExchangeExec(
-                            shuffleExchange.outputPartitioning,
-                            child = newTopNSort,
-                            shuffleExchange.shuffleOrigin
-                          )
-                        )
+                        child = finalAgg.copy(child = updatedShuffle)
                       )
                     } else {
                       orderAndProject

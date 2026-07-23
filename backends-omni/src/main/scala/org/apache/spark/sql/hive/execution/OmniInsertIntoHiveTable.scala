@@ -20,9 +20,11 @@ package org.apache.spark.sql.hive.execution
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.conf.HiveConf
+import org.apache.hadoop.hive.ql.ErrorMsg
 import org.apache.hadoop.hive.ql.plan.FileSinkDesc
 import org.apache.hadoop.hive.ql.plan.TableDesc
 
+import org.apache.spark.SparkException
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
@@ -150,8 +152,9 @@ case class OmniInsertIntoHiveTable(
           val maxDynamicPartitions = hadoopConf.getInt(maxDynamicPartitionsKey,
             HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.defaultIntVal)
           if (numWrittenParts > maxDynamicPartitions) {
-            throw QueryExecutionErrors.writePartitionExceedConfigSizeWhenDynamicPartitionError(
-              numWrittenParts, maxDynamicPartitions, maxDynamicPartitionsKey)
+            throw new SparkException(
+              ErrorMsg.DYNAMIC_PARTITIONS_TOO_MANY_PER_NODE_ERROR.getMsg(
+                s"$numWrittenParts, $maxDynamicPartitions"))
           }
           // SPARK-29295: When insert overwrite to a Hive external table partition, if the
           // partition does not exist, Hive will not check if the external partition directory

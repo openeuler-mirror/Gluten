@@ -38,14 +38,14 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeReference, AttributeSeq, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.util.{MetadataColumnHelper, RebaseDateTime}
+import org.apache.spark.sql.catalyst.util.MetadataColumnHelper
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer._
 import org.apache.spark.sql.hive.client.HiveClientImpl
 import org.apache.spark.sql.hive.execution.{AbstractHiveTableScanExec, HiveTableScanExec}
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.Utils
 
@@ -247,23 +247,8 @@ case class OmniHiveTableScanExecTransformer(
         val datetimeRebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
         val int96RebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_INT96_REBASE_MODE_IN_READ)
 
-        def toLegacyBehaviorPolicy(modeStr: String): LegacyBehaviorPolicy.Value = {
-          modeStr match {
-            case "LEGACY" => LegacyBehaviorPolicy.LEGACY
-            case "CORRECTED" => LegacyBehaviorPolicy.CORRECTED
-            case "EXCEPTION" => LegacyBehaviorPolicy.EXCEPTION
-            case _ => LegacyBehaviorPolicy.LEGACY
-          }
-        }
-
-        val datetimeRebaseMode = toLegacyBehaviorPolicy(datetimeRebaseModeStr)
-        val int96RebaseMode = toLegacyBehaviorPolicy(int96RebaseModeStr)
-
-        val datetimeRebaseSpec = new RebaseDateTime.RebaseSpec(datetimeRebaseMode, scala.None)
-        val int96RebaseSpec = new RebaseDateTime.RebaseSpec(int96RebaseMode, scala.None)
-
         val parquetBuilder = new ParquetPushFilterBuilder(relation.tableMeta.dataSchema, attributesToStructType(requestedAttributes),
-          datetimeRebaseSpec, int96RebaseSpec)
+          datetimeRebaseModeStr, int96RebaseModeStr)
         parquetBuilder.buildPushFilterJson(null,
           session.sessionState.conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER),
           session.sessionState.conf.parquetFilterPushDown

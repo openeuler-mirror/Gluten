@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution.datasources
 
+import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.hadoop.fs.{FileSystem, Path}
 
 import org.apache.spark.internal.io.FileCommitProtocol
@@ -31,7 +32,6 @@ import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.command._
 import org.apache.spark.sql.internal.SQLConf.PartitionOverwriteMode
-import org.apache.spark.sql.util.SchemaUtils
 
 /**
  * A command for writing data to a [[HadoopFsRelation]].  Supports both overwriting and appending.
@@ -62,7 +62,7 @@ case class OmniInsertIntoHadoopFsRelationCommand(
   private lazy val parameters = CaseInsensitiveMap(options)
 
   private[sql] lazy val dynamicPartitionOverwrite: Boolean = {
-    val partitionOverwriteMode = parameters.get(DataSourceUtils.PARTITION_OVERWRITE_MODE)
+    val partitionOverwriteMode = parameters.get("partitionOverwriteMode")
       // scalastyle:off caselocale
       .map(mode => PartitionOverwriteMode.withName(mode.toUpperCase))
       // scalastyle:on caselocale
@@ -80,8 +80,9 @@ case class OmniInsertIntoHadoopFsRelationCommand(
 
   override def run(sparkSession: SparkSession, child: SparkPlan): Seq[Row] = {
     // Most formats don't do well with duplicate columns, so lets not allow that
-    SchemaUtils.checkColumnNameDuplication(
+    SparkShimLoader.getSparkShims.checkColumnNameDuplication(
       outputColumnNames,
+      s"when inserting into $outputPath",
       sparkSession.sessionState.conf.caseSensitiveAnalysis)
 
     val hadoopConf = sparkSession.sessionState.newHadoopConfWithOptions(options)
@@ -136,7 +137,7 @@ case class OmniInsertIntoHadoopFsRelationCommand(
         case (SaveMode.Ignore, exists) =>
           !exists
         case (s, exists) =>
-          throw QueryExecutionErrors.saveModeUnsupportedError(s, exists)
+          throw SparkShimLoader.getSparkShims.unsupportedSaveModeError(s, exists)
       }
     }
 

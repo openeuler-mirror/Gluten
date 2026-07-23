@@ -21,7 +21,7 @@ import org.apache.gluten.metrics.GlutenTimeMetric
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeReference, BoundReference, Expression, PlanExpression, Predicate}
-import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, PartitionDirectory}
+import org.apache.spark.sql.execution.datasources.{DataSourceStrategy, DataSourceUtils, HadoopFsRelation, PartitionDirectory}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
@@ -63,6 +63,11 @@ abstract class FileSourceScanExecShim(
   def isMetadataColumn(attr: Attribute): Boolean = false
 
   def hasFieldIds: Boolean = false
+
+  def pushedDownFiltersForScan: Seq[org.apache.spark.sql.sources.Filter] = {
+    val supportNestedPredicatePushdown = DataSourceUtils.supportNestedPredicatePushdown(relation)
+    dataFilters.flatMap(DataSourceStrategy.translateFilter(_, supportNestedPredicatePushdown))
+  }
 
   // The codes below are copied from FileSourceScanExec in Spark,
   // all of them are private.

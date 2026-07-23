@@ -7,7 +7,7 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeMap, BinaryArithmetic, BinaryComparison, CreateNamedStruct, Expression, GetStructField, IsNotNull, IsNull, Literal, NamedExpression, Or, ScalarSubquery, UnaryExpression, Unevaluable}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.trees.TreePattern.{SCALAR_SUBQUERY, SCALAR_SUBQUERY_REFERENCE}
+import org.apache.spark.sql.catalyst.trees.TreePattern.SCALAR_SUBQUERY
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.DataType
 
@@ -61,8 +61,7 @@ case class MergeSubqueryFilters(spark: SparkSession) extends Rule[LogicalPlan] {
           CTERelationDef(
             createProject(
               header.attributes,
-              removeReferences(removePropagatedFilters(header.plan), cache)),
-            underSubquery = true)
+              removeReferences(removePropagatedFilters(header.plan), cache)))
         } else {
           removeReferences(header.plan, cache)
         })
@@ -95,7 +94,7 @@ case class MergeSubqueryFilters(spark: SparkSession) extends Rule[LogicalPlan] {
   private def cacheSubquery(plan: LogicalPlan, cache: ArrayBuffer[Header]): (Int, Int) = {
     val output = plan.output.head
     val references = mutable.HashSet.empty[Int]
-    plan.transformAllExpressionsWithPruning(_.containsAnyPattern(SCALAR_SUBQUERY_REFERENCE)) {
+    plan.transformAllExpressions {
       case ssr: ScalarSubqueryReference =>
         references += ssr.subqueryIndex
         references ++= cache(ssr.subqueryIndex).references
@@ -670,7 +669,7 @@ case class MergeSubqueryFilters(spark: SparkSession) extends Rule[LogicalPlan] {
   private def removeReferences(plan: LogicalPlan, cache: ArrayBuffer[Header]) = {
     plan.transformUpWithSubqueries {
       case n =>
-        n.transformExpressionsWithPruning(_.containsAnyPattern(SCALAR_SUBQUERY_REFERENCE)) {
+        n.transformExpressions {
           case ssr: ScalarSubqueryReference =>
             val header = cache(ssr.subqueryIndex)
             if (header.merged) {
