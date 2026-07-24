@@ -119,6 +119,7 @@ abstract class FileSourceScanExecShim(
     } else {
       selectedPartitions
     }
+    sendDriverMetrics()
     selected
   }
 }

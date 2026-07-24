@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include <cassert>
 #include <memory>
 
 #include "arrow/c/bridge.h"

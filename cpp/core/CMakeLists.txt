@@ -191,16 +191,18 @@ target_link_libraries(gluten LINK_PUBLIC ${PROTOBUF_LIBRARY})
 
 add_custom_command(
   OUTPUT ${SUBSTRAIT_PROTO_OUTPUT_FILES}
-  COMMAND ${PROTOC_BIN} --proto_path ${SUBSTRAIT_PROTO_SRC_DIR}/ --cpp_out
-          ${PROTO_OUTPUT_DIR} ${SUBSTRAIT_PROTO_FILES}
+  COMMAND ${PROTOC_BIN} --proto_path ${SUBSTRAIT_PROTO_SRC_DIR}/ --proto_path
+          ${PROTOBUF_INCLUDE} --cpp_out ${PROTO_OUTPUT_DIR}
+          ${SUBSTRAIT_PROTO_FILES}
   DEPENDS ${SUBSTRAIT_PROTO_DIR}
   COMMENT "Running Substrait PROTO compiler"
   VERBATIM)
 
 add_custom_command(
   OUTPUT ${GLUTEN_PROTO_OUTPUT_FILES}
-  COMMAND ${PROTOC_BIN} --proto_path ${GLUTEN_PROTO_SRC_DIR}/ --cpp_out
-          ${PROTO_OUTPUT_DIR} ${GLUTEN_PROTO_FILES}
+  COMMAND ${PROTOC_BIN} --proto_path ${GLUTEN_PROTO_SRC_DIR}/ --proto_path
+          ${PROTOBUF_INCLUDE} --cpp_out ${PROTO_OUTPUT_DIR}
+          ${GLUTEN_PROTO_FILES}
   DEPENDS ${GLUTEN_PROTO_DIR}
   COMMENT "Running Gluten PROTO compiler"
   VERBATIM)
@@ -211,7 +213,8 @@ add_dependencies(jni_proto protobuf::libprotobuf)
 
 target_include_directories(
   gluten
-  PUBLIC ${CMAKE_SYSTEM_INCLUDE_PATH} ${JNI_INCLUDE_DIRS}
+  PUBLIC ${CMAKE_SYSTEM_INCLUDE_PATH} ${JNI_INCLUDE_DIRS} ${JAVA_INCLUDE_PATH}
+         ${JAVA_INCLUDE_PATH2}
          ${CMAKE_CURRENT_SOURCE_DIR} ${PROTO_OUTPUT_DIR} ${PROTOBUF_INCLUDE})
 set_target_properties(gluten PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                         ${root_directory}/releases)

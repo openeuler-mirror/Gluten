@@ -189,7 +189,9 @@ endif()
 
 target_include_directories(
   velox PUBLIC ${CMAKE_SYSTEM_INCLUDE_PATH} ${JNI_INCLUDE_DIRS}
-               ${VELOX_BUILD_PATH} ${CMAKE_CURRENT_SOURCE_DIR} ${VELOX_HOME})
+               ${JAVA_INCLUDE_PATH} ${JAVA_INCLUDE_PATH2}
+               ${THRIFT_INCLUDE_DIR} ${VELOX_BUILD_PATH}
+               ${CMAKE_CURRENT_SOURCE_DIR} ${VELOX_HOME})
 
 if(BUILD_TESTS)
   target_include_directories(velox PUBLIC ${VELOX_BUILD_PATH})

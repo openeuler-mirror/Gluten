@@ -42,4 +42,3 @@ case class BoundReferenceTransformer(substraitExprName: String, original: BoundR
     ExpressionBuilder.makeSelection(original.ordinal.asInstanceOf[java.lang.Integer])
   }
 }
-

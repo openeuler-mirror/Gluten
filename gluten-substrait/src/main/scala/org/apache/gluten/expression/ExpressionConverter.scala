@@ -25,7 +25,6 @@ import org.apache.gluten.utils.DecimalArithmeticUtil
 import org.apache.spark.{SPARK_REVISION, SPARK_VERSION_SHORT}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.SQLConfHelper
-import org.apache.spark.sql.catalyst.expressions.EvalMode.TRY
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.NormalizeNaNAndZero
@@ -166,27 +165,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
                 i)
           }
         }
-        def genStaticInvokeTransformer(expressionName: String): ExpressionTransformer = {
-          var arg0 = i.arguments.head
-          if (i.arguments.head.nodeName == "AnsiCast") {
-            arg0 = i.arguments.head.children.head
-          }
-          val arg1 = i.arguments.last
-          GenericExpressionTransformer(
-            expressionName,
-            Seq(replaceWithExpressionTransformer0(arg0, attributeSeq, expressionsMap),
-              replaceWithExpressionTransformer0(arg1, attributeSeq, expressionsMap)),
-            i)
-        }
-        i.functionName match {
-          case "charTypeWriteSideCheck" =>
-            return genStaticInvokeTransformer("StaticInvokeCharTypeWriteSideCheck")
-          case "varcharTypeWriteSideCheck" =>
-            return genStaticInvokeTransformer("StaticInvokeVarcharTypeWriteSideCheck")
-          case "readSidePadding" =>
-            return genStaticInvokeTransformer("StaticInvokeCharReadPadding")
-          case _ =>
-        }
       case _ =>
     }
 
@@ -247,24 +225,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           substraitExprName,
           replaceWithExpressionTransformer0(a.child, attributeSeq, expressionsMap),
           a)
-      case f: FromUnixTime =>
-        BackendsApiManager.getSparkPlanExecApiInstance.genFromUnixTimeTransformer(
-          substraitExprName,
-          Seq(
-            replaceWithExpressionTransformer0(f.sec, attributeSeq, expressionsMap),
-            replaceWithExpressionTransformer0(f.format, attributeSeq, expressionsMap)
-          ),
-          f
-        )
-      case f: UnixTimestamp =>
-        BackendsApiManager.getSparkPlanExecApiInstance.genUnixTimestampTransformer(
-          substraitExprName,
-          Seq(
-            replaceWithExpressionTransformer0(f.timeExp, attributeSeq, expressionsMap),
-            replaceWithExpressionTransformer0(f.format, attributeSeq, expressionsMap)
-          ),
-          f
-        )
       case a: AttributeReference =>
         if (attributeSeq == null) {
           throw new UnsupportedOperationException(s"attributeSeq should not be null.")
@@ -307,6 +267,15 @@ object ExpressionConverter extends SQLConfHelper with Logging {
             replaceWithExpressionTransformer0(t.format, attributeSeq, expressionsMap)
           ),
           t
+        )
+      case u: UnixTimestamp =>
+        GenericExpressionTransformer(
+          substraitExprName,
+          Seq(
+            replaceWithExpressionTransformer0(u.timeExp, attributeSeq, expressionsMap),
+            replaceWithExpressionTransformer0(u.format, attributeSeq, expressionsMap)
+          ),
+          ToUnixTimestamp(u.timeExp, u.format, u.timeZoneId, u.failOnError)
         )
       case t: TruncTimestamp =>
         BackendsApiManager.getSparkPlanExecApiInstance.genTruncTimestampTransformer(
@@ -496,10 +465,10 @@ object ExpressionConverter extends SQLConfHelper with Logging {
             LiteralTransformer(m.nullOnOverflow)),
           m
         )
-      case PromotePrecision(c @Cast(child, _: DecimalType, _, _))
+      case PromotePrecision(_ @Cast(child, _: DecimalType, _, _))
           if child.dataType
             .isInstanceOf[DecimalType] && !BackendsApiManager.getSettings.transformCheckOverflow =>
-        BackendsApiManager.getSparkPlanExecApiInstance.genPromotePrecisionTransformer(c, attributeSeq)
+        replaceWithExpressionTransformer0(child, attributeSeq, expressionsMap)
       case _: NormalizeNaNAndZero | _: PromotePrecision | _: TaggingExpression |
           _: DynamicPruningExpression =>
         ChildTransformer(
@@ -642,11 +611,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_MULTIPLY
         )
       case a: Add =>
-        if (a.evalMode == TRY) {
-          throw new GlutenNotSupportException(
-            s"Add with TRY evalMode (try_add) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
-          )
-        }
         BackendsApiManager.getSparkPlanExecApiInstance.genArithmeticTransformer(
           substraitExprName,
           replaceWithExpressionTransformer0(a.left, attributeSeq, expressionsMap),
@@ -655,11 +619,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_ADD
         )
       case a: Subtract =>
-        if (a.evalMode == TRY) {
-          throw new GlutenNotSupportException(
-            s"Subtract with TRY evalMode (try_subtract) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
-          )
-        }
         BackendsApiManager.getSparkPlanExecApiInstance.genArithmeticTransformer(
           substraitExprName,
           replaceWithExpressionTransformer0(a.left, attributeSeq, expressionsMap),
@@ -668,11 +627,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_SUBTRACT
         )
       case a: Multiply =>
-        if (a.evalMode == TRY) {
-          throw new GlutenNotSupportException(
-            s"Multiply with TRY evalMode (try_multiply) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
-          )
-        }
         BackendsApiManager.getSparkPlanExecApiInstance.genArithmeticTransformer(
           substraitExprName,
           replaceWithExpressionTransformer0(a.left, attributeSeq, expressionsMap),
@@ -681,11 +635,6 @@ object ExpressionConverter extends SQLConfHelper with Logging {
           ExpressionNames.CHECKED_MULTIPLY
         )
       case a: Divide =>
-        if (a.evalMode == TRY) {
-          throw new GlutenNotSupportException(
-            s"Divide with TRY evalMode (try_divide) is not supported by Gluten, fallback to Spark native execution. Expression: $a"
-          )
-        }
         BackendsApiManager.getSparkPlanExecApiInstance.genArithmeticTransformer(
           substraitExprName,
           replaceWithExpressionTransformer0(a.left, attributeSeq, expressionsMap),

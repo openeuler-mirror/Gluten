@@ -166,13 +166,11 @@ JNIEXPORT jint JNI_OnLoad(JavaVM * vm, void * /*reserved*/)
 
 JNIEXPORT void JNI_OnUnload(JavaVM * vm, void * /*reserved*/)
 {
-    // manually destroy native in 'nativeDestroyNative' method
-}
-
-Java_org_apache_gluten_vectorized_ExpressionEvaluatorJniWrapper_nativeDestroyNative(JNIEnv * env, jclass)
-{
     LOG_INFO(&Poco::Logger::get("jni"), "start jni onUnload");
     local_engine::BackendFinalizerUtil::finalizeGlobally();
+
+    JNIEnv * env;
+    vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_8);
 
     local_engine::JniErrorsGlobalState::instance().destroy(env);
     local_engine::BroadCastJoinBuilder::destroy(env);

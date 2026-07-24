@@ -17,6 +17,7 @@
 package org.apache.gluten.sql.shims
 
 import org.apache.gluten.expression.Sig
+
 import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.io.FileCommitProtocol
@@ -29,7 +30,7 @@ import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BinaryExpression, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.TypedImperativeAggregate
 import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.plans.logical.{CTERelationRef, LogicalPlan, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.plans.physical.{Distribution, Partitioning}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.connector.catalog.Table
@@ -46,10 +47,12 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DecimalType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.storage.{BlockId, BlockManagerId}
+
 import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.parquet.schema.MessageType
 
-import java.util.{Properties, Map => JMap}
+import java.util.{Map => JMap, Properties}
+
 import scala.reflect.ClassTag
 
 sealed abstract class ShimDescriptor
@@ -282,11 +285,4 @@ trait SparkShims {
 
   /** Shim method for usages from GlutenExplainUtils.scala. */
   def unsetOperatorId(plan: QueryPlan[_]): Unit
-
-  def createCTERelationRef(
-    cteId: Long,
-    resolved: Boolean,
-    output: Seq[Attribute],
-    isStreaming: Boolean,
-    tatsOpt: Option[Statistics] = None): CTERelationRef
 }

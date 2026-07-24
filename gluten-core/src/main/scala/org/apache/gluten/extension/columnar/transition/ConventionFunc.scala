@@ -17,14 +17,12 @@
 package org.apache.gluten.extension.columnar.transition
 
 import org.apache.gluten.component.Component
-import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.extension.columnar.transition.ConventionReq.KnownChildConvention
 import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.sql.execution.{ColumnarToRowExec, SparkPlan, UnionExec}
 import org.apache.spark.sql.execution.adaptive.QueryStageExec
 import org.apache.spark.sql.execution.command.DataWritingCommandExec
-import org.apache.spark.sql.execution.datasources.V1WriteCommand
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.util.SparkTestUtil
 
@@ -194,7 +192,7 @@ object ConventionFunc {
           ConventionReq.of(
             ConventionReq.RowType.Any,
             ConventionReq.BatchType.Is(Convention.BatchType.VanillaBatch)))
-      case write: DataWritingCommandExec if GlutenConfig.get.enableNativeWriter.getOrElse(false) && write.cmd.isInstanceOf[V1WriteCommand] => //TODO: promotion is avoid c2r
+      case write: DataWritingCommandExec if SparkShimLoader.getSparkShims.isPlannedV1Write(write) =>
         // To align with ApplyColumnarRulesAndInsertTransitions#insertTransitions
         Seq(ConventionReq.any)
       case u: UnionExec =>
