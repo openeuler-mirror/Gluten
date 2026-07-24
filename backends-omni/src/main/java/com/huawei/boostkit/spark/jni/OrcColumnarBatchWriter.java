@@ -60,6 +60,10 @@ import java.util.Optional;
  */
 public class OrcColumnarBatchWriter {
     private static final String GMT_PLUS_8_TIME_ZONE = "Etc/GMT-8";
+    private static final String PARALLEL_SERIALIZE_ENABLED_KEY =
+            "spark.gluten.sql.columnar.backend.omni.orc.writer.parallelSerialize.enabled";
+    private static final String PARALLEL_SERIALIZE_MAX_THREADS_KEY =
+            "spark.gluten.sql.columnar.backend.omni.orc.writer.parallelSerialize.max.threads";
 
     /**
      * ORC has two timestamp flavors: TIMESTAMP (no timezone) and TIMESTAMP_INSTANT (timestamp with
@@ -231,7 +235,34 @@ public class OrcColumnarBatchWriter {
         writerOptionsJson.put("timezone", tzId);
         putTimestampRebaseInfo(writerOptionsJson, tzId);
 
+        // SQLConf is available on the executor while the output writer is initialized.
+        // Encode the values in the existing writer-options JSON so JNI can construct
+        // per-writer runtime options without introducing global native state.
+        boolean isParallelSerializeEnabled =
+                getBooleanFromSqlConf(PARALLEL_SERIALIZE_ENABLED_KEY, false);
+        int parallelSerializeMaxThreads =
+                getPositiveIntFromSqlConf(PARALLEL_SERIALIZE_MAX_THREADS_KEY, 1);
+        writerOptionsJson.put("parallel serialize enabled", isParallelSerializeEnabled ? 1 : 0);
+        writerOptionsJson.put("parallel serialize max threads", parallelSerializeMaxThreads);
+
         writer = jniWriter.initializeWriter(outputStream, schemaType, writerOptionsJson);
+    }
+
+    private static boolean getBooleanFromSqlConf(String key, boolean isDefaultValue) {
+        SQLConf conf = SQLConf.get();
+        if (conf == null) {
+            return isDefaultValue;
+        }
+        return Boolean.parseBoolean(conf.getConfString(key, Boolean.toString(isDefaultValue)));
+    }
+
+    private static int getPositiveIntFromSqlConf(String key, int defaultValue) {
+        SQLConf conf = SQLConf.get();
+        if (conf == null) {
+            return defaultValue;
+        }
+        int value = Integer.parseInt(conf.getConfString(key, Integer.toString(defaultValue)));
+        return Math.max(1, value);
     }
 
     private static Optional<String> getSessionTimeZoneFromSqlConf() {

@@ -458,6 +458,12 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   // Please use `BackendsApiManager.getSettings.enableNativeWriteFiles()` instead
   def enableNativeWriter: Option[Boolean] = conf.getConf(NATIVE_WRITER_ENABLED)
 
+  def enableOmniOrcWriterParallelSerialize: Boolean =
+    conf.getConf(OMNI_ORC_WRITER_PARALLEL_SERIALIZE_ENABLED)
+
+  def omniOrcWriterParallelSerializeMaxThreads: Int =
+    conf.getConf(OMNI_ORC_WRITER_PARALLEL_SERIALIZE_MAX_THREADS)
+
   def enableNativeArrowReader: Boolean = conf.getConf(NATIVE_ARROW_READER_ENABLED)
 
   def directorySizeGuess: Long =
@@ -1904,6 +1910,23 @@ object GlutenConfig {
       .doc("This is config to specify whether to enable the native columnar parquet/orc writer")
       .booleanConf
       .createOptional
+
+  val OMNI_ORC_WRITER_PARALLEL_SERIALIZE_ENABLED =
+    buildConf(
+      "spark.gluten.sql.columnar.backend.omni.orc.writer.parallelSerialize.enabled")
+      .internal()
+      .doc("Whether to serialize top-level ORC columns in parallel in the Omni native writer.")
+      .booleanConf
+      .createWithDefault(false)
+
+  val OMNI_ORC_WRITER_PARALLEL_SERIALIZE_MAX_THREADS =
+    buildConf(
+      "spark.gluten.sql.columnar.backend.omni.orc.writer.parallelSerialize.max.threads")
+      .internal()
+      .doc("Maximum number of worker threads used to serialize top-level ORC columns.")
+      .intConf
+      .checkValue(_ > 0, "Omni ORC parallel serialization thread count must be positive.")
+      .createWithDefault(1)
 
   val NATIVE_HIVEFILEFORMAT_WRITER_ENABLED =
     buildConf("spark.gluten.sql.native.hive.writer.enabled")

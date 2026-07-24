@@ -54,6 +54,22 @@ static std::string getJsonString(JNIEnv *env, jobject json, jmethodID stringMeth
     return value;
 }
 
+static bool hasJsonKey(JNIEnv *env, jobject json, const char *key)
+{
+    jstring keyStr = env->NewStringUTF(key);
+    jboolean hasKey = env->CallBooleanMethod(json, jsonMethodHas, keyStr);
+    env->DeleteLocalRef(keyStr);
+    return hasKey == JNI_TRUE;
+}
+
+static jint getJsonInt(JNIEnv *env, jobject json, const char *key)
+{
+    jstring keyStr = env->NewStringUTF(key);
+    jint value = (jint)env->CallIntMethod(json, jsonMethodInt, keyStr);
+    env->DeleteLocalRef(keyStr);
+    return value;
+}
+
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_write_jni_OrcColumnarBatchJniWriter_initializeOutputStream(
     JNIEnv *env, jobject jObj, jobject uriJson)
 {
@@ -255,8 +271,21 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_write_jni_OrcColumnarBatchJniWr
     ::orc::OutputStream *stream = (::orc::OutputStream *)outputStream;
     ::orc::Type *writeType = (::orc::Type *)schemaType;
 
+    // Keep defaults compatible with older Java callers that do not provide the
+    // parallel fields. Each native writer receives its own immutable snapshot.
+    OmniWriterRuntimeOptions runtimeOptions;
+    if (hasJsonKey(env, writerOptionsJson, "parallel serialize enabled")) {
+        jint enabled = getJsonInt(env, writerOptionsJson, "parallel serialize enabled");
+        runtimeOptions.parallelSerializeEnabled = enabled != 0;
+    }
+    if (hasJsonKey(env, writerOptionsJson, "parallel serialize max threads")) {
+        jint maxThreads = getJsonInt(env, writerOptionsJson, "parallel serialize max threads");
+        runtimeOptions.parallelSerializeMaxThreads =
+            maxThreads > 0 ? static_cast<uint32_t>(maxThreads) : 1u;
+    }
+
     std::unique_ptr<OmniWriter> writer = createOmniWriterWithTimestampRebase(
-        (*writeType), stream, writerOptions, std::move(timestampRebase));
+        (*writeType), stream, writerOptions, std::move(timestampRebase), runtimeOptions);
     OmniWriter *writerNew = writer.release();
     return (jlong)(writerNew);
     JNI_FUNC_END(runtimeExceptionClass)
