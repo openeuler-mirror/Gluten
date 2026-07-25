@@ -34,12 +34,13 @@ static const char *kVarChar = "varchar";
 namespace hivestringstring {
 template <typename T>
 struct HiveStringStringFunction {
-    ALWAYS_INLINE Status call(std::string &result, const std::string_view &a, const std::string_view &b)
+    ALWAYS_INLINE omniruntime::vectorization::Status call(
+        std::string &result, const std::string_view &a, const std::string_view &b)
     {
         result.append(a);
         result.append("---");
         result.append(b);
-        return Status::OK();
+        return omniruntime::vectorization::Status::OK();
     }
 };
 
