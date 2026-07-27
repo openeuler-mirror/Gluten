@@ -581,6 +581,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableRollupOptimization: Boolean = conf.getConf(ENABLE_ROLLUP_OPTIMIZATION)
 
+  def omniAggregateRepeatedExpressionReuseThreshold: Int =
+    conf.getConf(OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD)
+
   def enableAutoAdjustStageResourceProfile: Boolean =
     conf.getConf(AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED)
 
@@ -2663,6 +2666,16 @@ object GlutenConfig {
     .doc("enable or disable columnar rollupOptimization")
     .booleanConf
     .createWithDefault(true)
+
+  val OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.aggregateRepeatedExpressionReuseThreshold")
+      .internal()
+      .doc(
+        "Minimum reuse count required before Omni pulls repeated aggregate " +
+          "sub-expressions into a pre-project for reuse.")
+      .intConf
+      .checkValue(_ > 1, "The reuse threshold must be greater than 1.")
+      .createWithDefault(3)
 
   val AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED =
     buildStaticConf("spark.gluten.auto.adjustStageResource.enabled")
