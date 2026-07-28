@@ -29,6 +29,8 @@ class OmniFileSourceScanMetricsUpdater(@transient val metrics: Map[String, SQLMe
   val rawInputRows: SQLMetric = metrics("rawInputRows")
   val outputRows: SQLMetric = metrics("numOutputRows")
   val outputVectors: SQLMetric = metrics("outputVectors")
+  val avgOutputRowsPerVecBatch: Option[SQLMetric] =
+    metrics.get(OmniRowCountPerVecBatchMetrics.MetricName)
   val outputBytes: SQLMetric = metrics("outputBytes")
 
   val numInputBytes: SQLMetric = metrics("numInputBytes")
@@ -45,6 +47,8 @@ class OmniFileSourceScanMetricsUpdater(@transient val metrics: Map[String, SQLMe
       rawInputRows += m.getRawInputRows
       outputRows += m.getNumOutputRows
       outputVectors += m.getNumOutputVecBatches
+      avgOutputRowsPerVecBatch.foreach(
+        OmniRowCountPerVecBatchMetrics.update(_, m.getNumOutputRows, m.getNumOutputVecBatches))
       outputBytes += m.getNumOutputBytes
 
       numInputBytes += m.getNumInputBytes

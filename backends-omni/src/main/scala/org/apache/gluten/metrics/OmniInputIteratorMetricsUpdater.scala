@@ -32,6 +32,10 @@ case class OmniInputIteratorMetricsUpdater(metrics: Map[String, SQLMetric], forB
       if (!forBroadcast) {
         metrics("numOutputRows") += operatorMetrics.getNumOutputRows
         metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+        OmniRowCountPerVecBatchMetrics.update(
+          metrics,
+          operatorMetrics.getNumOutputRows,
+          operatorMetrics.getNumOutputVecBatches)
         metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
         metrics("getOutputCpuCount") += operatorMetrics.getOutputCpuCount
         metrics("getOutputTime") += operatorMetrics.getGetOutputTime

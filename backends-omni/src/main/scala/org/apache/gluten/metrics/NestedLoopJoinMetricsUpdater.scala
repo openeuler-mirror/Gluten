@@ -26,6 +26,10 @@ class NestedLoopJoinMetricsUpdater(val metrics: Map[String, SQLMetric]) extends 
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(
+        metrics,
+        operatorMetrics.getNumOutputRows,
+        operatorMetrics.getNumOutputVecBatches)
       metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
 
       metrics("numInputRows") += operatorMetrics.getNumInputRows
