@@ -135,7 +135,15 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
         return JNI_ERR;
     }
 
-    gluten::initOmniJniUDF(env);
+    try {
+        gluten::initOmniJniUDF(env);
+    } catch (const std::exception &e) {
+        LogError("Failed to initialize Omni JNI UDF: %s", e.what());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        return JNI_ERR;
+    }
 
     runtimeExceptionClass = CreateGlobalClassReference(env, "Ljava/lang/RuntimeException;");
 

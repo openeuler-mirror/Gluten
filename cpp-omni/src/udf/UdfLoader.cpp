@@ -17,10 +17,12 @@
 
 #include <dlfcn.h>
 #include <google/protobuf/arena.h>
-#include <vector>
 #include <filesystem>
+#include <limits>
+#include <vector>
 
 #include "Udf.h"
+#include "Udaf.h"
 #include "UdfLoader.h"
 #include "type/data_type.h"
 
@@ -32,6 +34,9 @@
 namespace {
 void *loadSymFromLibrary(void *handle, const std::string &libPath, const std::string &func, bool throwIfNotFound = true)
 {
+    if (handle == nullptr) {
+        throw std::runtime_error("Library handle is null for " + libPath + ": " + dlerror());
+    }
     void *sym = dlsym(handle, func.c_str());
     if (!sym && throwIfNotFound) {
         throw std::runtime_error(func + " not found in " + libPath);
@@ -92,10 +97,13 @@ void UdfLoader::loadUdfLibrariesInternal(const std::vector<std::string> &libPath
 {
     for (const auto &libPath : libPaths) {
         if (handles_.find(libPath) == handles_.end()) {
+            dlerror();
             void *handle = dlopen(libPath.c_str(), RTLD_LAZY);
+            if (handle == nullptr) {
+                throw std::runtime_error("Failed to load udf library: " + libPath + ", error: " + dlerror());
+            }
             handles_[libPath] = handle;
         }
-        std::cout << "Successfully loaded udf library: " << libPath;
     }
 }
 
@@ -156,19 +164,96 @@ std::unordered_set<std::shared_ptr<UdfLoader::UdfSignature>> UdfLoader::getRegis
                     entry.allowTypeConversion));
             }
             free(udfEntries);
-        } else {
-            std::cout << "No UDF found in " << libPath;
+        }
+
+        // Handle UDAFs.
+        void *getNumUdafSym = loadSymFromLibrary(handle, libPath, GLUTEN_TOSTRING(GLUTEN_GET_NUM_UDAF), false);
+        if (getNumUdafSym) {
+            auto getNumUdaf = reinterpret_cast<int (*)()>(getNumUdafSym);
+            int numUdaf = getNumUdaf();
+            if (numUdaf < 0) {
+                throw std::runtime_error("Invalid UDAF entry count " + std::to_string(numUdaf) + " in " + libPath);
+            }
+            if (numUdaf == 0) {
+                continue;
+            }
+            auto entryCount = static_cast<size_t>(numUdaf);
+            if (entryCount > std::numeric_limits<size_t>::max() / sizeof(UdafEntry)) {
+                throw std::runtime_error("UDAF entry count is too large in " + libPath);
+            }
+            auto *udafEntries = static_cast<UdafEntry *>(malloc(sizeof(UdafEntry) * entryCount));
+            if (udafEntries == nullptr) {
+                throw std::runtime_error("malloc failed");
+            }
+
+            void *getUdafEntriesSym =
+                loadSymFromLibrary(handle, libPath, GLUTEN_TOSTRING(GLUTEN_GET_UDAF_ENTRIES));
+            auto getUdafEntries = reinterpret_cast<void (*)(UdafEntry *)>(getUdafEntriesSym);
+            getUdafEntries(udafEntries);
+
+            for (auto i = 0; i < numUdaf; ++i) {
+                const auto &entry = udafEntries[i];
+                if (entry.name == nullptr || entry.dataType == nullptr || entry.argTypes == nullptr) {
+                    throw std::runtime_error("Invalid UDAF entry at index " + std::to_string(i) + " in " + libPath);
+                }
+                auto dataType = toSubstraitTypeStr(entry.dataType);
+                auto argTypes = toSubstraitTypeStr(entry.numArgs, entry.argTypes);
+                std::string intermediateType;
+                if (entry.intermediateType != nullptr && entry.intermediateType[0] != '\0') {
+                    intermediateType = toSubstraitTypeStr(entry.intermediateType);
+                }
+                signatures_.insert(std::make_shared<UdfSignature>(entry.name, dataType, argTypes, intermediateType,
+                    entry.variableArity, entry.allowTypeConversion));
+            }
+            free(udafEntries);
         }
     }
     return signatures_;
 }
 
-void UdfLoader::registerUdf() const
+std::unordered_set<std::string> UdfLoader::getRegisteredUdafNames()
+{
+    if (!names_.empty()) {
+        return names_;
+    }
+    if (signatures_.empty()) {
+        getRegisteredUdfSignatures();
+    }
+    for (const auto &sig : signatures_) {
+        if (!sig->intermediateType.empty()) {
+            names_.insert(sig->name);
+        }
+    }
+    return names_;
+}
+
+bool UdfLoader::isRegisteredUdaf(const std::string &name)
+{
+    return getInstance()->getRegisteredUdafNames().count(name) > 0;
+}
+
+std::string UdfLoader::getRegisteredUdafIntermediateType(const std::string &name)
+{
+    auto loader = getInstance();
+    if (loader->signatures_.empty()) {
+        loader->getRegisteredUdfSignatures();
+    }
+    for (const auto &sig : loader->signatures_) {
+        if (sig->name == name && !sig->intermediateType.empty()) {
+            return sig->intermediateType;
+        }
+    }
+    return "";
+}
+
+void UdfLoader::registerUdf()
 {
     for (const auto &item : handles_) {
-        void *sym = loadSymFromLibrary(item.second, item.first, GLUTEN_TOSTRING(GLUTEN_REGISTER_UDF));
-        auto registerUdf = reinterpret_cast<void (*)()>(sym);
-        registerUdf();
+        void *sym = loadSymFromLibrary(item.second, item.first, GLUTEN_TOSTRING(GLUTEN_REGISTER_UDF), false);
+        if (sym) {
+            auto registerUdf = reinterpret_cast<void (*)()>(sym);
+            registerUdf();
+        }
     }
 }
 

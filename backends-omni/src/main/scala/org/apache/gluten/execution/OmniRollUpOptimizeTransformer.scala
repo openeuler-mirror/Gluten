@@ -29,6 +29,8 @@ import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.expression.UDFResolver
+import org.apache.spark.sql.hive.HiveUDAFInspector
 import org.apache.spark.sql.types._
 
 import java.util.{ArrayList => JArrayList, List => JList}
@@ -95,7 +97,7 @@ case class OmniRollUpOptimizeTransformer(
           }
           AggregateFunctionsBuilder.createWithName(args, name, inputTypes)
         case None =>
-          AggregateFunctionsBuilder.create(args, aggregateFunction)
+          OmniAggregateFunctionsBuilder.create(args, aggregateFunction, aggregateMode)
       }
       aggregateNodeList.add(
         ExpressionBuilder.makeAggregateFunction(
@@ -120,7 +122,7 @@ case class OmniRollUpOptimizeTransformer(
             else aggregateFunction.inputAggBufferAttributes.map(_.dataType)
             AggregateFunctionsBuilder.createWithName(args, name, inputTypes)
           case None =>
-            AggregateFunctionsBuilder.create(args, aggregateFunction)
+            OmniAggregateFunctionsBuilder.create(args, aggregateFunction, aggregateMode)
         }
         aggregateNodeList.add(
           ExpressionBuilder.makeAggregateFunction(
@@ -171,6 +173,13 @@ case class OmniRollUpOptimizeTransformer(
       case other => Set.empty[Class[_]]
     }
 
+    def isRegisteredHiveUdaf: Boolean = {
+      HiveUDAFInspector.getUDAFClassName(aggFunc) match {
+        case Some(udafClass) => UDFResolver.UDAFNames.contains(udafClass)
+        case None => false
+      }
+    }
+
     if (supported.exists(_.isInstance(aggFunc)) ||
       SparkShimLoader.getSparkShims.isTrySum(aggFunc)) {
       aggFunc match {
@@ -179,6 +188,8 @@ case class OmniRollUpOptimizeTransformer(
         case _ => true
       }
     } else if (OmniExpressionAdaptor.isRegrAggregateByClassName(aggFunc)) {
+      true
+    } else if (isRegisteredHiveUdaf) {
       true
     } else {
       false

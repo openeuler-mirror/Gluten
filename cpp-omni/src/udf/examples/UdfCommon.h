@@ -18,6 +18,7 @@
 #pragma once
 
 #include "udf/Udf.h"
+#include "udf/Udaf.h"
 
 namespace gluten {
 class UdfRegisterer {
@@ -29,6 +30,20 @@ public:
 
     // Populate the udfEntries, starting at the given index.
     virtual void populateUdfEntries(int &index, gluten::UdfEntry *udfEntries) = 0;
+
+    // Register all function signatures to omni.
+    virtual void registerSignatures() = 0;
+};
+
+class UdafRegisterer {
+public:
+    virtual ~UdafRegisterer() = default;
+
+    // Returns the number of UDAFs in populateUdafEntries.
+    virtual int getNumUdaf() = 0;
+
+    // Populate the udafEntries, starting at the given index.
+    virtual void populateUdafEntries(int &index, gluten::UdafEntry *udafEntries) = 0;
 
     // Register all function signatures to omni.
     virtual void registerSignatures() = 0;
