@@ -262,10 +262,12 @@ public class OrcPushFilterBuilder {
      * @param pushedFilter Spark filter condition to push down
      * @param canVecPredicateFilter whether enable vector predicate filter
      * @param shouldFilterPushDown whether enable filter push down to native layer
+     * @param shouldFilterWhileDecode whether enable native ORC filter-while-decode path
      * @return JSON string of filter condition
      */
     public String buildPushFilterJson(Filter pushedFilter,
-                                      Boolean canVecPredicateFilter, Boolean shouldFilterPushDown) {
+                                      Boolean canVecPredicateFilter, Boolean shouldFilterPushDown,
+                                      Boolean shouldFilterWhileDecode) {
         JSONObject job = new JSONObject();
         try {
             if (pushedFilter != null) {
@@ -291,6 +293,8 @@ public class OrcPushFilterBuilder {
 
         job.put("allColumns", StringUtils.join(allFieldsNames, ","));
         job.put("includedColumns", StringUtils.join(includedColumns, ","));
+        // T0: filter-while-decode global switch, passed to native ReaderOptions::ParseEnhanceJson.
+        job.put("filterWhileDecode", shouldFilterWhileDecode != null && shouldFilterWhileDecode);
         addJulianGregorianInfo(job);
         return job.toString();
     }
