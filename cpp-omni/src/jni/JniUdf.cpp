@@ -19,10 +19,13 @@
 #include "jni_common.h"
 #include "udf/UdfLoader.h"
 
+#include <exception>
+
 namespace {
 static JavaVM *vm;
 
-const std::string kUdfResolverClassPath = "Lorg/apache/spark/sql/expression/UDFResolver$;";
+const std::string kUdfResolverClassName = "org/apache/spark/sql/expression/UDFResolver$";
+const std::string kUdfResolverClassSignature = "Lorg/apache/spark/sql/expression/UDFResolver$;";
 
 static jclass udfResolverClass;
 static jmethodID registerUDFMethod;
@@ -36,10 +39,12 @@ void gluten::initOmniJniUDF(JNIEnv *env)
     }
 
     // classes
-    udfResolverClass = createGlobalClassReferenceOrError(env, kUdfResolverClassPath.c_str());
+    udfResolverClass = createGlobalClassReferenceOrError(env, kUdfResolverClassName.c_str());
 
     // methods
     registerUDFMethod = getMethodIdOrError(env, udfResolverClass, "registerUDF", "(Ljava/lang/String;[B[BZZ)V");
+    registerUDAFMethod =
+        getMethodIdOrError(env, udfResolverClass, "registerUDAF", "(Ljava/lang/String;[B[B[BZZ)V");
 }
 
 void gluten::finalizeOmniJniUDF(JNIEnv *env)
@@ -49,29 +54,40 @@ void gluten::finalizeOmniJniUDF(JNIEnv *env)
 
 void gluten::jniRegisterFunctionSignatures(JNIEnv *env)
 {
-    auto udfLoader = gluten::UdfLoader::getInstance();
+    try {
+        auto udfLoader = gluten::UdfLoader::getInstance();
 
-    const auto &signatures = udfLoader->getRegisteredUdfSignatures();
-    for (const auto &signature : signatures) {
-        jstring name = env->NewStringUTF(signature->name.c_str());
-        jbyteArray returnType = env->NewByteArray(signature->returnType.length());
-        env->SetByteArrayRegion(returnType, 0, signature->returnType.length(),
-            reinterpret_cast<const jbyte *>(signature->returnType.c_str()));
-        jbyteArray argTypes = env->NewByteArray(signature->argTypes.length());
-        env->SetByteArrayRegion(argTypes, 0, signature->argTypes.length(),
-            reinterpret_cast<const jbyte *>(signature->argTypes.c_str()));
-        jobject instance = env->GetStaticObjectField(udfResolverClass,
-            env->GetStaticFieldID(udfResolverClass, "MODULE$", kUdfResolverClassPath.c_str()));
-        if (!signature->intermediateType.empty()) {
-            jbyteArray intermediateType = env->NewByteArray(signature->intermediateType.length());
-            env->SetByteArrayRegion(intermediateType, 0, signature->intermediateType.length(),
-                reinterpret_cast<const jbyte *>(signature->intermediateType.c_str()));
-            env->CallVoidMethod(instance, registerUDAFMethod, name, returnType, argTypes, intermediateType,
-                signature->variableArity, signature->allowTypeConversion);
-        } else {
-            env->CallVoidMethod(instance, registerUDFMethod, name, returnType, argTypes, signature->variableArity,
-                signature->allowTypeConversion);
+        jfieldID moduleField =
+            env->GetStaticFieldID(udfResolverClass, "MODULE$", kUdfResolverClassSignature.c_str());
+        CheckException(env);
+        jobject instance = env->GetStaticObjectField(udfResolverClass, moduleField);
+        CheckException(env);
+
+        const auto &signatures = udfLoader->getRegisteredUdfSignatures();
+        for (const auto &signature : signatures) {
+            jstring name = env->NewStringUTF(signature->name.c_str());
+            jbyteArray returnType = env->NewByteArray(signature->returnType.length());
+            env->SetByteArrayRegion(returnType, 0, signature->returnType.length(),
+                reinterpret_cast<const jbyte *>(signature->returnType.c_str()));
+            jbyteArray argTypes = env->NewByteArray(signature->argTypes.length());
+            env->SetByteArrayRegion(argTypes, 0, signature->argTypes.length(),
+                reinterpret_cast<const jbyte *>(signature->argTypes.c_str()));
+            if (!signature->intermediateType.empty()) {
+                jbyteArray intermediateType = env->NewByteArray(signature->intermediateType.length());
+                env->SetByteArrayRegion(intermediateType, 0, signature->intermediateType.length(),
+                    reinterpret_cast<const jbyte *>(signature->intermediateType.c_str()));
+                env->CallVoidMethod(instance, registerUDAFMethod, name, returnType, argTypes, intermediateType,
+                    signature->variableArity, signature->allowTypeConversion);
+            } else {
+                env->CallVoidMethod(instance, registerUDFMethod, name, returnType, argTypes, signature->variableArity,
+                    signature->allowTypeConversion);
+            }
         }
-        // checkException(env);
+    } catch (const std::exception &e) {
+        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exceptionClass, e.what());
+    } catch (...) {
+        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exceptionClass, "Unknown native error while registering UDF/UDAF signatures");
     }
 }

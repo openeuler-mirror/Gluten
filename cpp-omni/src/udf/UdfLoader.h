@@ -58,7 +58,13 @@ public:
 
     std::unordered_set<std::shared_ptr<UdfSignature>> getRegisteredUdfSignatures();
 
-    void registerUdf() const;
+    void registerUdf();
+
+    std::unordered_set<std::string> getRegisteredUdafNames();
+
+    static bool isRegisteredUdaf(const std::string &name);
+
+    static std::string getRegisteredUdafIntermediateType(const std::string &name);
 
 private:
     void loadUdfLibrariesInternal(const std::vector<std::string> &libPaths);

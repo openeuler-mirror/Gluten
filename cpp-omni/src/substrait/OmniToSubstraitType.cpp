@@ -60,6 +60,12 @@ const ::substrait::Type &OmniToSubstraitTypeConvertor::toSubstraitType(google::p
             substraitType->set_allocated_i64(substraitI64);
             break;
         }
+        case OMNI_FLOAT: {
+            auto substraitFp32 = google::protobuf::Arena::CreateMessage<::substrait::Type_FP32>(&arena);
+            substraitFp32->set_nullability(::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+            substraitType->set_allocated_fp32(substraitFp32);
+            break;
+        }
         case OMNI_DOUBLE: {
             auto substraitFp64 = google::protobuf::Arena::CreateMessage<::substrait::Type_FP64>(&arena);
             substraitFp64->set_nullability(::substrait::Type_Nullability_NULLABILITY_NULLABLE);
@@ -120,7 +126,9 @@ const ::substrait::Type &OmniToSubstraitTypeConvertor::toSubstraitType(google::p
             break;
         }
         case OMNI_OPAQUE:
-        case OMNI_INVALID: default: OMNI_THROW("Runtime error:", "Unsupported omni type '{}'");
+        case OMNI_INVALID:
+        default:
+            OMNI_THROW("Runtime error:", "Unsupported omni type id {}", static_cast<int>(type->GetId()));
     }
     return *substraitType;
 }

@@ -16,6 +16,7 @@
  */
 
 #include "SubstraitParser.h"
+#include "udf/UdfLoader.h"
 #include <string>
 #include "google/protobuf/wrappers.pb.h"
 
@@ -138,7 +139,7 @@ void SubstraitParser::ParseColumnTypes(
                 columnTypes.push_back(ColumnType::kRowIndex);
                 break;
             default:
-                std::cout << "Thread.currentThread() parseColumnTypes" ;
+                OMNI_THROW("PARSE_ERROR", "Unsupported column type.");
         }
     }
     return;
@@ -151,6 +152,9 @@ std::pair<SubstraitToOmniExprType, std::string> SubstraitParser::FindOmniFunctio
     std::string funcName = GetNameBeforeDelimiter(funcSpec);
     if (funcName.find(HIVE_SIMPLE_TAG) == 0) {
         return {HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE, funcName.erase(0, HIVE_SIMPLE_TAG.length())};
+    }
+    if (gluten::UdfLoader::isRegisteredUdaf(funcName)) {
+        return {FUNCTION_OMNI_EXPR_TYPE, funcName};
     }
     return MapToOmniFunction(funcName);
 }
@@ -468,8 +472,21 @@ op::FunctionType SubstraitParser::ParseFunctionType(
     } else if (funcName == "approx_percentile") {
         return op::OMNI_AGGREGATION_TYPE_APPROX_PERCENTILE;
     } else {
+        const auto udafName = GetNameBeforeDelimiter(funcName);
+        if (gluten::UdfLoader::isRegisteredUdaf(udafName)) {
+            return op::OMNI_AGGREGATION_TYPE_UDAF;
+        }
         OMNI_THROW("Substrait Error:", "Unsupported aggregate or window function: {}", funcName);
     }
+}
+
+std::string SubstraitParser::ResolveUdafName(const std::string &funcName)
+{
+    const auto udafName = GetNameBeforeDelimiter(funcName);
+    if (gluten::UdfLoader::isRegisteredUdaf(udafName)) {
+        return udafName;
+    }
+    return "";
 }
 
 std::unordered_map<std::string, std::pair<SubstraitToOmniExprType, std::string>>

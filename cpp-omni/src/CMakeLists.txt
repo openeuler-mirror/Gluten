@@ -3,6 +3,8 @@ include_directories(SYSTEM "/user/local/include")
 set (PROJ_TARGET spark_columnar_plugin)
 
 file(GLOB_RECURSE SOURCE_FILES "*.cpp" "*.cc")
+# UDF/UDAF examples are separate shared libs (see udf/examples/CMakeLists.txt).
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*udf/examples/.*")
 
 #Find required protobuf package
 find_package(Protobuf REQUIRED)
@@ -76,6 +78,7 @@ target_include_directories(${PROJ_TARGET} PUBLIC $ENV{JAVA_HOME}/include)
 target_include_directories(${PROJ_TARGET} PUBLIC $ENV{JAVA_HOME}/include/linux)
 target_include_directories(${PROJ_TARGET} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
+option(BUILD_CPP_UDAF_EXAMPLES "Build sample libmyudaf/libmyextraudaf under cpp-omni" OFF)
 add_subdirectory(udf/examples)
 
 target_link_libraries (${PROJ_TARGET} PUBLIC
