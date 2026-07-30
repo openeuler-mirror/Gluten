@@ -272,6 +272,8 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<double>(KAdaptivePartialAggregationRatio, 0.8));
         configs[config::QueryConfig::KPreferVectorizationExpression] = BoolToString(
             omniCfg_->Get<bool>(KPreferVectorizationExpression, true));
+        configs[config::QueryConfig::KHashAggNormalizedKeyEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kHashAggNormalizedKeyEnabled, false));
         configs[config::QueryConfig::KMaxBatchSize] = std::to_string(
             omniCfg_->Get<uint64_t>(kSparkBatchSize, 4096));
         configs[config::QueryConfig::kHdfsReadMode] = std::to_string(
