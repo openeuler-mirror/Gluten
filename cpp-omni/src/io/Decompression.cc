@@ -19,8 +19,12 @@
 #include "Decompression.hh"
 #include <memory>
 #include <stdexcept>
+#include <cstring>
 #include <vector/vector_common.h>
-#include "shuffle/splitter.h"
+#include "common/debug.h"
+#include "shuffle/arrow_frame.h"
+#include "shuffle/arrow_columnar_deserializer.h"
+#include "shuffle/arrow_row_deserializer.h"
 
 namespace spark {
 
@@ -256,85 +260,6 @@ ShuffleReaderDeserializer::ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn,
     }
 }
 
-int32_t DecompressionStream::columnarShuffleParseBatch(JNIEnv *env, spark::VecBatch* vecBatch)
-{
-    int32_t vecCount = vecBatch->veccnt();
-    int32_t rowCount = vecBatch->rowcnt();
-    // convert vecBatch into an omni array of vec values as the final result
-    omniruntime::vec::BaseVector* vecs[vecCount]{};
-
-    jint typeIdArrayElements[vecCount];
-    jint precisionArrayElements[vecCount];
-    jint scaleArrayElements[vecCount];
-    jlong vecNativeIdArrayElements[vecCount];
-
-    for (auto i = 0; i < vecCount; ++i) {
-        const spark::Vec& protoVec = vecBatch->vecs(i);
-        const spark::VecType& protoType = protoVec.vectype();
-        scaleArrayElements[i] = protoType.scale();
-        precisionArrayElements[i] = protoType.precision();
-        typeIdArrayElements[i] = static_cast<jint>(protoType.typeid_());
-
-        // create native vector
-        auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(protoType.typeid_());
-
-        if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
-            auto dataType = Splitter::ProtoTypeToOmniType(protoType);
-            vecs[i] = VectorHelper::CreateComplexVector(dataType.get(), rowCount);
-        } else {
-            vecs[i] = VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
-        }
-        vecNativeIdArrayElements[i] = (jlong)(vecs[i]);
-
-        Splitter::DeserializeProtoVecToOmniVector(protoVec, vecs[i]);
-    }
-
-    return createResult(env, rowCount, vecCount, typeIdArrayElements,
-        precisionArrayElements, scaleArrayElements, vecNativeIdArrayElements);
-}
-
-int32_t DecompressionStream::rowShuffleParseBatch(JNIEnv *env, spark::ProtoRowBatch* protoRowBatch)
-{
-    int32_t vecCount = protoRowBatch->veccnt();
-    int32_t rowCount = protoRowBatch->rowcnt();
-    omniruntime::vec::BaseVector* vecs[vecCount];
-    std::vector<omniruntime::type::DataTypeId> omniDataTypeIds(vecCount);
-
-    jint typeIdArrayElements[vecCount];
-    jint precisionArrayElements[vecCount];
-    jint scaleArrayElements[vecCount];
-    jlong vecNativeIdArrayElements[vecCount];
-
-    for (auto i = 0; i < vecCount; ++i) {
-        const spark::VecType& protoTypeId = protoRowBatch->vectypes(i);
-        scaleArrayElements[i] = protoTypeId.scale();
-        precisionArrayElements[i] = protoTypeId.precision();
-        typeIdArrayElements[i] = static_cast<jint>(protoTypeId.typeid_());
-        omniDataTypeIds[i] = static_cast<omniruntime::type::DataTypeId>(protoTypeId.typeid_());
-
-        // create native vector
-        auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(protoTypeId.typeid_());
-        if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
-            auto dataType = Splitter::ProtoTypeToOmniType(protoTypeId);
-            vecs[i] = VectorHelper::CreateComplexVector(dataType.get(), rowCount);
-        } else {
-            vecs[i] = VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
-        }
-        vecNativeIdArrayElements[i] = (jlong)(vecs[i]);
-    }
-
-    std::unique_ptr<RowParser> parser = std::make_unique<RowParser>(omniDataTypeIds);
-    char *rows = const_cast<char*>(protoRowBatch->rows().data());
-    const int32_t *offsets = reinterpret_cast<const int32_t*>(protoRowBatch->offsets().data());
-    for (auto i = 0; i < rowCount; ++i) {
-        char *rowPtr = rows + offsets[i];
-        parser->ParseOneRow(reinterpret_cast<uint8_t*>(rowPtr), vecs, i);
-    }
-
-    return createResult(env, rowCount, vecCount, typeIdArrayElements,
-        precisionArrayElements, scaleArrayElements, vecNativeIdArrayElements);
-}
-
 int32_t DecompressionStream::createResult(JNIEnv *env, int rowCount, int vecCount,
     jint* typeIdArrayElements, jint* precisionArrayElements,
     jint* scaleArrayElements, jlong* vecNativeIdArrayElements)
@@ -363,6 +288,134 @@ int32_t DecompressionStream::createResult(JNIEnv *env, int rowCount, int vecCoun
     return rowCount;
 }
 
+// Arrow columnar batch parse — reads file header, reads first batch, deserializes to Omni vectors
+int32_t DecompressionStream::columnarShuffleParseArrowBatch(
+    JNIEnv *env, const char* data, int32_t dataSize)
+{
+    const auto* rawData = reinterpret_cast<const uint8_t*>(data);
+
+    // Read file header
+    int64_t consumed = 0;
+    auto headerResult = ReadFileHeader(rawData, static_cast<int64_t>(dataSize), &consumed);
+    if (!headerResult.ok()) {
+        LogsError("columnarShuffleParseArrowBatch ReadFileHeader failed: dataSize=%d msg=%s",
+                  dataSize, headerResult.status().ToString().c_str());
+        return -1;
+    }
+    auto& header = *headerResult;
+
+    if (header.version != kArrowShuffleVersion) {
+        LogsError("columnarShuffleParseArrowBatch version mismatch: got=%d expected=%d",
+                  header.version, kArrowShuffleVersion);
+        return -1;
+    }
+    if (header.layout != ShuffleLayout::COLUMNAR) {
+        LogsError("columnarShuffleParseArrowBatch layout mismatch: expected COLUMNAR got=%d",
+                  static_cast<int>(header.layout));
+        return -1;
+    }
+
+    // Read the first (and for shuffle read, likely only) batch
+    int64_t batchConsumed = 0;
+    auto batchResult = ReadColumnarBatch(rawData + consumed,
+                                         static_cast<int64_t>(dataSize) - consumed,
+                                         header.schema, &batchConsumed);
+    if (!batchResult.ok()) {
+        LogsError("columnarShuffleParseArrowBatch ReadColumnarBatch failed: dataSize=%d consumed=%lld msg=%s",
+                  dataSize, static_cast<long long>(consumed), batchResult.status().ToString().c_str());
+        return -1;
+    }
+    auto& batch = *batchResult;
+
+    int32_t vecCount = static_cast<int32_t>(header.schema.size());
+    int32_t rowCount = batch.rowCount;
+
+    // Create vectors and deserialize
+    omniruntime::vec::BaseVector* vecs[vecCount]{};
+    jint typeIdArrayElements[vecCount];
+    jint precisionArrayElements[vecCount];
+    jint scaleArrayElements[vecCount];
+    jlong vecNativeIdArrayElements[vecCount];
+
+    std::size_t bufIdx = 0;
+    for (int32_t i = 0; i < vecCount; ++i) {
+        const auto& desc = header.schema[i];
+        typeIdArrayElements[i] = static_cast<jint>(desc.typeId);
+        precisionArrayElements[i] = static_cast<jint>(desc.precision);
+        scaleArrayElements[i] = static_cast<jint>(desc.scale);
+
+        auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
+        if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
+            auto dataType = DescriptorToOmniType(desc);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+        } else {
+            vecs[i] = omniruntime::vec::VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+        }
+        vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
+
+        DeserializeArrowBufferToOmniVector(desc, rowCount, batch.buffers, bufIdx, vecs[i]);
+    }
+
+    return createResult(env, rowCount, vecCount, typeIdArrayElements,
+                        precisionArrayElements, scaleArrayElements, vecNativeIdArrayElements);
+}
+
+// Arrow row batch parse — reads file header, reads first batch, deserializes to Omni vectors
+int32_t DecompressionStream::rowShuffleParseArrowBatch(
+    JNIEnv *env, const char* data, int32_t dataSize)
+{
+    const auto* rawData = reinterpret_cast<const uint8_t*>(data);
+
+    // Read file header via RowShuffleParseInit (validates magic/version/layout==ROW)
+    auto ctxResult = RowShuffleParseInit(rawData, static_cast<int64_t>(dataSize));
+    if (!ctxResult.ok()) {
+        LogsError("rowShuffleParseArrowBatch RowShuffleParseInit failed: dataSize=%d msg=%s",
+                  dataSize, ctxResult.status().ToString().c_str());
+        return -1;
+    }
+    auto ctx = std::move(*ctxResult);
+
+    // Read next batch
+    auto status = RowShuffleParseNextBatch(*ctx);
+    if (!status.ok()) {
+        LogsError("rowShuffleParseArrowBatch RowShuffleParseNextBatch failed: dataSize=%d msg=%s",
+                  dataSize, status.ToString().c_str());
+        return -1;
+    }
+
+    int32_t vecCount = ctx->vecCnt;
+    int32_t rowCount = ctx->rowCnt;
+
+    // Create vectors
+    omniruntime::vec::BaseVector* vecs[vecCount]{};
+    jint typeIdArrayElements[vecCount];
+    jint precisionArrayElements[vecCount];
+    jint scaleArrayElements[vecCount];
+    jlong vecNativeIdArrayElements[vecCount];
+
+    for (int32_t i = 0; i < vecCount; ++i) {
+        const auto& desc = ctx->header.schema[i];
+        typeIdArrayElements[i] = static_cast<jint>(desc.typeId);
+        precisionArrayElements[i] = static_cast<jint>(desc.precision);
+        scaleArrayElements[i] = static_cast<jint>(desc.scale);
+
+        auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
+        if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
+            auto dataType = DescriptorToOmniType(desc);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+        } else {
+            vecs[i] = omniruntime::vec::VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+        }
+        vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
+    }
+
+    // Parse rows using RowShuffleParseBatch
+    RowShuffleParseBatch(*ctx, vecs);
+
+    return createResult(env, rowCount, vecCount, typeIdArrayElements,
+                        precisionArrayElements, scaleArrayElements, vecNativeIdArrayElements);
+}
+
 jobject ShuffleReaderDeserializer::getMetaInfo(JNIEnv *pEnv)
 {
     return this->decompressionStream->result;
@@ -379,23 +432,45 @@ omniruntime::vec::VectorBatch* ShuffleReaderDeserializer::Next()
 
     auto uncompress = this->decompressionStream->decompress(env, dataSize);
     if (uncompress.first == nullptr || uncompress.second != dataSize) {
+        LogsError("ShuffleReaderDeserializer::Next decompress failed: dataSize=%d decompressedSize=%d",
+                  dataSize, uncompress.second);
         return nullptr;
     }
 
     int32_t rowCnt = 0;
-    if (this->isRowShuffle) {
-        auto *protoRowBatch = new spark::ProtoRowBatch();
-        protoRowBatch->ParseFromArray(uncompress.first, uncompress.second);
-        rowCnt = this->decompressionStream->rowShuffleParseBatch(env, protoRowBatch);
-        delete protoRowBatch;
+
+    // Check for Arrow magic "OMSA" in the uncompressed data
+    if (dataSize >= 4 && memcmp(uncompress.first, kArrowShuffleMagic, 4) == 0) {
+        // Arrow path — dispatch by file header (layout self-describing)
+        // Read layout from byte 5 (magic[4] + version[1] = offset 5)
+        if (dataSize < 6) {
+            LogsError("ShuffleReaderDeserializer::Next arrow data too short: dataSize=%d", dataSize);
+            return nullptr;
+        }
+        uint8_t layoutByte = static_cast<uint8_t>(uncompress.first[5]);
+        LogsInfo("ShuffleReaderDeserializer::Next ARROW path: dataSize=%d layoutByte=%d isRowShuffle=%d",
+                 dataSize, layoutByte, static_cast<int>(this->isRowShuffle));
+        if (layoutByte == static_cast<uint8_t>(ShuffleLayout::COLUMNAR)) {
+            rowCnt = this->decompressionStream->columnarShuffleParseArrowBatch(
+                env, uncompress.first, dataSize);
+        } else if (layoutByte == static_cast<uint8_t>(ShuffleLayout::ROW)) {
+            rowCnt = this->decompressionStream->rowShuffleParseArrowBatch(
+                env, uncompress.first, dataSize);
+        } else {
+            LogsError("ShuffleReaderDeserializer::Next unknown arrow layout: layoutByte=%d dataSize=%d",
+                      layoutByte, dataSize);
+            return nullptr;
+        }
     } else {
-        auto *vecBatch = new spark::VecBatch();
-        vecBatch->ParseFromArray(uncompress.first, uncompress.second);
-        rowCnt = this->decompressionStream->columnarShuffleParseBatch(env, vecBatch);
-        delete vecBatch;
+        // Arrow magic not found — data is not in Arrow format
+        LogsError("ShuffleReaderDeserializer::Next Arrow magic 'OMSA' not found: dataSize=%d "
+                  "isRowShuffle=%d", dataSize, static_cast<int>(this->isRowShuffle));
+        return nullptr;
     }
 
     if (rowCnt == 0) {
+        LogsError("ShuffleReaderDeserializer::Next parsed rowCnt=0, returning nullptr: dataSize=%d",
+                  dataSize);
         return nullptr;
     }
 

@@ -20,8 +20,6 @@
 #include <jni.h>
 #include <vector/vector_common.h>
 
-#include "vec_data.pb.h"
-
 #ifndef SPARK_JNI_DESERIALIZER
 #define SPARK_JNI_DESERIALIZER
 #ifdef __cplusplus

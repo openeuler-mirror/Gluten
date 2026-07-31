@@ -128,6 +128,12 @@ static void bm_row_handle(const std::vector<VectorBatch *>& vecBatches, int *inp
     splitOptions.compression_type = compression_type_result;
     auto splitter = Splitter::Make("hash", inputDataTypes, cols, PARTITION_SIZE, std::move(splitOptions));
 
+    // 与生产 nativeMake 一致：SetInputDataTypes 提供写 Arrow 文件头所需的递归 DataType
+    auto dataTypes = BuildDataTypesFromInput(inputDataTypes, cols);
+    if (!dataTypes.empty()) {
+        splitter->SetInputDataTypes(dataTypes);
+    }
+
     for (uint32_t i = 0; i < vecBatches.size(); ++i) {
         VectorBatch *vb = vecBatches[i];
         splitter->SplitByRow(vb);
@@ -155,6 +161,12 @@ static void bm_col_handle(const std::vector<VectorBatch *>& vecBatches, int *inp
     auto compression_type_result = GetCompressionType("lz4");
     splitOptions.compression_type = compression_type_result;
     auto splitter = Splitter::Make("hash", inputDataTypes, cols, PARTITION_SIZE, std::move(splitOptions));
+
+    // 与生产 nativeMake 一致：SetInputDataTypes 提供写 Arrow 文件头所需的递归 DataType
+    auto dataTypes = BuildDataTypesFromInput(inputDataTypes, cols);
+    if (!dataTypes.empty()) {
+        splitter->SetInputDataTypes(dataTypes);
+    }
 
     for (uint32_t i = 0; i < vecBatches.size(); ++i) {
         VectorBatch *vb = vecBatches[i];

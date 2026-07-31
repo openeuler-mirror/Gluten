@@ -19,9 +19,51 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 set(PROTOC_BIN ${Protobuf_PROTOC_EXECUTABLE})
 set(PROTOBUF_INCLUDE "${Protobuf_INCLUDE_DIRS}" CACHE PATH "Protobuf include path")
 
-# generate vecdata proto
-protobuf_generate_cpp(PROTO_SRCS_VB PROTO_HDRS_VB proto/vec_data.proto)
 find_package(fmt REQUIRED)
+
+# Find Apache Arrow (core library only)
+find_package(Arrow QUIET)
+if(Arrow_FOUND)
+    message(STATUS "Arrow library found via CMake config")
+    include_directories(${ARROW_INCLUDE_DIR})
+    set(ARROW_INCLUDE_DIR ${ARROW_INCLUDE_DIR} CACHE PATH "Arrow include directory")
+    set(ARROW_LINK_LIBRARIES arrow)
+else()
+    # Fallback: try pkg_check_modules
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(ARROW_PC arrow)
+        if(ARROW_PC_FOUND)
+            message(STATUS "Arrow library found via pkg-config")
+            include_directories(${ARROW_PC_INCLUDE_DIRS})
+            link_directories(${ARROW_PC_LIBRARY_DIRS})
+            set(ARROW_INCLUDE_DIR ${ARROW_PC_INCLUDE_DIRS} CACHE PATH "Arrow include directory")
+            set(ARROW_LINK_LIBRARIES arrow)
+        endif()
+    endif()
+    if(NOT ARROW_PC_FOUND)
+        # Manual search fallback
+        find_path(ARROW_INCLUDE_DIR arrow/api.h
+            PATHS /usr/local/include /usr/include
+            HINTS ${ARROW_HOME}/include ENV ARROW_HOME
+        )
+        find_library(ARROW_LIBRARY arrow
+            PATHS /usr/local/lib /usr/lib
+            HINTS ${ARROW_HOME}/lib ENV ARROW_HOME
+        )
+        if(ARROW_INCLUDE_DIR AND ARROW_LIBRARY)
+            message(STATUS "Arrow library found via manual search")
+            include_directories(${ARROW_INCLUDE_DIR})
+            set(ARROW_INCLUDE_DIR ${ARROW_INCLUDE_DIR} CACHE PATH "Arrow include directory")
+            set(ARROW_LINK_LIBRARIES ${ARROW_LIBRARY})
+        else()
+            message(FATAL_ERROR "Apache Arrow core library not found. "
+                "Please install Arrow or set ARROW_HOME to the Arrow installation prefix. "
+                "See https://arrow.apache.org/install/ for installation instructions.")
+        endif()
+    endif()
+endif()
+
 # generate Substrait proto
 # Set up Substrait Proto
 set(SUBSTRAIT_PROTO_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/")
@@ -71,7 +113,7 @@ add_custom_command(OUTPUT ${GLUTEN_PROTO_OUTPUT_FILES}
         ${GLUTEN_PROTO_FILES}
         COMMENT "Running Gluten PROTO compiler"
         VERBATIM)
-add_library (${PROJ_TARGET} SHARED ${SOURCE_FILES} ${PROTO_SRCS} ${PROTO_HDRS} ${PROTO_SRCS_VB} ${PROTO_HDRS_VB} ${SUBSTRAIT_PROTO_HDRS} ${SUBSTRAIT_PROTO_SRCS} ${GLUTEN_PROTO_HDRS} ${GLUTEN_PROTO_SRCS})
+add_library (${PROJ_TARGET} SHARED ${SOURCE_FILES} ${PROTO_SRCS} ${PROTO_HDRS} ${SUBSTRAIT_PROTO_HDRS} ${SUBSTRAIT_PROTO_SRCS} ${GLUTEN_PROTO_HDRS} ${GLUTEN_PROTO_SRCS})
 
 #JNI
 target_include_directories(${PROJ_TARGET} PUBLIC $ENV{JAVA_HOME}/include)
@@ -91,6 +133,7 @@ target_link_libraries (${PROJ_TARGET} PUBLIC
         zstd
         re2
         fmt::fmt
+        ${ARROW_LINK_LIBRARIES}
         boostkit-omniop-vector-2.2.0-aarch64
         boostkit-omniop-operator-2.2.0-aarch64
         boostkit-omniop-codegen-2.2.0-aarch64

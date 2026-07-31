@@ -20,7 +20,16 @@
 #include "splitter.h"
 #include "utils.h"
 
+#include <algorithm>
+#include <cstring>
 #include <string>
+#include "shuffle/arrow_columnar_serializer.h"
+#include "shuffle/arrow_row_serializer.h"
+#include "shuffle/arrow_frame.h"
+#include "io/ArrowOutputStream.h"
+#include "io/SparkFile.hh"
+#include "io/MemoryPool.hh"
+#include <arrow/io/file.h>
 
 using namespace omniruntime::vec;
 using namespace omniruntime::vec::unsafe;
@@ -123,18 +132,39 @@ int Splitter::AllocatePartitionBuffers(int32_t partition_id, int32_t new_size) {
             case SHUFFLE_DECIMAL128: {
                 int32_t type_size = (1 << column_type_id_[i]);
                 int32_t needed_size = new_size * type_size;
-                void *ptr_tmp = static_cast<void *>(options_.allocator->Alloc(needed_size));
-                fixed_valueBuffer_size_[partition_id] += needed_size;
-                if (nullptr == ptr_tmp) {
-                    throw std::runtime_error("Allocator for AllocatePartitionBuffers Failed! ");
+
+                // 定宽 values 改用 Arrow ResizableBuffer（经 OmniMemoryPoolAdapter 统一记账）
+                auto r = arrow::AllocateResizableBuffer(needed_size, arrow_pool_.get());
+                if (!r.ok()) {
+                    LogsError("AllocatePartitionBuffers Arrow alloc failed: partition_id=%d needed_size=%d "
+                              "type_size=%d arrowPoolBytes=%lld msg=%s",
+                              partition_id, needed_size, type_size,
+                              static_cast<long long>(arrow_pool_->bytes_allocated()),
+                              r.status().ToString().c_str());
+                    throw std::runtime_error("AllocatePartitionBuffers Arrow alloc failed: " + r.status().ToString());
                 }
-                std::shared_ptr<Buffer> value_buffer(new Buffer((uint8_t *)ptr_tmp, 0, needed_size));
+                auto value_arrow_buf = std::move(*r);
+                // 保留完整容量 needed_size 作为逻辑大小。
+                // 不能用 Resize(0)（即使 capacity 不变），因为 OmniMemoryPoolAdapter::Reallocate
+                // 对 new_size=0 会调 alloc_->Alloc(0) + Free(old)，Alloc(0) 返回的指针不可写，
+                // 后续 SplitFixedWidthValueBuffer 向 mutable_data() 写入 needed_size 字节会 SIGSEGV。
+                auto resizeSt = value_arrow_buf->Resize(needed_size);
+                if (!resizeSt.ok()) {
+                    LogsError("AllocatePartitionBuffers Arrow Resize failed: pid=%d fixedIdx=%d msg=%s",
+                              partition_id, fixed_width_idx, resizeSt.ToString().c_str());
+                    throw std::runtime_error("AllocatePartitionBuffers: Arrow Resize failed: "
+                                             + resizeSt.ToString());
+                }
+
+                partition_fixed_width_arrow_buffers_[fixed_width_idx][partition_id] = std::move(value_arrow_buf);
                 partition_fixed_width_value_addrs_[fixed_width_idx][partition_id] =
-                        const_cast<uint8_t *>(value_buffer->data_);
+                        partition_fixed_width_arrow_buffers_[fixed_width_idx][partition_id]->mutable_data();
                 partition_fixed_width_validity_addrs_[fixed_width_idx][partition_id] = nullptr;
-                // partition_fixed_width_buffers_[fixed_width_idx][partition_id] 位置0执行bitmap,位置1指向数据
+                // partition_fixed_width_buffers_[fixed_width_idx][partition_id]:
+                //   [0] = validity buffer (lazy allocation, 仍用 omni Allocator 逐字节散列)
+                //   [1] = nullptr (values 已改用 Arrow buffer，存于 partition_fixed_width_arrow_buffers_)
                 partition_fixed_width_buffers_[fixed_width_idx][partition_id] = {
-                    nullptr, std::move(value_buffer)};
+                    nullptr, nullptr};
                 fixed_width_idx++;
                 break;
             }
@@ -378,7 +408,9 @@ int Splitter::SplitFixedWidthValueBuffer(VectorBatch& vb) {
         }
         // Write back accumulated size_ deltas once per column to avoid repeated deep indirection
         for (auto &pid : partition_used_) {
-            partition_fixed_width_buffers_[col][pid][1]->size_ += size_delta[pid];
+            // 定宽 values 已改用 Arrow buffer（[1] 为 nullptr），size_ 跟踪移入 CacheVectorBatch
+            if (partition_fixed_width_buffers_[col][pid][1])
+                partition_fixed_width_buffers_[col][pid][1]->size_ += size_delta[pid];
         }
     }
     return 0;
@@ -530,487 +562,607 @@ void Splitter::SplitBinaryVector(BaseVector *varcharVector, int col_schema) {
     }
 }
 
-void Splitter::SerializeColumn(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypePtr dataType)
+// ================================================================================================
+// Task 11: Arrow 化复杂类型序列化 —— 将 Omni null bytes 转为 Arrow validity bitmap（取反）
+// ================================================================================================
+std::shared_ptr<arrow::Buffer> Splitter::OmniNullsToArrowBitmap(const uint8_t* nullBytes, int32_t numRows)
 {
-    if (vector == nullptr) {
-        throw std::runtime_error("Splitter::SerializeColumn: vector is nullptr");
+    // 检查是否有 null
+    bool hasNull = false;
+    for (int32_t i = 0; i < numRows; ++i) {
+        if (nullBytes[i] != 0) { hasNull = true; break; }
+    }
+    if (!hasNull) return nullptr;  // 全有效 → nullptr 哨兵
+
+    int32_t byteCount = (numRows + 7) / 8;
+    auto vr = arrow::AllocateResizableBuffer(byteCount, arrow_pool_.get());
+    if (!vr.ok()) {
+        throw std::runtime_error("OmniNullsToArrowBitmap alloc failed: " + vr.status().ToString());
+    }
+    auto buf = std::move(*vr);
+    memset(buf->mutable_data(), 0, byteCount);
+
+    // 取反：Omni byte!=0 = null → Arrow bit=1 = valid
+    for (int32_t i = 0; i < numRows; ++i) {
+        if (nullBytes[i] == 0) {
+            buf->mutable_data()[i / 8] |= (1u << (i % 8));
+        }
+    }
+    return buf;
+}
+
+// ================================================================================================
+// 方案 C: ComplexColumnAccumulator 方法实现
+// ================================================================================================
+
+void ComplexColumnAccumulator::Init(const DataTypePtr& dataType, int32_t bufferSize, OmniMemoryPoolAdapter* arrowPool)
+{
+    pool = arrowPool;
+    rowCapacity = bufferSize;
+
+    if (dataType == nullptr) {
+        kind = Kind::ROOT;
+        return;
     }
 
-    auto typeId = vector->GetTypeId();
+    auto typeId = dataType->GetId();
     switch (typeId) {
         case OMNI_BYTE:
-        case OMNI_BOOLEAN: {
-            SerializeFlatVector<uint8_t>(vector, row_ids, vec, dataType);
-            break;
-        }
-        case OMNI_SHORT: {
-            SerializeFlatVector<uint16_t>(vector, row_ids, vec, dataType);
-            break;
-        }
+        case OMNI_BOOLEAN:   kind = Kind::FIXED; fixedElemSize = 1; break;
+        case OMNI_SHORT:     kind = Kind::FIXED; fixedElemSize = 2; break;
         case OMNI_INT:
-        case OMNI_DATE32: {
-            SerializeFlatVector<uint32_t>(vector, row_ids, vec, dataType);
-            break;
-        }
-        case OMNI_FLOAT: {
-            SerializeFlatVector<float>(vector, row_ids, vec, dataType);
-            break;
-        }
-        case OMNI_DOUBLE: {
-            SerializeFlatVector<double>(vector, row_ids, vec, dataType);
-            break;
-        }
+        case OMNI_DATE32:
+        case OMNI_FLOAT:     kind = Kind::FIXED; fixedElemSize = 4; break;
         case OMNI_LONG:
+        case OMNI_DOUBLE:
         case OMNI_TIMESTAMP:
         case OMNI_DATE64:
-        case OMNI_DECIMAL64: {
-            SerializeFlatVector<uint64_t>(vector, row_ids, vec, dataType);
-            break;
-        }
-        case OMNI_DECIMAL128: {
-            SerializeFlatVector<uint128_t>(vector, row_ids, vec, dataType);
-            break;
-        }
-        case OMNI_VARBINARY:
+        case OMNI_DECIMAL64: kind = Kind::FIXED; fixedElemSize = 8; break;
+        case OMNI_DECIMAL128: kind = Kind::FIXED; fixedElemSize = 16; break;
+        case OMNI_VARCHAR:
         case OMNI_CHAR:
-        case OMNI_VARCHAR: {
-            SerializeStringVector(vector, row_ids, vec, typeId);
-            break;
+        case OMNI_VARBINARY: kind = Kind::VARLEN; break;
+        case OMNI_ARRAY:     kind = Kind::LIST; break;
+        case OMNI_MAP:       kind = Kind::MAP; break;
+        case OMNI_ROW:       kind = Kind::STRUCT; break;
+        default:
+            throw std::runtime_error("ComplexColumnAccumulator::Init: unsupported typeId " + std::to_string(typeId));
+    }
+
+    // Allocate offsets for LIST/MAP/VARLEN (they have offsets)
+    if (kind == Kind::LIST || kind == Kind::MAP || kind == Kind::VARLEN) {
+        int64_t offsetsSize = static_cast<int64_t>(bufferSize + 1) * sizeof(int32_t);
+        auto r = arrow::AllocateResizableBuffer(offsetsSize, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("ComplexColumnAccumulator::Init offsets alloc failed: " + r.status().ToString());
         }
-        case OMNI_ARRAY: {
-            SerializeArrayVector(vector, row_ids, vec, dataType);
-            break;
+        offsets = std::move(*r);
+        offsets->Resize(offsetsSize);
+        // Write initial offsets[0] = 0
+        int32_t* p = reinterpret_cast<int32_t*>(offsets->mutable_data());
+        p[0] = 0;
+    }
+
+    // Allocate values for FIXED (pre-allocate conservative size)
+    if (kind == Kind::FIXED) {
+        int64_t valuesSize = static_cast<int64_t>(bufferSize) * fixedElemSize;
+        auto r = arrow::AllocateResizableBuffer(valuesSize, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("ComplexColumnAccumulator::Init values alloc failed: " + r.status().ToString());
         }
-        case OMNI_MAP: {
-            SerializeMapVector(vector, row_ids, vec, dataType);
-            break;
+        values = std::move(*r);
+        values->Resize(valuesSize);
+    }
+
+    // Allocate values for VARLEN (start small, grow on demand)
+    if (kind == Kind::VARLEN) {
+        int64_t initialValuesSize = 256;  // small initial, grow as needed
+        auto r = arrow::AllocateResizableBuffer(initialValuesSize, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("ComplexColumnAccumulator::Init varlen values alloc failed: " + r.status().ToString());
         }
-        case OMNI_ROW: {
-            SerializeRowVector(vector, row_ids, vec, dataType);
-            break;
+        values = std::move(*r);
+        values->Resize(initialValuesSize);
+    }
+
+    // Recursively init children
+    if (kind == Kind::LIST) {
+        auto arrayType = std::dynamic_pointer_cast<ArrayType>(dataType);
+        children.push_back(std::make_unique<ComplexColumnAccumulator>());
+        children[0]->Init(arrayType->ElementType(), bufferSize, arrowPool);
+    } else if (kind == Kind::MAP) {
+        auto mapType = std::dynamic_pointer_cast<MapType>(dataType);
+        children.push_back(std::make_unique<ComplexColumnAccumulator>());
+        children[0]->Init(mapType->Key(), bufferSize, arrowPool);
+        children.push_back(std::make_unique<ComplexColumnAccumulator>());
+        children[1]->Init(mapType->Value(), bufferSize, arrowPool);
+    } else if (kind == Kind::STRUCT) {
+        auto rowType = std::dynamic_pointer_cast<RowType>(dataType);
+        for (uint32_t c = 0; c < rowType->size(); ++c) {
+            children.push_back(std::make_unique<ComplexColumnAccumulator>());
+            children.back()->Init(rowType->childAt(c), bufferSize, arrowPool);
         }
-        default: throw std::runtime_error("Unsupported DataTypeId: " + typeId);
     }
 }
 
-template<typename T>
-void Splitter::SerializeFlatVector(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypePtr dataType)
+void ComplexColumnAccumulator::EnsureOffsetsCapacity(int64_t needEntries)
 {
-    int num_rows = row_ids.size();
-    auto typeId = dataType != nullptr ? dataType->GetId() : vector->GetTypeId();
-
-    // set the type and size of Vec
-    spark::VecType *vt = vec.mutable_vectype();
-    vt->set_typeid_(CastOmniTypeIdToProtoVecType(typeId));
-    vec.set_size(num_rows);
-
-    // set the precision and scale for DECIMAL64 and DECIMAL128
-    if (typeId == OMNI_DECIMAL64 || typeId == OMNI_DECIMAL128) {
-        auto decimalType = std::dynamic_pointer_cast<omniruntime::type::DecimalDataType>(dataType);
-        if (decimalType == nullptr) {
-            throw std::runtime_error("DecimalDataType dynamic cast failed in SerializeFlatVector()");
+    if (!offsets) return;
+    int64_t needBytes = needEntries * sizeof(int32_t);
+    if (offsets->capacity() == 0) {
+        int64_t initSize = needBytes > 0 ? needBytes : 4;
+        auto r = arrow::AllocateResizableBuffer(initSize, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("EnsureOffsetsCapacity alloc failed: " + r.status().ToString());
         }
-        vt->set_precision(decimalType->GetPrecision());
-        vt->set_scale(decimalType->GetScale());
+        offsets = std::move(*r);
+        offsets->Resize(needBytes);
+        int32_t* p = reinterpret_cast<int32_t*>(offsets->mutable_data());
+        p[0] = 0;
+        return;
+    }
+    if (offsets->capacity() >= needBytes) {
+        if (offsets->size() < needBytes) offsets->Resize(needBytes);
+        return;
+    }
+    int64_t newCap = offsets->capacity();
+    if (newCap == 0) newCap = needBytes;
+    while (newCap < needBytes) newCap *= 2;
+    auto st = offsets->Reserve(newCap);
+    if (!st.ok()) {
+        throw std::runtime_error("EnsureOffsetsCapacity Reserve failed: " + st.ToString());
+    }
+    offsets->Resize(needBytes);
+}
+
+void ComplexColumnAccumulator::EnsureValidityCapacity(int64_t needBits)
+{
+    int64_t needBytes = (needBits + 7) / 8;
+    if (!validity || validity->capacity() == 0) {
+        int64_t cap = (rowCapacity + 7) / 8;
+        if (cap < needBytes) cap = needBytes;
+        if (cap < 1) cap = 1;
+        auto r = arrow::AllocateResizableBuffer(cap, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("EnsureValidityCapacity alloc failed: " + r.status().ToString());
+        }
+        validity = std::move(*r);
+        validity->Resize(needBytes);
+        return;
+    }
+    if (validity->capacity() >= needBytes) {
+        if (validity->size() < needBytes) validity->Resize(needBytes);
+        return;
+    }
+    int64_t newCap = validity->capacity();
+    if (newCap == 0) newCap = needBytes;
+    while (newCap < needBytes) newCap *= 2;
+    auto st = validity->Reserve(newCap);
+    if (!st.ok()) {
+        throw std::runtime_error("EnsureValidityCapacity Reserve failed: " + st.ToString());
+    }
+    validity->Resize(needBytes);
+}
+
+void ComplexColumnAccumulator::EnsureValuesCapacity(int64_t needBytes)
+{
+    if (!values || values->capacity() == 0) {
+        int64_t initSize = needBytes > 0 ? needBytes : 1;
+        if (initSize < 256) initSize = 256;
+        auto r = arrow::AllocateResizableBuffer(initSize, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("EnsureValuesCapacity alloc failed: " + r.status().ToString());
+        }
+        values = std::move(*r);
+        values->Resize(needBytes > 0 ? needBytes : 0);
+        return;
+    }
+    if (values->capacity() >= needBytes) {
+        if (values->size() < needBytes) values->Resize(needBytes);
+        return;
+    }
+    int64_t newCap = values->capacity();
+    if (newCap == 0) newCap = needBytes;
+    while (newCap < needBytes) newCap *= 2;
+    auto st = values->Reserve(newCap);
+    if (!st.ok()) {
+        throw std::runtime_error("EnsureValuesCapacity Reserve failed: " + st.ToString());
+    }
+    values->Resize(needBytes);
+}
+
+void ComplexColumnAccumulator::AppendValidBit(bool isValid)
+{
+    if (isValid && validity == nullptr) {
+        // All-valid so far, keep nullptr sentinel
+        return;
+    }
+    // First null encountered: lazy-allocate validity and backfill all previous bits as 1 (valid)
+    if (validity == nullptr) {
+        // Backfill must cover ALL previous rows (0..rowCursor-1), not just rowCapacity rows.
+        // rowCursor can exceed rowCapacity when partition_buffer_size > buffer_size
+        // (DoSplit sets new_size = max(partition_id_cnt_cur, buffer_size)).
+        // If we only backfill rowCapacity bytes, rows beyond that have uninitialized garbage bits.
+        int64_t needBackfillBytes = (rowCursor + 7) / 8;
+        if (needBackfillBytes < 1) needBackfillBytes = 1;
+        // Allocate with enough capacity for rowCursor bits + room for growth
+        int64_t allocCap = needBackfillBytes;
+        if (allocCap < (int64_t)((rowCapacity + 7) / 8)) allocCap = (rowCapacity + 7) / 8;
+        if (allocCap < 1) allocCap = 1;
+        auto r = arrow::AllocateResizableBuffer(allocCap, pool);
+        if (!r.ok()) {
+            throw std::runtime_error("AppendValidBit alloc failed: " + r.status().ToString());
+        }
+        validity = std::move(*r);
+        // Backfill ALL previous rows as valid (bit=1) — covers 0..rowCursor-1
+        memset(validity->mutable_data(), 0xFF, needBackfillBytes);
+        // Set logical size (avoid Resize(0))
+        validity->Resize(needBackfillBytes);
+    }
+    int64_t bit = rowCursor;
+    EnsureValidityCapacity(bit + 1);
+    int64_t byteIdx = bit / 8;
+    int32_t bitIdx = static_cast<int32_t>(bit % 8);
+    if (isValid) {
+        validity->mutable_data()[byteIdx] |= (1u << bitIdx);
+    } else {
+        validity->mutable_data()[byteIdx] &= ~(1u << bitIdx);
+    }
+}
+
+void ComplexColumnAccumulator::CollectBuffers(std::vector<std::shared_ptr<arrow::Buffer>>& out)
+{
+    if (rowCursor == 0) {
+        // No data written for this accumulator node. Delegate to CollectEmptyBuffers
+        // which allocates real (non-null) 0-byte / all-zero buffers. The read side
+        // (DeserializeArrowBufferToOmniVector) rejects nullptr for offsets/values,
+        // so we must NOT push nullptr placeholders here.
+        CollectEmptyBuffers(out, 0);
+        return;
     }
 
-    // initialize nulls of spark::Vec
-    std::string nullsStr;
-    nullsStr.resize(num_rows, 0);
-    auto* nullsData = reinterpret_cast<uint8_t*>(nullsStr.data());
+    // validity
+    if (validity) {
+        int64_t byteLen = (rowCursor + 7) / 8;
+        validity->Resize(byteLen);
+        out.push_back(validity);
+    } else {
+        out.push_back(nullptr);  // all-valid sentinel
+    }
 
-    // initialize values of spark::Vec
-    std::string valuesStr;
-    valuesStr.resize(num_rows * sizeof(T));
-    auto* valuesData = reinterpret_cast<T*>(valuesStr.data());
+    // offsets (LIST/MAP/VARLEN have offsets)
+    if (offsets) {
+        int64_t byteLen = (rowCursor + 1) * sizeof(int32_t);
+        offsets->Resize(byteLen);
+        out.push_back(offsets);
+    }
+
+    // values (FIXED/VARLEN leaves have values)
+    if (values) {
+        int64_t byteLen;
+        if (kind == Kind::FIXED) {
+            byteLen = rowCursor * fixedElemSize;
+        } else {
+            byteLen = valueBytesCursor;
+        }
+        values->Resize(byteLen);
+        out.push_back(values);
+    }
+
+    // Recurse children
+    for (auto& child : children) {
+        child->CollectBuffers(out);
+    }
+}
+
+void ComplexColumnAccumulator::CollectEmptyBuffers(std::vector<std::shared_ptr<arrow::Buffer>>& out, int32_t numRows)
+{
+    // Emit empty-but-valid placeholders for a column with no accumulated data
+    out.push_back(nullptr);  // validity = all-valid sentinel
+
+    if (kind == Kind::LIST || kind == Kind::MAP) {
+        // offsets: (numRows+1) * 4 bytes, all zeros
+        int32_t offsetsLen = (numRows + 1) * static_cast<int32_t>(sizeof(int32_t));
+        auto offsetsR = arrow::AllocateBuffer(offsetsLen, pool);
+        if (!offsetsR.ok()) {
+            throw std::runtime_error("CollectEmptyBuffers offsets alloc failed: " + offsetsR.status().ToString());
+        }
+        auto emptyOffsetsBuf = std::move(*offsetsR);
+        std::memset(emptyOffsetsBuf->mutable_data(), 0, static_cast<size_t>(offsetsLen));
+        out.push_back(std::move(emptyOffsetsBuf));
+
+        // Recurse children with 0 child rows
+        for (auto& child : children) {
+            child->CollectEmptyBuffers(out, 0);
+        }
+    } else if (kind == Kind::STRUCT) {
+        for (auto& child : children) {
+            child->CollectEmptyBuffers(out, numRows);
+        }
+    } else if (kind == Kind::FIXED) {
+        // values: empty
+        auto valuesR = arrow::AllocateBuffer(0, pool);
+        if (!valuesR.ok()) {
+            throw std::runtime_error("CollectEmptyBuffers values alloc failed: " + valuesR.status().ToString());
+        }
+        out.push_back(std::move(*valuesR));
+    } else if (kind == Kind::VARLEN) {
+        // offsets: (numRows+1) * 4 bytes, all zeros
+        int32_t offsetsLen = (numRows + 1) * static_cast<int32_t>(sizeof(int32_t));
+        auto offsetsR = arrow::AllocateBuffer(offsetsLen, pool);
+        if (!offsetsR.ok()) {
+            throw std::runtime_error("CollectEmptyBuffers varlen offsets alloc failed: " + offsetsR.status().ToString());
+        }
+        auto emptyOffsetsBuf = std::move(*offsetsR);
+        std::memset(emptyOffsetsBuf->mutable_data(), 0, static_cast<size_t>(offsetsLen));
+        out.push_back(std::move(emptyOffsetsBuf));
+        // values: empty
+        auto valuesR = arrow::AllocateBuffer(0, pool);
+        if (!valuesR.ok()) {
+            throw std::runtime_error("CollectEmptyBuffers varlen values alloc failed: " + valuesR.status().ToString());
+        }
+        out.push_back(std::move(*valuesR));
+    }
+}
+
+void ComplexColumnAccumulator::Reset()
+{
+    rowCursor = 0;
+    elemCursor = 0;
+    valueBytesCursor = 0;
+    // Release all buffers. CollectBuffers pushes shared_ptr references into
+    // arrow_batch.buffers (zero-copy). If we keep and reuse the same ResizableBuffer,
+    // the next batch's AppendColumnToArrow writes would overwrite the previous
+    // batch's data in the same physical memory — corrupting data that may not yet
+    // have been written to disk by WriteColumnarBatch.
+    //
+    // Design doc (Solution_Design.md §6.5) intended Reset to only clear cursors
+    // and reuse buffers. However, that assumes CollectBuffers makes copies (or
+    // that the batch is fully serialized before the next split). In practice,
+    // CacheVectorBatch may be called multiple times before WriteSplit, so
+    // accumulated batches coexist in memory. Releasing buffers here ensures each
+    // cached batch owns its data independently. The next SplitComplexColumns call
+    // will lazy-init a fresh accumulator via Init.
+    offsets.reset();
+    validity.reset();
+    values.reset();
+    // Recurse: release children too
+    for (auto& child : children) {
+        child->Reset();
+    }
+}
+
+void ComplexColumnAccumulator::Release()
+{
+    offsets.reset();
+    validity.reset();
+    values.reset();
+    children.clear();
+}
+
+// ================================================================================================
+// 方案 C: AppendColumnToArrow 系列 —— 增量追加到 accumulator（替代 Serialize*ToArrow）
+// ================================================================================================
+
+void Splitter::AppendColumnToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                   DataTypePtr dataType, ComplexColumnAccumulator& acc)
+{
+    if (vector == nullptr) {
+        throw std::runtime_error("AppendColumnToArrow: vector is nullptr");
+    }
+    switch (acc.kind) {
+        case ComplexColumnAccumulator::Kind::FIXED:   AppendFlatToArrow(vector, row_ids, acc); return;
+        case ComplexColumnAccumulator::Kind::VARLEN:  AppendStringToArrow(vector, row_ids, acc); return;
+        case ComplexColumnAccumulator::Kind::LIST:    AppendArrayToArrow(vector, row_ids, dataType, acc); return;
+        case ComplexColumnAccumulator::Kind::MAP:     AppendMapToArrow(vector, row_ids, dataType, acc); return;
+        case ComplexColumnAccumulator::Kind::STRUCT:  AppendRowToArrow(vector, row_ids, dataType, acc); return;
+        default:
+            throw std::runtime_error("AppendColumnToArrow: unsupported accumulator kind");
+    }
+}
+
+void Splitter::AppendFlatToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                 ComplexColumnAccumulator& acc)
+{
+    int32_t numRows = static_cast<int32_t>(row_ids.size());
+    int32_t T_size = acc.fixedElemSize;
+
+    // Ensure values capacity
+    int64_t needBytes = (acc.rowCursor + numRows) * T_size;
+    acc.EnsureValuesCapacity(needBytes);
+    uint8_t* dst = acc.values->mutable_data() + acc.rowCursor * T_size;
 
     if (vector->GetEncoding() == OMNI_ENCODING_CONST) {
-        auto constVec = reinterpret_cast<ConstVector<T> *>(vector);
-        bool constIsNull = constVec->HasNull() && constVec->IsNull(0);
-        T constValue = constIsNull ? T{} : constVec->GetConstValue();
-        for (int32_t i = 0; i < num_rows; ++i) {
-            if (constIsNull) {
-                nullsData[i] = 1;
-                valuesData[i] = T{};
-            } else {
-                valuesData[i] = constValue;
-            }
+        // ConstVector: fill all rows with the same value
+        // Get const value bytes and replicate
+        uint8_t constValueBytes[16] = {};
+        auto typeId = vector->GetTypeId();
+        bool constIsNull = false;
+        // Use UnsafeGetValues to get the const value
+        const uint8_t* src = static_cast<const uint8_t*>(VectorHelper::UnsafeGetValues(vector));
+        if (src != nullptr) {
+            memcpy(constValueBytes, src, T_size);
         }
-    } else if (vector->GetEncoding() == OMNI_DICTIONARY) {
-        auto fillRow = [&](auto *dictVec) {
-         	for (int32_t i = 0; i < num_rows; ++i) {
-         	    auto rowId = row_ids[i];
-         	    if (dictVec->IsNull(rowId)) {
-         	        nullsData[i] = 1;
-         	        valuesData[i] = T{};
-         	    } else {
-         	        valuesData[i] = static_cast<T>(dictVec->GetValue(rowId));
-         	    }
-         	}
-        };
-        switch (typeId) {
-            case OMNI_BYTE: {
-                fillRow(static_cast<Vector<DictionaryContainer<int8_t>> *>(vector));
-                break;
-            }
-            case OMNI_BOOLEAN: {
-                auto *dv = static_cast<Vector<DictionaryContainer<bool>> *>(vector);
-                for (int32_t i = 0; i < num_rows; ++i) {
-                    auto rowId = row_ids[i];
-                    if (dv->IsNull(rowId)) {
-                        nullsData[i] = 1;
-                        valuesData[i] = T{};
-                    } else {
-                        valuesData[i] = dv->GetValue(rowId) ? static_cast<T>(1) : static_cast<T>(0);
-                    }
-                }
-                break;
-            }
-            case OMNI_SHORT: {
-                fillRow(static_cast<Vector<DictionaryContainer<int16_t>> *>(vector));
-                break;
-            }
-            case OMNI_INT:
-            case OMNI_DATE32: {
-                fillRow(static_cast<Vector<DictionaryContainer<int32_t>> *>(vector));
-                break;
-            }
-            case OMNI_FLOAT: {
-                fillRow(static_cast<Vector<DictionaryContainer<float>> *>(vector));
-                break;
-            }
-            case OMNI_DOUBLE: {
-                fillRow(static_cast<Vector<DictionaryContainer<double>> *>(vector));
-                break;
-            }
-            case OMNI_LONG:
-            case OMNI_TIMESTAMP:
-            case OMNI_DATE64:
-            case OMNI_DECIMAL64: {
-                fillRow(static_cast<Vector<DictionaryContainer<int64_t>> *>(vector));
-                break;
-            }
-            case OMNI_DECIMAL128: {
-                auto *dv = static_cast<Vector<DictionaryContainer<Decimal128>> *>(vector);
-                for (int32_t i = 0; i < num_rows; ++i) {
-                    auto rowId = row_ids[i];
-                    if (dv->IsNull(rowId)) {
-                        nullsData[i] = 1;
-                        valuesData[i] = T{};
-                    } else {
-                        const Decimal128 &decVal = dv->GetValue(rowId);
-                        valuesData[i] = *reinterpret_cast<const uint128_t *>(&decVal);
-                    }
-                }
-                break;
-            }
-            default:
-                throw std::runtime_error(
-                    "SerializeFlatVector: OMNI_DICTIONARY not supported for type id " + std::to_string(static_cast<int>(typeId)));
+        for (int32_t i = 0; i < numRows; ++i) {
+            memcpy(dst + i * T_size, constValueBytes, T_size);
+        }
+        // Handle nulls for const
+        for (int32_t i = 0; i < numRows; ++i) {
+            bool isNull = vector->IsNull(row_ids[i]);
+            acc.AppendValidBit(!isNull);
         }
     } else if (vector->GetEncoding() == OMNI_FLAT) {
-        auto* typedVec = static_cast<Vector<T>*>(vector);
-        if (!typedVec) {
-            throw std::runtime_error("SerializeFlatVector: vector is not Vector<T>!");
-        }
-        for (int32_t i = 0; i < num_rows; ++i) {
+        auto srcAddr = reinterpret_cast<int64_t>(VectorHelper::UnsafeGetValues(vector));
+        for (int32_t i = 0; i < numRows; ++i) {
             auto rowId = row_ids[i];
-            if (typedVec->IsNull(rowId)) {
-                nullsData[i] = 1;
-                valuesData[i] = T{}; // default value
+            bool isNull = vector->IsNull(rowId);
+            if (!isNull) {
+                memcpy(dst + i * T_size, reinterpret_cast<const void*>(srcAddr + rowId * T_size), T_size);
             } else {
-                valuesData[i] = typedVec->GetValue(rowId);
+                memset(dst + i * T_size, 0, T_size);
             }
-        }
-    } else {
-     	throw std::runtime_error(
-     	    std::string("SerializeFlatVector: unsupported vector encoding ") +
-     	    std::to_string(static_cast<int>(vector->GetEncoding())));
-    }
-
-    vec.set_nulls(std::move(nullsStr));
-    vec.set_values(std::move(valuesStr));
-}
-
-void Splitter::SerializeStringVector(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypeId typeId)
-{
-    int num_rows = row_ids.size();
-
-    spark::VecType *vt = vec.mutable_vectype();
-    vt->set_typeid_(CastOmniTypeIdToProtoVecType(typeId));
-    vec.set_size(num_rows);
-
-    std::string nullsStr;
-    nullsStr.resize(num_rows, 0);
-    auto* nullsData = reinterpret_cast<uint8_t*>(nullsStr.data());
-
-    std::string offsetsStr;
-    offsetsStr.resize((num_rows + 1) * sizeof(int32_t));
-    auto* offsetsData = reinterpret_cast<int32_t*>(offsetsStr.data());
-
-    std::string valuesStr;
-    int32_t currentOffset = 0;
-    offsetsData[0] = 0;
-
-    if (vector->GetEncoding() == OMNI_ENCODING_CONST) {
-        auto constVec = reinterpret_cast<ConstVector<std::string_view> *>(vector);
-        bool constIsNull = constVec->HasNull() && constVec->IsNull(0);
-        std::string_view constValue;
-        if (!constIsNull) {
-            constValue = constVec->GetConstValue();
-        }
-
-        int64_t totalSize = constIsNull ? 0 : (int64_t)constValue.size() * num_rows;
-        valuesStr.resize(totalSize);
-        char* valuesDataPtr = valuesStr.data();
-
-        for (int32_t i = 0; i < num_rows; ++i) {
-            if (constIsNull) {
-                nullsData[i] = 1;
-                offsetsData[i + 1] = currentOffset;
-            } else {
-                memcpy(valuesDataPtr + currentOffset, constValue.data(), constValue.size());
-                currentOffset += constValue.size();
-                offsetsData[i + 1] = currentOffset;
-            }
+            acc.AppendValidBit(!isNull);
         }
     } else if (vector->GetEncoding() == OMNI_DICTIONARY) {
-     	auto dictVec = reinterpret_cast<Vector<DictionaryContainer<std::string_view, LargeStringContainer>> *>(vector);
-
-     	int64_t totalSize = 0;
-     	for (int32_t i = 0; i < num_rows; ++i) {
-     	    auto rowId = row_ids[i];
-     	    if (!dictVec->IsNull(rowId)) {
-     	        auto strValue = dictVec->GetValue(rowId);
-     	        totalSize += strValue.size();
-     	    }
-     	}
-     	valuesStr.resize(totalSize);
-
-     	char* valuesDataPtr = valuesStr.data();
-     	for (int32_t i = 0; i < num_rows; ++i) {
-     	    auto rowId = row_ids[i];
-     	    if (dictVec->IsNull(rowId)) {
-     	        nullsData[i] = 1;
-     	        offsetsData[i + 1] = currentOffset;
-     	    } else {
-     	        auto strValue = dictVec->GetValue(rowId);
-     	        memcpy(valuesDataPtr + currentOffset, strValue.data(), strValue.size());
-     	        currentOffset += strValue.size();
-     	        offsetsData[i + 1] = currentOffset;
-     	    }
-     	}
-    } else if (vector->GetEncoding() == OMNI_FLAT) {
-        auto stringVec = reinterpret_cast<Vector<LargeStringContainer<std::string_view>> *>(vector);
-
-        // calculate total size of strings
-        int64_t totalSize = 0;
-        for (int32_t i = 0; i < num_rows; ++i) {
+        auto ids_addr = static_cast<const int32_t*>(VectorHelper::UnsafeGetValues(vector));
+        const uint8_t* dictData = reinterpret_cast<const uint8_t*>(VectorHelper::UnsafeGetDictionary(vector));
+        for (int32_t i = 0; i < numRows; ++i) {
             auto rowId = row_ids[i];
-            if (!stringVec->IsNull(rowId)) {
-                auto strValue = stringVec->GetValue(rowId);
-                totalSize += strValue.size();
-            }
-        }
-        valuesStr.resize(totalSize);
-
-        char* valuesDataPtr = valuesStr.data();
-        for (int32_t i = 0; i < num_rows; ++i) {
-            auto rowId = row_ids[i];
-            if (stringVec->IsNull(rowId)) {
-                nullsData[i] = 1;
-                offsetsData[i + 1] = currentOffset;
+            bool isNull = vector->IsNull(rowId);
+            if (!isNull) {
+                int32_t dictIdx = ids_addr[rowId];
+                memcpy(dst + i * T_size, dictData + dictIdx * T_size, T_size);
             } else {
-                auto strValue = stringVec->GetValue(rowId);
-                memcpy(valuesDataPtr + currentOffset, strValue.data(), strValue.size());
-                currentOffset += strValue.size();
-                offsetsData[i + 1] = currentOffset;
+                memset(dst + i * T_size, 0, T_size);
             }
+            acc.AppendValidBit(!isNull);
         }
     } else {
-     	throw std::runtime_error(
-     	    std::string("SerializeStringVector: unsupported vector encoding ") +
-     	    std::to_string(static_cast<int>(vector->GetEncoding())));
+        throw std::runtime_error("AppendFlatToArrow: unsupported encoding");
     }
 
-    vec.set_nulls(std::move(nullsStr));
-    vec.set_offsets(std::move(offsetsStr));
-    vec.set_values(std::move(valuesStr));
+    acc.rowCursor += numRows;
 }
 
-void Splitter::SerializeArrayVector(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypePtr dataType)
+void Splitter::AppendStringToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                   ComplexColumnAccumulator& acc)
 {
-    if (dataType == nullptr) {
-        throw runtime_error("dataType is nullptr in SerializeArrayVector()!");
+    int32_t numRows = static_cast<int32_t>(row_ids.size());
+
+    // Ensure offsets capacity
+    acc.EnsureOffsetsCapacity(acc.rowCursor + numRows + 1);
+    int32_t* offsets = reinterpret_cast<int32_t*>(acc.offsets->mutable_data());
+    int32_t base = static_cast<int32_t>(acc.valueBytesCursor);
+
+    int32_t cur = base;
+    for (int32_t i = 0; i < numRows; ++i) {
+        auto rowId = row_ids[i];
+        bool isNull = vector->IsNull(rowId);
+        if (isNull) {
+            acc.AppendValidBit(false);
+            offsets[acc.rowCursor + i + 1] = cur;
+        } else {
+            acc.AppendValidBit(true);
+            // Get string value
+            auto stringVec = reinterpret_cast<Vector<LargeStringContainer<std::string_view>>*>(vector);
+            auto sv = stringVec->GetValue(rowId);
+            int32_t len = static_cast<int32_t>(sv.size());
+            if (len > 0) {
+                int64_t needBytes = acc.valueBytesCursor + len;
+                if (acc.values->capacity() < needBytes) {
+                    acc.EnsureValuesCapacity(needBytes);
+                    // mutable_data may have changed after Reserve
+                    offsets = reinterpret_cast<int32_t*>(acc.offsets->mutable_data());
+                }
+                memcpy(acc.values->mutable_data() + cur, sv.data(), len);
+                cur += len;
+                acc.valueBytesCursor = cur;
+            }
+            offsets[acc.rowCursor + i + 1] = cur;
+        }
     }
-    if (vector->GetEncoding() != OMNI_ENCODING_ARRAY) {
-        throw std::runtime_error(
-            std::string("SerializeArrayVector: unsupported vector encoding ") +
-            std::to_string(static_cast<int>(vector->GetEncoding())));
-    }
 
-    auto arrayVec = reinterpret_cast<ArrayVector *>(vector);
-    int num_rows = row_ids.size();
+    acc.rowCursor += numRows;
+}
 
-    spark::VecType *vt = vec.mutable_vectype();
-    vt->set_typeid_(spark::VecType::VEC_TYPE_ARRAY);
-    vec.set_size(num_rows);
+void Splitter::AppendArrayToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                  DataTypePtr dataType, ComplexColumnAccumulator& acc)
+{
+    auto* arrayVec = reinterpret_cast<ArrayVector*>(vector);
+    int32_t numRows = static_cast<int32_t>(row_ids.size());
 
-    std::string offsetsStr;
-    offsetsStr.resize((num_rows + 1) * sizeof(int32_t));
-    auto* offsetsData = reinterpret_cast<int32_t*>(offsetsStr.data());
+    // Ensure offsets capacity
+    acc.EnsureOffsetsCapacity(acc.rowCursor + numRows + 1);
+    int32_t* offsets = reinterpret_cast<int32_t*>(acc.offsets->mutable_data());
+    int32_t childElemBase = static_cast<int32_t>(acc.elemCursor);
 
-    std::string nullsStr;
-    nullsStr.resize(num_rows, 0);
-    auto* nullsData = reinterpret_cast<uint8_t*>(nullsStr.data());
-
-    // TODO: collect ranges instead of positions
+    // Per-row: compute element count, write offsets, collect element positions
     std::vector<uint32_t> elementPositions;
-    int64_t currentOffset = 0;
-    offsetsData[0] = 0;
-    for (int32_t i = 0; i < num_rows; ++i) {
+    int32_t cur = childElemBase;
+    for (int32_t i = 0; i < numRows; ++i) {
         auto rowId = row_ids[i];
         if (arrayVec->IsNull(rowId)) {
-            nullsData[i] = 1;
-            offsetsData[i + 1] = currentOffset;
+            acc.AppendValidBit(false);
+            offsets[acc.rowCursor + i + 1] = cur;
         } else {
+            acc.AppendValidBit(true);
             int64_t startPos = arrayVec->GetOffset(rowId);
             int64_t arraySize = arrayVec->GetSize(rowId);
             for (int64_t j = 0; j < arraySize; ++j) {
-                elementPositions.push_back(startPos + j);
+                elementPositions.push_back(static_cast<uint32_t>(startPos + j));
             }
-            currentOffset += arraySize;
-            offsetsData[i + 1] = currentOffset;
+            cur += static_cast<int32_t>(arraySize);
+            offsets[acc.rowCursor + i + 1] = cur;
         }
     }
 
-    vec.set_offsets(std::move(offsetsStr));
-    vec.set_nulls(std::move(nullsStr));
-
-    auto arrayType = std::dynamic_pointer_cast<omniruntime::type::ArrayType>(dataType);
+    // Recurse into child element vector
+    auto arrayType = std::dynamic_pointer_cast<ArrayType>(dataType);
     DataTypePtr elementType = arrayType->ElementType();
-
-    // serialize elementVector
-    auto* subVec = vec.add_subvectors();
     auto* elementsVec = arrayVec->GetElementVector().get();
-    SerializeColumn(elementsVec, elementPositions, *subVec, elementType);
+    AppendColumnToArrow(elementsVec, elementPositions, elementType, *acc.children[0]);
 
-    spark::VecType* childType = vt->add_children();
-    childType->CopyFrom(subVec->vectype());
+    acc.elemCursor = cur;
+    acc.rowCursor += numRows;
 }
 
-void Splitter::SerializeMapVector(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypePtr dataType)
+void Splitter::AppendMapToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                DataTypePtr dataType, ComplexColumnAccumulator& acc)
 {
-    if (dataType == nullptr) {
-        throw runtime_error("dataType is nullptr in SerializeArrayVector()!");
-    }
-    if (vector->GetEncoding() != OMNI_ENCODING_MAP) {
-        throw std::runtime_error(
-            std::string("SerializeMapVector: unsupported vector encoding ") +
-            std::to_string(static_cast<int>(vector->GetEncoding())));
-    }
+    auto* mapVec = reinterpret_cast<MapVector*>(vector);
+    int32_t numRows = static_cast<int32_t>(row_ids.size());
 
-    auto mapVec =  reinterpret_cast<MapVector *>(vector);
-    int num_rows = row_ids.size();
+    acc.EnsureOffsetsCapacity(acc.rowCursor + numRows + 1);
+    int32_t* offsets = reinterpret_cast<int32_t*>(acc.offsets->mutable_data());
+    int32_t kvElemBase = static_cast<int32_t>(acc.elemCursor);
 
-    spark::VecType *vt = vec.mutable_vectype();
-    vt->set_typeid_(spark::VecType::VEC_TYPE_MAP);
-    vec.set_size(num_rows);
-
-    std::string offsetsStr;
-    offsetsStr.resize((num_rows + 1) * sizeof(int32_t));
-    auto* offsetsData = reinterpret_cast<int32_t*>(offsetsStr.data());
-
-    std::string nullsStr;
-    nullsStr.resize(num_rows, 0);
-    auto* nullsData = reinterpret_cast<uint8_t*>(nullsStr.data());
-
-    std::vector<uint32_t> keyValuePositions;
-    int64_t currentOffset = 0;
-    offsetsData[0] = 0;
-    for (int32_t i = 0; i < num_rows; ++i) {
+    std::vector<uint32_t> kvPositions;
+    int32_t cur = kvElemBase;
+    for (int32_t i = 0; i < numRows; ++i) {
         auto rowId = row_ids[i];
         if (mapVec->IsNull(rowId)) {
-            nullsData[i] = 1;
-            offsetsData[i + 1] = currentOffset;
+            acc.AppendValidBit(false);
+            offsets[acc.rowCursor + i + 1] = cur;
         } else {
+            acc.AppendValidBit(true);
             int64_t startPos = mapVec->GetOffset(rowId);
             int64_t mapSize = mapVec->GetSize(rowId);
             for (int64_t j = 0; j < mapSize; ++j) {
-                keyValuePositions.push_back(startPos + j);
+                kvPositions.push_back(static_cast<uint32_t>(startPos + j));
             }
-            currentOffset += mapSize;
-            offsetsData[i + 1] = currentOffset;
+            cur += static_cast<int32_t>(mapSize);
+            offsets[acc.rowCursor + i + 1] = cur;
         }
     }
-    vec.set_offsets(std::move(offsetsStr));
-    vec.set_nulls(std::move(nullsStr));
 
-    auto mapType = std::dynamic_pointer_cast<omniruntime::type::MapType>(dataType);
-    DataTypePtr keyDataType = mapType->Key();
-    DataTypePtr valueDataType = mapType->Value();
+    auto mapType = std::dynamic_pointer_cast<MapType>(dataType);
+    AppendColumnToArrow(mapVec->GetKeyVector().get(), kvPositions, mapType->Key(), *acc.children[0]);
+    AppendColumnToArrow(mapVec->GetValueVector().get(), kvPositions, mapType->Value(), *acc.children[1]);
 
-    // serialize keys
-    auto* keysChildVec = vec.add_subvectors();
-    auto* keysVec = mapVec->GetKeyVector().get();
-    SerializeColumn(keysVec, keyValuePositions, *keysChildVec, keyDataType);
-
-    // serialize values
-    auto* valuesChildVec = vec.add_subvectors();
-    auto* valuesVec = mapVec->GetValueVector().get();
-    SerializeColumn(valuesVec, keyValuePositions, *valuesChildVec, valueDataType);
-
-    // set the children of VecType
-    spark::VecType* keyType = vt->add_children();
-    keyType->CopyFrom(keysChildVec->vectype());
-
-    spark::VecType* valueType = vt->add_children();
-    valueType->CopyFrom(valuesChildVec->vectype());
-
+    acc.elemCursor = cur;
+    acc.rowCursor += numRows;
 }
 
-void Splitter::SerializeRowVector(BaseVector *vector, std::vector<uint32_t> row_ids, spark::Vec &vec, DataTypePtr dataType)
+void Splitter::AppendRowToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                                DataTypePtr dataType, ComplexColumnAccumulator& acc)
 {
-    if (dataType == nullptr) {
-        throw runtime_error("dataType is nullptr in SerializeArrayVector()!");
-    }
-    if (vector->GetEncoding() != OMNI_ENCODING_STRUCT) {
-        throw std::runtime_error(
-            std::string("SerializeRowVector: unsupported vector encoding ") +
-            std::to_string(static_cast<int>(vector->GetEncoding())));
-    }
+    auto* rowVec = reinterpret_cast<RowVector*>(vector);
+    int32_t numRows = static_cast<int32_t>(row_ids.size());
 
-    auto rowVec = reinterpret_cast<RowVector *>(vector);
-    int num_rows = row_ids.size();
-
-    spark::VecType *vt = vec.mutable_vectype();
-    vt->set_typeid_(spark::VecType::VEC_TYPE_ROW);
-    vec.set_size(num_rows);
-
-    std::string nullsStr;
-    nullsStr.resize(num_rows, 0);
-    auto* nullsData = reinterpret_cast<uint8_t*>(nullsStr.data());
-
-    for (int32_t i = 0; i < num_rows; ++i) {
-        auto rowId = row_ids[i];
-        if (rowVec->IsNull(rowId)) {
-            nullsData[i] = 1;
-        }
+    // Write validity (no offsets for STRUCT)
+    for (int32_t i = 0; i < numRows; ++i) {
+        acc.AppendValidBit(!rowVec->IsNull(row_ids[i]));
     }
 
-    vec.set_nulls(std::move(nullsStr));
-
+    // Recurse each child field (same row_ids, same row count)
     auto& children = rowVec->Children();
-    auto rowType = std::dynamic_pointer_cast<omniruntime::type::RowType>(dataType);
-
-    for (size_t childIdx = 0; childIdx < children.size(); ++childIdx) {
-        auto* childVec = vec.add_subvectors();
-        DataTypePtr childDataType = rowType->childAt(childIdx);
-        SerializeColumn(children[childIdx].get(), row_ids, *childVec, childDataType);
-
-        spark::VecType* childType = vt->add_children();
-        childType->CopyFrom(childVec->vectype());
+    auto rowType = std::dynamic_pointer_cast<RowType>(dataType);
+    for (size_t c = 0; c < children.size(); ++c) {
+        DataTypePtr childType = rowType->childAt(static_cast<uint32_t>(c));
+        AppendColumnToArrow(children[c].get(), row_ids, childType, *acc.children[c]);
     }
+
+    acc.rowCursor += numRows;
 }
 
 int Splitter::SplitComplexColumns(VectorBatch& vb)
@@ -1030,52 +1182,18 @@ int Splitter::SplitComplexColumns(VectorBatch& vb)
             int32_t col_idx_schema = singlePartitionFlag ? col_idx_vb : (col_idx_vb - 1);
             DataTypePtr dataType = inputDataTypes_[col_idx_schema];
 
-            if (partition_complex_type_proto_vecs_[pid][complex_col_idx] == nullptr) {
-                spark::Vec* proto_vec = new spark::Vec();
-                partition_complex_type_proto_vecs_[pid][complex_col_idx] = proto_vec;
-                SerializeColumn(vector, row_ids, *proto_vec, dataType);
-            } else {
-                spark::Vec tmpVec;
-                SerializeColumn(vector, row_ids, tmpVec, dataType);
-                MergeProtoVec(*partition_complex_type_proto_vecs_[pid][complex_col_idx], tmpVec);
+            // 方案 C: 增量追加到 accumulator（替代 SerializeColumnToArrow + push_back）
+            auto& acc = partition_complex_accumulators_[pid][complex_col_idx];
+            // 懒初始化：首次使用时按 dataType 创建 accumulator（inputDataTypes_ 在 Split_Init 后才可用）
+            if (!acc) {
+                acc = std::make_unique<ComplexColumnAccumulator>();
+                acc->Init(dataType, options_.buffer_size, arrow_pool_.get());
             }
+            AppendColumnToArrow(vector, row_ids, dataType, *acc);
         }
     }
 
     return 0;
-}
-
-void Splitter::MergeProtoVec(spark::Vec& dst, const spark::Vec& src)
-{
-    dst.set_size(dst.size() + src.size());
-
-    dst.mutable_nulls()->append(src.nulls());
-
-    if (!src.values().empty()) {
-        dst.mutable_values()->append(src.values());
-    }
-
-    if (!src.offsets().empty()) {
-        auto* dstOffsetsStr = dst.mutable_offsets();
-        int32_t dstCount = static_cast<int32_t>(dstOffsetsStr->size() / sizeof(int32_t));
-        auto* dstOffsets = reinterpret_cast<const int32_t*>(dstOffsetsStr->data());
-        int32_t baseOffset = dstOffsets[dstCount - 1];
-
-        int32_t srcCount = static_cast<int32_t>(src.offsets().size() / sizeof(int32_t));
-        auto* srcOffsets = reinterpret_cast<const int32_t*>(src.offsets().data());
-
-        std::string adjusted;
-        adjusted.resize((srcCount - 1) * sizeof(int32_t));
-        auto* adjustedData = reinterpret_cast<int32_t*>(adjusted.data());
-        for (int32_t i = 1; i < srcCount; ++i) {
-            adjustedData[i - 1] = srcOffsets[i] + baseOffset;
-        }
-        dstOffsetsStr->append(adjusted);
-    }
-
-    for (int i = 0; i < src.subvectors_size(); ++i) {
-        MergeProtoVec(*dst.mutable_subvectors(i), src.subvectors(i));
-    }
 }
 
 int Splitter::SplitBinaryArray(VectorBatch& vb)
@@ -1173,46 +1291,354 @@ int Splitter::SplitFixedWidthValidityBuffer(VectorBatch& vb){
 }
 
 int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
-    if (partition_buffer_idx_base_[partition_id] > 0 && fixed_width_array_idx_.size() > 0) {
-        auto fixed_width_idx = 0;
+    // 定宽列改用 Arrow buffer 缓存批（Task 9: 阶段A —— 一个缓存批 = 一帧，零拷贝引用）
+    // Task 11: 也须处理仅有复杂类型数据的情况（fixed_width_array_idx_ 可能为空）
+    bool hasFixedData = (partition_buffer_idx_base_[partition_id] > 0 && fixed_width_array_idx_.size() > 0);
+    bool hasComplexData = false;
+    if (complex_type_array_idx_.size() > 0) {
+        for (uint k = 0; k < complex_type_array_idx_.size(); ++k) {
+            if (k < partition_complex_accumulators_[partition_id].size() &&
+                partition_complex_accumulators_[partition_id][k] &&
+                partition_complex_accumulators_[partition_id][k]->rowCursor > 0) {
+                hasComplexData = true;
+                break;
+            }
+        }
+    }
+    // Task 12: 纯变长列（VARCHAR/CHAR/BINARY）也需要缓存 —— 检查 vc_partition_array_buffers_
+    bool hasBinaryData = false;
+    for (int i = 0; i < num_fields_; ++i) {
+        if ((column_type_id_[i] == SHUFFLE_BINARY || column_type_id_[i] == SHUFFLE_LARGE_BINARY) &&
+            !vc_partition_array_buffers_[partition_id][i].empty()) {
+            hasBinaryData = true;
+            break;
+        }
+    }
+
+    if (hasFixedData || hasComplexData || hasBinaryData) {
+        // 当 hasFixedData=false 时，partition_id_cnt_cur_ 仅含最后一批的行数（每批开头 memset 清零），
+        // 不能代表变长列累积的全部行数。此时应以变长列 VCBatchInfo 累计行数为准。
+        int32_t num_rows;
+        if (hasFixedData) {
+            num_rows = partition_buffer_idx_base_[partition_id];
+        } else {
+            // 纯变长/复杂类型场景：从第一个有数据的变长列取累计行数。
+            // 所有变长列的行数应相同（来自同一批输入、同一散列顺序），取第一列即可。
+            num_rows = 0;
+            for (int i = 0; i < num_fields_; ++i) {
+                if (column_type_id_[i] == SHUFFLE_BINARY || column_type_id_[i] == SHUFFLE_LARGE_BINARY) {
+                    for (const auto& vcb : vc_partition_array_buffers_[partition_id][i]) {
+                        num_rows += static_cast<int32_t>(vcb.getVcList().size());
+                    }
+                    if (num_rows > 0) break;  // 只取第一个有数据的变长列
+                }
+            }
+            // 纯复杂类型场景：从 accumulator 的 rowCursor 取累积行数
+            if (num_rows == 0) {
+                for (uint k = 0; k < complex_type_array_idx_.size(); ++k) {
+                    if (k < partition_complex_accumulators_[partition_id].size() &&
+                        partition_complex_accumulators_[partition_id][k] &&
+                        partition_complex_accumulators_[partition_id][k]->rowCursor > 0) {
+                        num_rows = static_cast<int32_t>(partition_complex_accumulators_[partition_id][k]->rowCursor);
+                        break;
+                    }
+                }
+                if (num_rows == 0) {
+                    num_rows = static_cast<int32_t>(partition_id_cnt_cur_[partition_id]);
+                }
+            }
+        }
         auto num_fields = num_fields_;
-        int64_t batch_partition_size = 0;
-        std::vector<std::vector<std::shared_ptr<Buffer>>> bufferArrayTotal(num_fields);
+        auto fixed_width_idx = 0;
+
+        ArrowColumnarCachedBatch arrow_batch;
+        arrow_batch.rowCount = num_rows;
 
         for (int i = 0; i < num_fields; ++i) {
             switch (column_type_id_[i]) {
                 case SHUFFLE_BINARY:
-                case SHUFFLE_LARGE_BINARY:
+                case SHUFFLE_LARGE_BINARY: {
+                    // Task 10: 变长列 gather 到 Arrow buffer（离线 gather，C3 保留）
+                    // VCBatchInfo 条目与定宽批行数应对齐（同输入批、同分区、相同散列顺序）
+                    auto& vcBatches = vc_partition_array_buffers_[partition_id][i];
+                    if (!vcBatches.empty()) {
+                        int32_t vcRows = 0;
+                        int64_t totalValuesSize = 0;
+                        bool hasNull = false;
+                        for (const auto& vcb : vcBatches) {
+                            vcRows += static_cast<int32_t>(vcb.getVcList().size());
+                            totalValuesSize += vcb.getVcbTotalLen();
+                            if (vcb.hasNull()) hasNull = true;
+                        }
+
+                        int32_t gatherRows = static_cast<int32_t>(
+                            std::min(static_cast<int64_t>(num_rows), static_cast<int64_t>(vcRows)));
+
+                        // --- validity: Omni VCLocation.is_null → Arrow bitmap（置位=有效）---
+                        std::shared_ptr<arrow::Buffer> arrow_validity = nullptr;
+                        if (hasNull && gatherRows > 0) {
+                            int32_t byteCount = (gatherRows + 7) / 8;
+                            auto vr = arrow::AllocateResizableBuffer(byteCount, arrow_pool_.get());
+                            if (!vr.ok()) {
+                                throw std::runtime_error(
+                                    "CacheVectorBatch Arrow varchar validity alloc failed: " + vr.status().ToString());
+                            }
+                            auto bitmapBuf = std::move(*vr);
+                            uint8_t* bitmap = bitmapBuf->mutable_data();
+                            memset(bitmap, 0, byteCount);
+                            arrow_validity = std::move(bitmapBuf);
+                        }
+
+                        // --- offsets: int32 数组，(gatherRows+1) × 4 字节 ---
+                        int64_t offsetsSize = static_cast<int64_t>(gatherRows + 1) * sizeof(int32_t);
+                        auto orStatus = arrow::AllocateResizableBuffer(offsetsSize, arrow_pool_.get());
+                        if (!orStatus.ok()) {
+                            throw std::runtime_error(
+                                "CacheVectorBatch Arrow varchar offsets alloc failed: " + orStatus.status().ToString());
+                        }
+                        auto offsetsBuf = std::move(*orStatus);
+                        int32_t* offsets = reinterpret_cast<int32_t*>(offsetsBuf->mutable_data());
+
+                        // --- values: 拼接字符串体 ---
+                        auto vr2 = arrow::AllocateResizableBuffer(totalValuesSize, arrow_pool_.get());
+                        if (!vr2.ok()) {
+                            throw std::runtime_error(
+                                "CacheVectorBatch Arrow varchar values alloc failed: " + vr2.status().ToString());
+                        }
+                        auto valuesBuf = std::move(*vr2);
+                        char* values = reinterpret_cast<char*>(valuesBuf->mutable_data());
+
+                        // --- Gather: 遍历 VCLocations，取反映射 validity，memcpy 拼接串体 ---
+                        offsets[0] = 0;
+                        int rowIdx = 0;
+                        int64_t actualValuesSize = 0;
+                        for (auto& vcb : vcBatches) {
+                            auto& lst = vcb.getVcList();
+                            for (auto& loc : lst) {
+                                if (rowIdx >= gatherRows) break;
+                                // validity 取反：Omni is_null → Arrow bit=0; !is_null → Arrow bit=1
+                                if (hasNull && !loc.get_is_null()) {
+                                    int32_t byteIdx = rowIdx / 8;
+                                    int32_t bitIdx = rowIdx % 8;
+                                    arrow_validity->mutable_data()[byteIdx] |= (1u << bitIdx);
+                                }
+                                int32_t len = loc.get_vc_len();
+                                if (len > 0) {
+                                    memcpy(values + offsets[rowIdx],
+                                           reinterpret_cast<const char*>(loc.get_vc_addr()), len);
+                                }
+                                offsets[rowIdx + 1] = offsets[rowIdx] + len;
+                                actualValuesSize += len;
+                                rowIdx++;
+                            }
+                            if (rowIdx >= gatherRows) break;
+                        }
+
+                        if (actualValuesSize < totalValuesSize) {
+                            valuesBuf->Resize(actualValuesSize);
+                        }
+
+                        // Arrow 变长列 buffer 顺序：[validity][offsets][values]
+                        arrow_batch.buffers.push_back(std::move(arrow_validity));
+                        arrow_batch.buffers.push_back(std::move(offsetsBuf));
+                        arrow_batch.buffers.push_back(std::move(valuesBuf));
+                    } else {
+                        // 该列无变长数据：构造全空串的有效 buffer。
+                        // 读侧要求变长列 offsets/values 非空（Arrow 约定），
+                        // offsets = (num_rows+1)×4 全 0 表示所有字符串长度为 0（空串），
+                        // values = 长度 0 的空 buffer。
+                        // validity = nullptr 哨兵表示全有效（空串 = 有效值）。
+                        arrow_batch.buffers.push_back(nullptr);  // validity 全有效
+
+                        int32_t offsetsLen = (num_rows + 1) * static_cast<int32_t>(sizeof(int32_t));
+                        auto offsetsR = arrow::AllocateBuffer(offsetsLen, arrow_pool_.get());
+                        if (!offsetsR.ok()) {
+                            throw std::runtime_error("CacheVectorBatch empty offsets alloc failed: "
+                                                     + offsetsR.status().ToString());
+                        }
+                        auto emptyOffsetsBuf = std::move(*offsetsR);
+                        std::memset(emptyOffsetsBuf->mutable_data(), 0, static_cast<size_t>(offsetsLen));
+                        arrow_batch.buffers.push_back(std::move(emptyOffsetsBuf));  // offsets 全 0
+
+                        auto valuesR = arrow::AllocateBuffer(0, arrow_pool_.get());
+                        if (!valuesR.ok()) {
+                            throw std::runtime_error("CacheVectorBatch empty values alloc failed: "
+                                                     + valuesR.status().ToString());
+                        }
+                        arrow_batch.buffers.push_back(std::move(*valuesR));  // values 空
+                    }
+                    break;
+                }
                 case SHUFFLE_ARRAY:
                 case SHUFFLE_MAP:
                 case SHUFFLE_ROW:
                 case SHUFFLE_NULL: {
+                    // Task 11: 复杂类型——从 Arrow 缓冲累积列表合并后推入缓存批
+                    int complexColIdx = -1;
+                    for (uint k = 0; k < complex_type_array_idx_.size(); ++k) {
+                        int expectedVbIdx = singlePartitionFlag ? i : (i + 1);
+                        if (static_cast<int>(complex_type_array_idx_[k]) == expectedVbIdx) {
+                            complexColIdx = static_cast<int>(k);
+                            break;
+                        }
+                    }
+                    if (complexColIdx >= 0) {
+                        auto& acc = partition_complex_accumulators_[partition_id][complexColIdx];
+                        LogsInfo("CacheVectorBatch complex: pid=%d col=%d accExist=%d rowCursor=%lld num_rows=%d",
+                                 partition_id, complexColIdx, acc ? 1 : 0,
+                                 acc ? (long long)acc->rowCursor : -1, num_rows);
+                        if (acc && acc->rowCursor > 0) {
+                            // 方案 C: 直接从 accumulator 取出 buffer（零拷贝引用）
+                            size_t bufCountBefore = arrow_batch.buffers.size();
+                            acc->CollectBuffers(arrow_batch.buffers);
+                            LogsInfo("CacheVectorBatch complex: CollectBuffers pushed %zu buffers (before=%zu after=%zu)",
+                                     arrow_batch.buffers.size() - bufCountBefore, bufCountBefore, arrow_batch.buffers.size());
+                        } else if (acc) {
+                            // 该列本批无数据（rowCursor==0）：构造空 buffer 占位
+                            acc->CollectEmptyBuffers(arrow_batch.buffers, num_rows);
+                        } else {
+                            // acc 未初始化（该列从未收到数据）。
+                            // 按 dataType 临时创建一个 accumulator 来调用 CollectEmptyBuffers，
+                            // 确保递归产出正确数量的 buffer（与 NumBuffers 一致），
+                            // 而非硬编码 3 个 buffer（对嵌套类型数量不足，会导致读侧 buffer 错位）。
+                            int32_t col_idx_vb = complex_type_array_idx_[complexColIdx];
+                            int32_t col_idx_schema = singlePartitionFlag ? col_idx_vb : (col_idx_vb - 1);
+                            DataTypePtr dt = inputDataTypes_[col_idx_schema];
+                            auto tmpAcc = std::make_unique<ComplexColumnAccumulator>();
+                            tmpAcc->Init(dt, options_.buffer_size, arrow_pool_.get());
+                            tmpAcc->CollectEmptyBuffers(arrow_batch.buffers, num_rows);
+                        }
+                    }
                     break;
                 }
                 default: {
-                    auto& buffers = partition_fixed_width_buffers_[fixed_width_idx][partition_id];
-                    if (buffers[0] != nullptr) {
-                        batch_partition_size += buffers[0]->capacity_;
+                    int32_t type_size = (1 << column_type_id_[i]);
+
+                    // --- validity: Omni 逐字节缓冲 → Arrow bitmap（写侧取反：Omni 置位=null → Arrow 置位=valid）---
+                    auto& omni_validity = partition_fixed_width_buffers_[fixed_width_idx][partition_id][0];
+                    std::shared_ptr<arrow::Buffer> arrow_validity = nullptr;
+
+                    if (omni_validity != nullptr) {
+                        uint8_t* null_bytes = omni_validity->data_;
+                        // 检查是否有 null（全有效则 validity 置 nullptr 哨兵）
+                        bool has_null = false;
+                        for (int32_t r = 0; r < num_rows; ++r) {
+                            if (null_bytes[r] != 0) {
+                                has_null = true;
+                                break;
+                            }
+                        }
+
+                        if (has_null) {
+                            int32_t byte_count = (num_rows + 7) / 8;
+                            auto vr = arrow::AllocateResizableBuffer(byte_count, arrow_pool_.get());
+                            if (!vr.ok()) {
+                                throw std::runtime_error(
+                                    "CacheVectorBatch Arrow validity alloc failed: " + vr.status().ToString());
+                            }
+                            auto bitmap_buf = std::move(*vr);
+                            uint8_t* bitmap = bitmap_buf->mutable_data();
+                            memset(bitmap, 0, byte_count);
+
+                            // 取反映射：Omni null_byte != 0 → Arrow bit = 0; null_byte == 0 → Arrow bit = 1
+                            for (int32_t row = 0; row < num_rows; ++row) {
+                                if (null_bytes[row] == 0) {  // Omni: not null → Arrow: valid
+                                    int32_t byte_idx = row / 8;
+                                    int32_t bit_idx = row % 8;
+                                    bitmap[byte_idx] |= (1u << bit_idx);
+                                }
+                            }
+                            bitmap_buf->Resize(byte_count);
+                            arrow_validity = std::move(bitmap_buf);
+                        }
+                        // else: 全有效 → arrow_validity 保持 nullptr (哨兵)
+
+                        omni_validity.reset();  // 释放 Omni validity buffer
                     }
-                    batch_partition_size += buffers[1]->capacity_;
-                    if (reset_buffers) {
-                        bufferArrayTotal[fixed_width_idx] = std::move(buffers);
-                        buffers = {nullptr};
-                        partition_fixed_width_validity_addrs_[fixed_width_idx][partition_id] = nullptr;
-                        partition_fixed_width_value_addrs_[fixed_width_idx][partition_id] = nullptr;
+                    // else: 该列无 null → arrow_validity 保持 nullptr
+
+                    arrow_batch.buffers.push_back(std::move(arrow_validity));
+
+                    // --- values: 快照 Arrow ResizableBuffer（零拷贝引用，缓存批 = 写出帧）---
+                    auto& arrow_values = partition_fixed_width_arrow_buffers_[fixed_width_idx][partition_id];
+                    if (arrow_values) {
+                        int64_t actual_data_size = static_cast<int64_t>(num_rows) * type_size;
+                        // 无条件精确设置逻辑大小为实际数据大小。
+                        // AllocatePartitionBuffers 时 Resize(needed_size) 保留了完整容量，
+                        // 这里 Resize(actual_data_size) 确保 size() = 实际写入字节数，
+                        // 使 WriteColumnarBatch 用 b->size() 写出正确的字节数（不多写垃圾）。
+                        // actual_data_size <= capacity（由 CheckCapacityAndAllocate 保证），不会触发 Reallocate。
+                        arrow_values->Resize(actual_data_size);
+                        arrow_batch.buffers.push_back(arrow_values);
                     } else {
-                        bufferArrayTotal[fixed_width_idx] = buffers;
+                        arrow_batch.buffers.push_back(nullptr);
                     }
+
                     fixed_width_idx++;
                     break;
                 }
             }
         }
-	cached_vectorbatch_size_ += batch_partition_size;
-	partition_cached_vectorbatch_[partition_id].push_back(std::move(bufferArrayTotal));
-	fixed_valueBuffer_size_[partition_id] = 0;
-	fixed_nullBuffer_size_[partition_id] = 0;
-	partition_buffer_idx_base_[partition_id] = 0;
+
+        size_t cachedBufferNum = arrow_batch.buffers.size();
+        partition_arrow_batch_[partition_id].push_back(std::move(arrow_batch));
+
+        // 缓存大小统计改用 arrow_pool_ 统一记账（含 values + validity bitmap）
+        cached_vectorbatch_size_ = arrow_pool_->bytes_allocated();
+
+        // 清理散列状态，为下一缓存批做准备
+        if (reset_buffers) {
+            fixed_width_idx = 0;
+            for (int i = 0; i < num_fields; ++i) {
+                switch (column_type_id_[i]) {
+                    case SHUFFLE_BINARY:
+                    case SHUFFLE_LARGE_BINARY: {
+                        // Arrow 路径已在上方将 VCBatchInfo 中的数据 gather 到 Arrow buffer。
+                        // 不再有其他路径需要访问这些条目。
+                        // 必须清除，否则下次 CacheVectorBatch 会重复 gather 旧数据，
+                        // 导致变长列数据与定宽列数据错位（分区数据量 > buffer_size 时触发）。
+                        vc_partition_array_buffers_[partition_id][i].clear();
+                        break;
+                    }
+                    case SHUFFLE_ARRAY:
+                    case SHUFFLE_MAP:
+                    case SHUFFLE_ROW:
+                    case SHUFFLE_NULL: {
+                        // 方案 C: Reset accumulator（清游标，复用 buffer）
+                        int complexColIdx = -1;
+                        for (uint k = 0; k < complex_type_array_idx_.size(); ++k) {
+                            int expectedVbIdx = singlePartitionFlag ? i : (i + 1);
+                            if (static_cast<int>(complex_type_array_idx_[k]) == expectedVbIdx) {
+                                complexColIdx = static_cast<int>(k);
+                                break;
+                            }
+                        }
+                        if (complexColIdx >= 0) {
+                            auto& acc = partition_complex_accumulators_[partition_id][complexColIdx];
+                            if (acc) {
+                                acc->Reset();
+                                acc.reset();  // release unique_ptr so lazy-init recreates it
+                            }
+                        }
+                        break;
+                    }
+                    default: {
+                        // 释放 Arrow value buffer（缓存批已持有引用，此处释放 partition 引用）
+                        partition_fixed_width_arrow_buffers_[fixed_width_idx][partition_id].reset();
+                        // 清理 Omni 引用（validity 已在上面 reset）
+                        partition_fixed_width_buffers_[fixed_width_idx][partition_id][0].reset();
+                        partition_fixed_width_buffers_[fixed_width_idx][partition_id][1].reset();
+                        // 清空散列地址
+                        partition_fixed_width_validity_addrs_[fixed_width_idx][partition_id] = nullptr;
+                        partition_fixed_width_value_addrs_[fixed_width_idx][partition_id] = nullptr;
+                        fixed_width_idx++;
+                        break;
+                    }
+                }
+            }
+        }
+
+        partition_buffer_idx_base_[partition_id] = 0;
     }
     return 0;
 }
@@ -1220,7 +1646,9 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
 int Splitter::DoSplit(VectorBatch& vb) {
     // prepare partition buffers and spill if necessary
     for (auto pid = 0; pid < num_partitions_; ++pid) {
-        if (fixed_width_array_idx_.size() > 0 &&
+        bool hasFixed = fixed_width_array_idx_.size() > 0;
+        bool hasComplex = complex_type_array_idx_.size() > 0;
+        if ((hasFixed || hasComplex) &&
             partition_id_cnt_cur_[pid] > 0 &&
             partition_buffer_idx_base_[pid] + partition_id_cnt_cur_[pid] > partition_buffer_size_[pid]) {
             auto new_size = partition_id_cnt_cur_[pid] > options_.buffer_size ? partition_id_cnt_cur_[pid] : options_.buffer_size;
@@ -1237,12 +1665,9 @@ int Splitter::DoSplit(VectorBatch& vb) {
     SplitFixedWidthValueBuffer(vb);
     SplitFixedWidthValidityBuffer(vb);
 
-    current_fixed_alloc_buffer_size_ = 0;
+    // 更新分区缓冲基址（arrow_pool_ 自动记账，不再逐 pid 累加 omni 分配量）
     for (auto pid = 0; pid < num_partitions_; ++pid) {
-        // update partition buffer base
         partition_buffer_idx_base_[pid] += partition_id_cnt_cur_[pid];
-        current_fixed_alloc_buffer_size_ += fixed_valueBuffer_size_[pid];
-        current_fixed_alloc_buffer_size_ += fixed_nullBuffer_size_[pid];
     }
 
     // Binary split last vector batch...
@@ -1262,14 +1687,12 @@ int Splitter::DoSplit(VectorBatch& vb) {
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
     uint64_t usedMemorySize = omniruntime::mem::MemoryManager::GetGlobalAccountedMemory();
     if (usedMemorySize > options_.executor_spill_mem_threshold) {
-        LogsDebug(" Spill For Executor Memory Size Threshold.");
         TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
         isSpill = true;
     }
 
-    // task level: If the memory usage of the current task exceeds the threshold, spill is triggered.
-    if (cached_vectorbatch_size_ + current_fixed_alloc_buffer_size_ >= options_.task_spill_mem_threshold) {
-        LogsDebug(" Spill For Task Memory Size Threshold.");
+    // task level: Arrow pool 统一记账（覆盖定宽+变长+复杂+行式全部 Arrow buffer）
+    if (arrow_pool_->bytes_allocated() >= options_.task_spill_mem_threshold) {
         TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
         isSpill = true;
     }
@@ -1359,7 +1782,6 @@ void Splitter::ToSplitterTypeId(int num_cols)
 
 void Splitter::CastOmniToShuffleType(DataTypeId omniType, ShuffleTypeId shuffleType)
 {
-    proto_col_types_.push_back(CastOmniTypeIdToProtoVecType(omniType));
     column_type_id_.push_back(shuffleType);
 }
 
@@ -1374,7 +1796,6 @@ int Splitter::Split_Init(){
     partition_buffer_idx_offset_ = new int32_t[num_partitions_]();
     partition_serialization_size_ = new uint32_t[num_partitions_]();
 
-    partition_cached_vectorbatch_.resize(num_partitions_);
     fixed_width_array_idx_.clear();
     complex_type_array_idx_.clear();
     partition_lengths_.resize(num_partitions_);
@@ -1423,10 +1844,12 @@ int Splitter::Split_Init(){
     partition_fixed_width_validity_addrs_.resize(num_fixed_width);
     partition_fixed_width_value_addrs_.resize(num_fixed_width);
     partition_fixed_width_buffers_.resize(num_fixed_width);
+    partition_fixed_width_arrow_buffers_.resize(num_fixed_width);
     for (uint i = 0; i < num_fixed_width; ++i) {
         partition_fixed_width_validity_addrs_[i].resize(num_partitions_);
         partition_fixed_width_value_addrs_[i].resize(num_partitions_);
         partition_fixed_width_buffers_[i].resize(num_partitions_);
+        partition_fixed_width_arrow_buffers_[i].resize(num_partitions_);
     }
 
     /* init varchar partition */
@@ -1435,11 +1858,11 @@ int Splitter::Split_Init(){
         vc_partition_array_buffers_[i].resize(column_type_id_.size());
     }
 
-    /* init complex type (Array/Map/Struct) partition storage */
-    auto num_complex_types = complex_type_array_idx_.size();
-    partition_complex_type_proto_vecs_.resize(num_partitions_);
+    /* init complex type accumulator (方案 C) — 懒初始化，在 SplitComplexColumns 首次调用时进行，
+       因为 inputDataTypes_ 在 Split_Init 时可能尚未设置（测试通过 SetInputDataTypes 后置设置）*/
+    partition_complex_accumulators_.resize(num_partitions_);
     for (auto i = 0; i < num_partitions_; ++i) {
-        partition_complex_type_proto_vecs_[i].resize(num_complex_types);
+        partition_complex_accumulators_[i].resize(complex_type_array_idx_.size());
     }
 
     partition_arena_.resize(num_partitions_);
@@ -1558,8 +1981,8 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
         isSpill = true;
     }
 
-    // task level: If the memory usage of the current task exceeds the threshold, spill is triggered.
-    if (total_input_size > options_.task_spill_mem_threshold) {
+    // task level: Arrow pool 统一记账（覆盖定宽+变长+复杂+行式全部 Arrow buffer）
+    if (arrow_pool_->bytes_allocated() > options_.task_spill_mem_threshold) {
         TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFileByRow());
         total_input_size = 0;
         isSpill = true;
@@ -1570,9 +1993,12 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
 std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
     void *ptr_tmp = static_cast<void *>(options_.allocator->Alloc((num_partitions_ + 1) * sizeof(uint64_t)));
     if (nullptr == ptr_tmp) {
+        LogsError("CaculateSpilledTmpFilePartitionOffsets Alloc failed: num_partitions=%d size=%lld",
+                  num_partitions_, static_cast<long long>((num_partitions_ + 1) * sizeof(uint64_t)));
         throw std::runtime_error("Allocator for partitionOffsets Failed! ");
     }
     std::shared_ptr<Buffer> ptrPartitionOffsets (new Buffer((uint8_t*)ptr_tmp, 0, (num_partitions_ + 1) * sizeof(uint64_t)));
+    // 每批自带 [4B大端size][文件头][batch帧]，无独立文件头，偏移从 0 开始
     uint64_t pidOffset = 0;
 
     auto pid = 0;
@@ -1586,627 +2012,142 @@ std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
     return ptrPartitionOffsets;
 }
 
-std::unordered_map<int32_t, spark::VecType::VecTypeId> omniTypeToVecTypeMap = {
-    {OMNI_NONE, spark::VecType::VEC_TYPE_NONE},
-    {OMNI_INT, spark::VecType::VEC_TYPE_INT},
-    {OMNI_LONG, spark::VecType::VEC_TYPE_LONG},
-    {OMNI_DOUBLE, spark::VecType::VEC_TYPE_DOUBLE},
-    {OMNI_FLOAT, spark::VecType::VEC_TYPE_FLOAT},
-    {OMNI_BOOLEAN, spark::VecType::VEC_TYPE_BOOLEAN},
-    {OMNI_SHORT, spark::VecType::VEC_TYPE_SHORT},
-    {OMNI_DECIMAL64, spark::VecType::VEC_TYPE_DECIMAL64},
-    {OMNI_DECIMAL128, spark::VecType::VEC_TYPE_DECIMAL128},
-    {OMNI_DATE32, spark::VecType::VEC_TYPE_DATE32},
-    {OMNI_DATE64, spark::VecType::VEC_TYPE_DATE64},
-    {OMNI_TIME32, spark::VecType::VEC_TYPE_TIME32},
-    {OMNI_TIME64, spark::VecType::VEC_TYPE_TIME64},
-    {OMNI_TIMESTAMP, spark::VecType::VEC_TYPE_TIMESTAMP},
-    {OMNI_INTERVAL_MONTHS, spark::VecType::VEC_TYPE_INTERVAL_MONTHS},
-    {OMNI_INTERVAL_DAY_TIME, spark::VecType::VEC_TYPE_INTERVAL_DAY_TIME},
-    {OMNI_VARCHAR, spark::VecType::VEC_TYPE_VARCHAR},
-    {OMNI_CHAR, spark::VecType::VEC_TYPE_CHAR},
-    {OMNI_VARBINARY, spark::VecType::VEC_TYPE_VARBINARY},
-    {OMNI_CONTAINER, spark::VecType::VEC_TYPE_CONTAINER},
-    {OMNI_BYTE, spark::VecType::VEC_TYPE_BYTE},
-    {OMNI_VARBINARY, spark::VecType::VEC_TYPE_VARBINARY},
-    {OMNI_INVALID, spark::VecType::VEC_TYPE_INVALID},
-    {OMNI_ARRAY, spark::VecType::VEC_TYPE_ARRAY},
-    {OMNI_MAP, spark::VecType::VEC_TYPE_MAP},
-    {OMNI_ROW, spark::VecType::VEC_TYPE_ROW},
-};
-
-spark::VecType::VecTypeId Splitter::CastOmniTypeIdToProtoVecType(int32_t omniType) {
-    auto result = omniTypeToVecTypeMap.find(omniType);
-    if (result == omniTypeToVecTypeMap.end()) {
-        throw std::runtime_error("CastOmniTypeIdToProtoVecType() unexpected OmniTypeId");
-    } else {
-        return result->second;
-    }
-}
-
-std::shared_ptr<omniruntime::type::DataType> Splitter::ProtoTypeToOmniType(const spark::VecType& protoType)
-{
-    auto omniTypeId = static_cast<omniruntime::type::DataTypeId>(protoType.typeid_());
-
-    switch (omniTypeId) {
-        case OMNI_INT:
-            return IntDataType::Instance();
-        case OMNI_LONG:
-            return LongDataType::Instance();
-        case OMNI_DOUBLE:
-            return DoubleDataType::Instance();
-        case OMNI_FLOAT:
-            return FloatDataType::Instance();
-        case OMNI_BOOLEAN:
-            return BooleanDataType::Instance();
-        case OMNI_SHORT:
-            return ShortDataType::Instance();
-        case OMNI_BYTE:
-            return ByteDataType::Instance();
-        case OMNI_DATE32:
-            return Date32DataType::Instance();
-        case OMNI_DATE64:
-            return Date64DataType::Instance();
-        case OMNI_TIME32:
-            return Time32DataType::Instance();
-        case OMNI_TIME64:
-            return Time64DataType::Instance();
-        case OMNI_TIMESTAMP:
-            return TimestampDataType::Instance();
-        case OMNI_DECIMAL64:
-            return std::make_shared<Decimal64DataType>(protoType.precision(), protoType.scale());
-        case OMNI_DECIMAL128:
-            return std::make_shared<Decimal128DataType>(protoType.precision(), protoType.scale());
-        case OMNI_VARCHAR:
-            return VarcharDataType::Instance();
-        case OMNI_CHAR:
-            return CharDataType::Instance();
-        case OMNI_VARBINARY:
-            return VarBinaryDataType::Instance();
-        case OMNI_ARRAY: {
-            auto elementType = ProtoTypeToOmniType(protoType.children(0));
-            auto arrayType = std::make_shared<ArrayType>(elementType);
-            return arrayType;
-        }
-        case OMNI_MAP: {
-            auto keyType = ProtoTypeToOmniType(protoType.children(0));
-            auto valueType = ProtoTypeToOmniType(protoType.children(1));
-            auto mapType = std::make_shared<MapType>(keyType, valueType);
-            return mapType;
-        }
-        // TODO: need fieldNames?
-        case OMNI_ROW: {
-            int childCount = protoType.children_size();
-            std::vector<std::shared_ptr<DataType>> childTypes;
-            for (int i = 0; i < childCount; ++i) {
-                childTypes.push_back(ProtoTypeToOmniType(protoType.children(i)));
-            }
-            auto rowType = std::make_shared<RowType>(childTypes);
-            return rowType;
-        }
-        default:
-            throw std::runtime_error("Unexpected OmniTypeId in ProtoTypeToOmniType(): " + omniTypeId);
-    }
-}
-
-void Splitter::SerializingFixedColumns(int32_t partitionId,
-                                      spark::Vec& vec,
-                                      int fixColIndexTmp,
-                                      SplitRowInfo* splitRowInfoTmp)
-{
-    LogsDebug(" Fix col :%d th, partition_cached_vectorbatch_[%d].size: %ld", fixColIndexTmp, partitionId, partition_cached_vectorbatch_[partitionId].size());
-    auto &cachedBatches = partition_cached_vectorbatch_[partitionId];
-    if (splitRowInfoTmp->cacheBatchIndex[fixColIndexTmp] < cachedBatches.size()) {
-        auto colIndexTmpSchema = singlePartitionFlag ? fixed_width_array_idx_[fixColIndexTmp] : fixed_width_array_idx_[fixColIndexTmp] - 1;
-        int32_t typeSize = (1 << column_type_id_[colIndexTmpSchema]);
-        auto onceCopyLen = splitRowInfoTmp->onceCopyRow * typeSize;
-        uint32_t onceCopyRow = splitRowInfoTmp->onceCopyRow;
-
-        // Opt C: Write directly into protobuf's internal buffer — zero extra copy.
-        // Protobuf's Clear() retains allocated capacity, so resize() reuses memory across iterations.
-        auto *protoValue = vec.mutable_values();
-        protoValue->resize(onceCopyLen);
-        uint8_t* valuePtr = reinterpret_cast<uint8_t*>(&(*protoValue)[0]);
-
-        // Opt B: Use raw pointer instead of shared_ptr<Buffer> wrapper — no refcount overhead
-        uint8_t* nullPtr = nullptr;
-        auto *protoNulls = vec.mutable_nulls();
-
-        uint destCopyedLength = 0;
-        uint memCopyLen = 0;
-        uint cacheBatchSize = 0;
-        bool nullAllocated = false;
-        while (destCopyedLength < onceCopyLen) {
-            auto &batchIdx = splitRowInfoTmp->cacheBatchIndex[fixColIndexTmp];
-            auto &batchCopiedLen = splitRowInfoTmp->cacheBatchCopyedLen[fixColIndexTmp];
-            if (batchIdx >= cachedBatches.size()) {
-                throw std::runtime_error("Columnar shuffle CacheBatchIndex out of bound.");
-            }
-            auto &colBuffers = cachedBatches[batchIdx][fixColIndexTmp];
-            cacheBatchSize = colBuffers[1]->size_;
-            LogsDebug(" partitionId:%d  batchIdx:%d  cacheBatchSize:%d  onceCopyLen:%d  destCopyedLength:%d  batchCopiedLen:%d ",
-                      partitionId, batchIdx, cacheBatchSize, onceCopyLen, destCopyedLength, batchCopiedLen);
-            if (not nullAllocated && colBuffers[0] != nullptr) {
-                protoNulls->resize(onceCopyRow);
-                nullPtr = reinterpret_cast<uint8_t*>(&(*protoNulls)[0]);
-                nullAllocated = true;
-            }
-            if ((onceCopyLen - destCopyedLength) >= (cacheBatchSize - batchCopiedLen)) {
-                memCopyLen = cacheBatchSize - batchCopiedLen;
-                memcpy(valuePtr + destCopyedLength,
-                       colBuffers[1]->data_ + batchCopiedLen,
-                       memCopyLen);
-
-                if (colBuffers[0] != nullptr) {
-                    memcpy(nullPtr + (destCopyedLength / typeSize),
-                           colBuffers[0]->data_ + (batchCopiedLen / typeSize),
-                           memCopyLen / typeSize);
-
-                    options_.allocator->Free(colBuffers[0]->data_, colBuffers[0]->capacity_);
-                    colBuffers[0]->SetReleaseFlag();
-                }
-                options_.allocator->Free(colBuffers[1]->data_, colBuffers[1]->capacity_);
-                colBuffers[1]->SetReleaseFlag();
-                destCopyedLength += memCopyLen;
-                batchIdx += 1;
-                batchCopiedLen = 0;
-            } else {
-                memCopyLen = onceCopyLen - destCopyedLength;
-                memcpy(valuePtr + destCopyedLength,
-                       colBuffers[1]->data_ + batchCopiedLen,
-                       memCopyLen);
-
-                if (colBuffers[0] != nullptr) {
-                    memcpy(nullPtr + (destCopyedLength / typeSize),
-                           colBuffers[0]->data_ + (batchCopiedLen / typeSize),
-                           memCopyLen / typeSize);
-                }
-                destCopyedLength = onceCopyLen;
-                batchCopiedLen += memCopyLen;
-            }
-            LogsDebug("  memCopyedLen=%d, batchIdx=%d  batchCopiedLen=%d ",
-                    memCopyLen, batchIdx, batchCopiedLen);
-        }
-    }
-}
-
-void Splitter::SerializingBinaryColumns(int32_t partitionId, spark::Vec& vec, int colIndex, int curBatch)
-{
-    LogsDebug(" vc_partition_array_buffers_[partitionId:%d][colIndex:%d] cacheBatchNum:%lu curBatch:%d", partitionId, colIndex, vc_partition_array_buffers_[partitionId][colIndex].size(), curBatch);
-    VCBatchInfo &vcb = vc_partition_array_buffers_[partitionId][colIndex][curBatch];
-    int valuesTotalLen = vcb.getVcbTotalLen();
-    std::vector<VCLocation> &lst = vcb.getVcList();
-    int itemsTotalLen = lst.size();
-
-    // Write directly into protobuf's internal buffers — zero extra copy.
-    // Protobuf's Clear() retains allocated capacity, so resize() reuses memory across iterations.
-    auto *protoOffsets = vec.mutable_offsets();
-    protoOffsets->resize(sizeof(int32_t) * (itemsTotalLen + 1));
-
-    auto *protoNulls = vec.mutable_nulls();
-
-    auto *protoValues = vec.mutable_values();
-    protoValues->resize(valuesTotalLen);
-
-    if(vcb.hasNull()) {
-        BytesGen<true>(reinterpret_cast<uint64_t>(protoOffsets->data()),
-                 *protoNulls,
-                 reinterpret_cast<uint64_t>(protoValues->data()), vcb);
-    } else {
-        BytesGen<false>(reinterpret_cast<uint64_t>(protoOffsets->data()),
-                         *protoNulls,
-                         reinterpret_cast<uint64_t>(protoValues->data()), vcb);
-    }
-}
-
-int32_t Splitter::ProtoWritePartition(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream, void *bufferOut, int32_t &sizeOut) {
-    SplitRowInfo splitRowInfoTmp;
-    splitRowInfoTmp.copyedRow = 0;
-    splitRowInfoTmp.remainCopyRow = partition_id_cnt_cache_[partition_id];
-    splitRowInfoTmp.cacheBatchIndex.resize(fixed_width_array_idx_.size());
-    splitRowInfoTmp.cacheBatchCopyedLen.resize(fixed_width_array_idx_.size());
-
-    int curBatch = 0;
-    while (0 < splitRowInfoTmp.remainCopyRow) {
-        if (options_.spill_batch_row_num < splitRowInfoTmp.remainCopyRow) {
-            splitRowInfoTmp.onceCopyRow = options_.spill_batch_row_num;
-        } else {
-            splitRowInfoTmp.onceCopyRow = splitRowInfoTmp.remainCopyRow;
-        }
-
-        vecBatchProto->set_rowcnt(splitRowInfoTmp.onceCopyRow);
-        vecBatchProto->set_veccnt(column_type_id_.size());
-        int fixColIndexTmp = 0;
-        int complexColIndexTmp = 0;
-
-        for (size_t indexSchema = 0; indexSchema < column_type_id_.size(); indexSchema++) {
-            spark::Vec *vec = vecBatchProto->vecs_size() > static_cast<int>(indexSchema)
-                ? vecBatchProto->mutable_vecs(indexSchema) : vecBatchProto->add_vecs();
-            switch (column_type_id_[indexSchema]) {
-                case ShuffleTypeId::SHUFFLE_1BYTE:
-                case ShuffleTypeId::SHUFFLE_2BYTE:
-                case ShuffleTypeId::SHUFFLE_4BYTE:
-                case ShuffleTypeId::SHUFFLE_8BYTE:
-                case ShuffleTypeId::SHUFFLE_DECIMAL128: {
-                    SerializingFixedColumns(partition_id, *vec, fixColIndexTmp, &splitRowInfoTmp);
-                    fixColIndexTmp++;
-                    break;
-                }
-                case ShuffleTypeId::SHUFFLE_BINARY: {
-                    SerializingBinaryColumns(partition_id, *vec, indexSchema, curBatch);
-                    break;
-                }
-                case ShuffleTypeId::SHUFFLE_ARRAY:
-                case ShuffleTypeId::SHUFFLE_MAP:
-                case ShuffleTypeId::SHUFFLE_ROW: {
-                    if (partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                        *vec = *partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                    }
-                    complexColIndexTmp++;
-                    break;
-                }
-                default: {
-                    throw std::runtime_error("ProtoWritePartition # Unsupported ShuffleType: " + std::to_string(column_type_id_[indexSchema]));
-                }
-            }
-            spark::VecType *vt = vec->mutable_vectype();
-            vt->set_typeid_(proto_col_types_[indexSchema]);
-            if(vt->typeid_() == spark::VecType::VEC_TYPE_DECIMAL128 || vt->typeid_() == spark::VecType::VEC_TYPE_DECIMAL64){
-                vt->set_precision(input_col_types.inputDataPrecisions[indexSchema]);
-                vt->set_scale(input_col_types.inputDataScales[indexSchema]);
-                 LogsDebug("precision[indexSchema %d]: %d , scale[indexSchema %d]: %d ",
-                          indexSchema, input_col_types.inputDataPrecisions[indexSchema],
-                          indexSchema, input_col_types.inputDataScales[indexSchema]);
-            }
-        }
-        curBatch++;
-
-        auto byteSize = vecBatchProto->ByteSizeLong();
-        if (byteSize > UINT32_MAX) {
-            throw std::runtime_error("Unsafe static_cast long to uint_32t.");
-        }
-        uint32_t vecBatchProtoSize = reversebytes_uint32t(static_cast<uint32_t>(byteSize));
-        if (bufferStream->Next(&bufferOut, &sizeOut)) {
-            memcpy(bufferOut, &vecBatchProtoSize, sizeof(vecBatchProtoSize));
-            if (sizeof(vecBatchProtoSize) < static_cast<uint32_t>(sizeOut)) {
-                bufferStream->BackUp(sizeOut - sizeof(vecBatchProtoSize));
-            }
-        }
-
-        vecBatchProto->SerializeToZeroCopyStream(bufferStream.get());
-        splitRowInfoTmp.remainCopyRow -= splitRowInfoTmp.onceCopyRow;
-        splitRowInfoTmp.copyedRow += splitRowInfoTmp.onceCopyRow;
-        vecBatchProto->clear_rowcnt();
-        vecBatchProto->clear_veccnt();
-        for (int i = 0; i < vecBatchProto->vecs_size(); i++) {
-            vecBatchProto->mutable_vecs(i)->Clear();
-        }
-    }
-
-    uint64_t partitionBatchSize = bufferStream->flush();
-    total_bytes_written_ += partitionBatchSize;
-    partition_lengths_[partition_id] += partitionBatchSize;
-    LogsDebug(" partitionBatch write length: %lu", partitionBatchSize);
-
-    partition_cached_vectorbatch_[partition_id].clear();
-    for (size_t col = 0; col < column_type_id_.size(); col++) {
-        vc_partition_array_buffers_[partition_id][col].clear();
-    }
-    for (size_t complexIdx = 0; complexIdx < complex_type_array_idx_.size(); ++complexIdx) {
-        partition_complex_type_proto_vecs_[partition_id][complexIdx]->Clear();
-    }
-
-    return 0;
-}
-
-void Splitter::InitVecType(spark::VecType *vt, DataTypePtr dataType)
-{
-    if (dataType->GetId() == OMNI_DECIMAL64 || dataType->GetId() == OMNI_DECIMAL128) {
-        vt->set_precision(std::dynamic_pointer_cast<omniruntime::type::DecimalDataType>(dataType)->GetPrecision());
-        vt->set_scale(std::dynamic_pointer_cast<omniruntime::type::DecimalDataType>(dataType)->GetScale());
-    }
-    vt->set_typeid_(CastOmniTypeIdToProtoVecType(dataType->GetId()));
-
-    switch (dataType->GetId()) {
-        case OMNI_ARRAY: {
-            spark::VecType* elementVt = vt->add_children();
-            auto elementType = std::dynamic_pointer_cast<omniruntime::type::ArrayType>(dataType)->ElementType();
-            spark::VecType::VecTypeId childProtoType = CastOmniTypeIdToProtoVecType(elementType->GetId()); 
-            elementVt->set_typeid_(childProtoType);
-            InitVecType(elementVt, elementType);
-            break;
-        }
-        case OMNI_MAP: {
-            spark::VecType* keyVt = vt->add_children();
-            spark::VecType* valueVt = vt->add_children();
-            auto keyType = std::dynamic_pointer_cast<omniruntime::type::MapType>(dataType)->Key();
-            auto valueType = std::dynamic_pointer_cast<omniruntime::type::MapType>(dataType)->Value();
-            spark::VecType::VecTypeId keyProtoType = CastOmniTypeIdToProtoVecType(keyType->GetId());
-            spark::VecType::VecTypeId valueProtoType = CastOmniTypeIdToProtoVecType(valueType->GetId());
-            keyVt->set_typeid_(keyProtoType);
-            valueVt->set_typeid_(valueProtoType);
-            InitVecType(keyVt, keyType);
-            InitVecType(valueVt, valueType);
-            break;
-        }
-        case OMNI_ROW: {
-            auto rowType = std::dynamic_pointer_cast<omniruntime::type::RowType>(dataType);
-            for (auto i = 0; i < rowType->size(); i++) {
-                spark::VecType* childVt = vt->add_children();
-                auto childType = rowType->childAt(i);
-                spark::VecType::VecTypeId childProtoType = CastOmniTypeIdToProtoVecType(childType->GetId());
-                childVt->set_typeid_(childProtoType);
-                InitVecType(childVt, childType);
-            }
-            break;
-        }
-        default:
-            break;
-    }
-}
-
-int32_t Splitter::ProtoWritePartitionByRow(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream, void *bufferOut, int32_t &sizeOut) {
-    uint64_t rowCount = partition_rows[partition_id].size();
-    uint64_t onceCopyRow = 0;
-    uint32_t batchCount = 0;
-    while (0 < rowCount) {
-        if (options_.spill_batch_row_num < rowCount) {
-            onceCopyRow = options_.spill_batch_row_num;
-        } else {
-            onceCopyRow = rowCount;
-        }
-
-        protoRowBatch->set_rowcnt(onceCopyRow);
-        protoRowBatch->set_veccnt(proto_col_types_.size());
-        for (uint32_t i = 0; i < proto_col_types_.size(); ++i) {
-            spark::VecType *vt = protoRowBatch->add_vectypes();
-            InitVecType(vt, inputDataTypes_[i]);
-        }
-
-        int64_t offset = batchCount * options_.spill_batch_row_num;
-        std::vector<int32_t> offset_vec(onceCopyRow + 1, 0);
-        auto rowInfoPtr = partition_rows[partition_id].data() + offset;
-        for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
-            offset_vec[i + 1] = offset_vec[i] + rowInfo->length;
-        }
-        std::string rows;
-        rows.reserve(offset_vec[onceCopyRow]);
-        for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
-            rows.append(reinterpret_cast<const char*>(rowInfo->row), rowInfo->length);
-        }
-        protoRowBatch->set_rows(std::move(rows));
-        protoRowBatch->set_offsets(reinterpret_cast<char*>(offset_vec.data()), onceCopyRow * sizeof(int32_t));
-
-        auto byteSizeLong = protoRowBatch->ByteSizeLong();
-        if (byteSizeLong > UINT32_MAX) {
-            throw std::runtime_error("Unsafe static_cast long to uint_32t.");
-        }
-        uint32_t protoRowBatchSize = reversebytes_uint32t(static_cast<uint32_t>(byteSizeLong));
-        if (bufferStream->Next(&bufferOut, &sizeOut)) {
-            memcpy(bufferOut, &protoRowBatchSize, sizeof(protoRowBatchSize));
-            if (sizeof(protoRowBatchSize) < static_cast<uint32_t>(sizeOut)) {
-                bufferStream->BackUp(sizeOut - sizeof(protoRowBatchSize));
-            }
-        }
-
-        protoRowBatch->SerializeToZeroCopyStream(bufferStream.get());
-        rowCount -= onceCopyRow;
-        batchCount++;
-        protoRowBatch->Clear();
-    }
-    partition_arena_[partition_id].Reset();
-    uint64_t partitionBatchSize = bufferStream->flush();
-    total_bytes_written_ += partitionBatchSize;
-    partition_lengths_[partition_id] += partitionBatchSize;
-    partition_rows[partition_id].clear();
-    LogsDebug(" partitionBatch write length: %lu", partitionBatchSize);
-    return 0;
-}
-
-int Splitter::protoSpillPartition(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream) {
-    SplitRowInfo splitRowInfoTmp;
-    splitRowInfoTmp.copyedRow = 0;
-    splitRowInfoTmp.remainCopyRow = partition_id_cnt_cache_[partition_id];
-    splitRowInfoTmp.cacheBatchIndex.resize(fixed_width_array_idx_.size());
-    splitRowInfoTmp.cacheBatchCopyedLen.resize(fixed_width_array_idx_.size());
-    LogsDebug(" Spill Pid %d , remainCopyRow %d , partition_cache_batch_num %lu .",
-               partition_id,
-               splitRowInfoTmp.remainCopyRow,
-               partition_cached_vectorbatch_[partition_id].size());
-    int curBatch = 0;
-    total_spill_row_num_ += splitRowInfoTmp.remainCopyRow;
-    while (0 < splitRowInfoTmp.remainCopyRow) {
-        if (options_.spill_batch_row_num < splitRowInfoTmp.remainCopyRow) {
-            splitRowInfoTmp.onceCopyRow = options_.spill_batch_row_num;
-        } else {
-            splitRowInfoTmp.onceCopyRow = splitRowInfoTmp.remainCopyRow;
-        }
-
-        vecBatchProto->set_rowcnt(splitRowInfoTmp.onceCopyRow);
-        vecBatchProto->set_veccnt(column_type_id_.size());
-        int fixColIndexTmp = 0;
-        int complexColIndexTmp = 0;
-        for (size_t indexSchema = 0; indexSchema < column_type_id_.size(); indexSchema++) {
-            spark::Vec *vec = vecBatchProto->vecs_size() > static_cast<int>(indexSchema)
-                ? vecBatchProto->mutable_vecs(indexSchema) : vecBatchProto->add_vecs();
-            switch (column_type_id_[indexSchema]) {
-                case ShuffleTypeId::SHUFFLE_1BYTE:
-                case ShuffleTypeId::SHUFFLE_2BYTE:
-                case ShuffleTypeId::SHUFFLE_4BYTE:
-                case ShuffleTypeId::SHUFFLE_8BYTE:
-                case ShuffleTypeId::SHUFFLE_DECIMAL128: {
-                    SerializingFixedColumns(partition_id, *vec, fixColIndexTmp, &splitRowInfoTmp);
-                    fixColIndexTmp++;
-                    break;
-                }
-                case ShuffleTypeId::SHUFFLE_BINARY: {
-                    SerializingBinaryColumns(partition_id, *vec, indexSchema, curBatch);
-                    break;
-                }
-                case ShuffleTypeId::SHUFFLE_ARRAY:
-                case ShuffleTypeId::SHUFFLE_MAP:
-                case ShuffleTypeId::SHUFFLE_ROW: {
-                    if (partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                        *vec = *partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                    }
-                    complexColIndexTmp++;
-                    break;
-                }
-                default: {
-                    throw std::runtime_error("protoSpillPartition # Unsupported ShuffleType: " + std::to_string(column_type_id_[indexSchema]));
-                }
-            }
-            spark::VecType *vt = vec->mutable_vectype();
-            vt->set_typeid_(proto_col_types_[indexSchema]);
-            if(vt->typeid_() == spark::VecType::VEC_TYPE_DECIMAL128 || vt->typeid_() == spark::VecType::VEC_TYPE_DECIMAL64){
-                vt->set_precision(input_col_types.inputDataPrecisions[indexSchema]);
-                vt->set_scale(input_col_types.inputDataScales[indexSchema]);
-                 LogsDebug("precision[indexSchema %d]: %d , scale[indexSchema %d]: %d ",
-                          indexSchema, input_col_types.inputDataPrecisions[indexSchema],
-                          indexSchema, input_col_types.inputDataScales[indexSchema]);
-            }
-        }
-        curBatch++;
-
-        auto byteSize = vecBatchProto->ByteSizeLong();
-        if (byteSize > UINT32_MAX) {
-            throw std::runtime_error("Unsafe static_cast long to uint_32t.");
-        }
-        uint32_t vecBatchProtoSize = reversebytes_uint32t(static_cast<uint32_t>(byteSize));
-        void *buffer = nullptr;
-        if (!bufferStream->NextNBytes(&buffer, sizeof(vecBatchProtoSize))) {
-            LogsError("Allocate Memory Failed: Flush Spilled Data, Next failed.");
-            throw std::runtime_error("Allocate Memory Failed: Flush Spilled Data, Next failed.");
-        }
-        // set serizalized bytes to stream
-        memcpy(buffer, &vecBatchProtoSize, sizeof(vecBatchProtoSize));
-        LogsDebug(" A Slice Of vecBatchProtoSize: %d ", reversebytes_uint32t(vecBatchProtoSize));
-
-        vecBatchProto->SerializeToZeroCopyStream(bufferStream.get());
-
-        splitRowInfoTmp.remainCopyRow -= splitRowInfoTmp.onceCopyRow;
-        splitRowInfoTmp.copyedRow += splitRowInfoTmp.onceCopyRow;
-        LogsTrace(" SerializeVecBatch:\n%s", vecBatchProto->DebugString().c_str());
-        vecBatchProto->clear_rowcnt();
-        vecBatchProto->clear_veccnt();
-        for (int i = 0; i < vecBatchProto->vecs_size(); i++) {
-            vecBatchProto->mutable_vecs(i)->Clear();
-        }
-    }
-
-    uint64_t partitionBatchSize = bufferStream->flush();
-    total_bytes_spilled_ += partitionBatchSize;
-    partition_serialization_size_[partition_id] = partitionBatchSize;
-    LogsDebug(" partitionBatch write length: %lu", partitionBatchSize);
-
-    partition_cached_vectorbatch_[partition_id].clear();
-    for (size_t col = 0; col < column_type_id_.size(); col++) {
-        vc_partition_array_buffers_[partition_id][col].clear();
-    }
-    for (size_t complexIdx = 0; complexIdx < complex_type_array_idx_.size(); ++complexIdx) {
-        partition_complex_type_proto_vecs_[partition_id][complexIdx]->Clear();
-    }
-
-    return 0;
-}
-
-int Splitter::protoSpillPartitionByRow(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream) {
-    uint64_t rowCount = partition_rows[partition_id].size();
-    total_spill_row_num_ += rowCount;
-
-    uint64_t onceCopyRow = 0;
-    uint32_t batchCount = 0;
-    while (0 < rowCount) {
-        if (options_.spill_batch_row_num < rowCount) {
-            onceCopyRow = options_.spill_batch_row_num;
-        } else {
-            onceCopyRow = rowCount;
-        }
-
-        protoRowBatch->set_rowcnt(onceCopyRow);
-        protoRowBatch->set_veccnt(proto_col_types_.size());
-        for (uint32_t i = 0; i < proto_col_types_.size(); ++i) {
-            spark::VecType *vt = protoRowBatch->add_vectypes();
-            InitVecType(vt, inputDataTypes_[i]);
-        }
-
-        int64_t offset = batchCount * options_.spill_batch_row_num;
-        std::vector<int32_t> offset_vec(onceCopyRow + 1, 0);
-        auto rowInfoPtr = partition_rows[partition_id].data() + offset;
-        for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
-            offset_vec[i + 1] = offset_vec[i] + rowInfo->length;
-        }
-        std::string rows;
-        rows.reserve(offset_vec[onceCopyRow]);
-        for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
-            rows.append(reinterpret_cast<const char*>(rowInfo->row), rowInfo->length);
-        }
-        protoRowBatch->set_rows(std::move(rows));
-        protoRowBatch->set_offsets(reinterpret_cast<char*>(offset_vec.data()), onceCopyRow * sizeof(int32_t));
-
-        auto byteSizeLong = protoRowBatch->ByteSizeLong();
-        if (byteSizeLong > UINT32_MAX) {
-            throw std::runtime_error("Unsafe static_cast long to uint_32t.");
-        }
-        uint32_t protoRowBatchSize = reversebytes_uint32t(static_cast<uint32_t>(byteSizeLong));
-        void *buffer = nullptr;
-        if (!bufferStream->NextNBytes(&buffer, sizeof(protoRowBatchSize))) {
-            throw std::runtime_error("Allocate Memory Failed: Flush Spilled Data, Next failed.");
-        }
-        // set serizalized bytes to stream
-        memcpy(buffer, &protoRowBatchSize, sizeof(protoRowBatchSize));
-        LogsDebug(" A Slice Of vecBatchProtoSize: %d ", reversebytes_uint32t(protoRowBatchSize));
-
-        protoRowBatch->SerializeToZeroCopyStream(bufferStream.get());
-        rowCount -= onceCopyRow;
-        batchCount++;
-        protoRowBatch->Clear();
-    }
-    partition_arena_[partition_id].Reset();
-
-    uint64_t partitionBatchSize = bufferStream->flush();
-    total_bytes_spilled_ += partitionBatchSize;
-    partition_serialization_size_[partition_id] = partitionBatchSize;
-    partition_rows[partition_id].clear();
-    LogsDebug(" partitionBatch write length: %lu", partitionBatchSize);
-    return 0;
-}
-
-int Splitter::WriteDataFileProto() {
-    LogsDebug(" spill DataFile: %s ", (options_.next_spilled_file_dir + ".data").c_str());
+int Splitter::WriteDataFileArrow() {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
-    WriterOptions options;
-    // tmp spilled file no need compression
-    options.setCompression(CompressionKind_NONE);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferStream = streamsFactory->createStream();
-    // 顺序写入每个partition的offset
+
+    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::COLUMNAR;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        CompressionKind_NONE,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    // 顺序写入每个partition（每批自带 [4B大端size][文件头][batch帧]，
+    // headerAlreadyWritten 参数不再控制文件头写出——serializer 内部每批都写文件头）
     for (auto pid = 0; pid < num_partitions_; ++pid) {
-        protoSpillPartition(pid, bufferStream);
+        auto written = ArrowWriteColumnarPartition(
+            pid, *arrowOut, header, partition_arrow_batch_,
+            /*headerAlreadyWritten=*/true);
+        total_bytes_spilled_ += written;
+        partition_serialization_size_[pid] = written;
+    }
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("WriteDataFileArrow Close failed: msg=%s", closeSt.ToString().c_str());
     }
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
-    outStream->close();
     return 0;
 }
 
-int Splitter::WriteDataFileProtoByRow() {
-    LogsDebug(" spill DataFile: %s ", (options_.next_spilled_file_dir + ".data").c_str());
+int Splitter::WriteDataFileArrowByRow() {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
-    WriterOptions options;
-    // tmp spilled file no need compression
-    options.setCompression(CompressionKind_NONE);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferStream = streamsFactory->createStream();
-    // 顺序写入每个partition的offset
-    for (auto pid = 0; pid < num_partitions_; ++pid) {
-        protoSpillPartitionByRow(pid, bufferStream);
+
+    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::ROW;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
     }
-    outStream->close();
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        CompressionKind_NONE,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    // 每批自带 [4B大端size][文件头][row batch帧]，
+    // serializer 内部每批都写文件头，无需单独写。
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        auto written = ArrowWriteRowPartition(
+            pid, *arrowOut, header, partition_rows,
+            options_.spill_batch_row_num, *arrow_pool_,
+            /*headerAlreadyWritten=*/true);
+        total_bytes_spilled_ += written;
+        partition_serialization_size_[pid] = written;
+        // 清理该分区的行数据和 arena
+        partition_arena_[pid].Reset();
+        partition_rows[pid].clear();
+    }
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("WriteDataFileArrowByRow Close failed: msg=%s", closeSt.ToString().c_str());
+    }
     return 0;
+}
+
+// Task 15: mmap 零拷贝透传临时文件段，消除 C8 "磁盘→临时内存"拷贝
+// spill 帧与最终写出帧同构，按 [offset, size) 字节段直接写入最终流，不解析帧内容
+void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
+                                       const std::string& tmpDataFilePath,
+                                       uint64_t partitionOffset,
+                                       uint64_t partitionSize) {
+    if (partitionSize == 0) {
+        return;
+    }
+    auto mmapResult = arrow::io::MemoryMappedFile::Open(tmpDataFilePath, arrow::io::FileMode::READ);
+    if (!mmapResult.ok()) {
+        LogsError("TransferSpilledSegments mmap failed: path=%s offset=%llu size=%llu msg=%s",
+                  tmpDataFilePath.c_str(),
+                  static_cast<unsigned long long>(partitionOffset),
+                  static_cast<unsigned long long>(partitionSize),
+                  mmapResult.status().ToString().c_str());
+        throw std::runtime_error("TransferSpilledSegments: Failed to mmap " +
+                                 tmpDataFilePath + ": " + mmapResult.status().ToString());
+    }
+    auto mmapFile = std::move(mmapResult).ValueOrDie();
+    // 用 ReadAt 读取 mmap 段（Arrow 11 兼容；Arrow 12+ 可改用 data() 直读零拷贝）
+    auto readResult = mmapFile->ReadAt(static_cast<int64_t>(partitionOffset),
+                                       static_cast<int64_t>(partitionSize));
+    if (!readResult.ok()) {
+        LogsError("TransferSpilledSegments ReadAt failed: path=%s offset=%llu size=%llu msg=%s",
+                  tmpDataFilePath.c_str(),
+                  static_cast<unsigned long long>(partitionOffset),
+                  static_cast<unsigned long long>(partitionSize),
+                  readResult.status().ToString().c_str());
+        throw std::runtime_error("TransferSpilledSegments: ReadAt failed: " +
+                                 readResult.status().ToString());
+    }
+    auto buffer = std::move(readResult).ValueOrDie();
+    auto st = out.Write(buffer->data(), static_cast<int64_t>(partitionSize));
+    if (!st.ok()) {
+        LogsError("TransferSpilledSegments Write failed: path=%s offset=%llu size=%llu msg=%s",
+                  tmpDataFilePath.c_str(),
+                  static_cast<unsigned long long>(partitionOffset),
+                  static_cast<unsigned long long>(partitionSize),
+                  st.ToString().c_str());
+        throw std::runtime_error("TransferSpilledSegments: Write failed: " + st.ToString());
+    }
+    auto closeSt = mmapFile->Close();
+    if (!closeSt.ok()) {
+        LogsError("TransferSpilledSegments Close mmap failed: path=%s offset=%llu size=%llu msg=%s",
+                  tmpDataFilePath.c_str(),
+                  static_cast<unsigned long long>(partitionOffset),
+                  static_cast<unsigned long long>(partitionSize),
+                  closeSt.ToString().c_str());
+        throw std::runtime_error("TransferSpilledSegments: Close mmap failed: " + closeSt.ToString());
+    }
 }
 
 void Splitter::MergeSpilled() {
@@ -2216,99 +2157,121 @@ void Splitter::MergeSpilled() {
     }
 
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
-    LogsDebug(" Merge Spilled Tmp File: %s ", options_.data_file.c_str());
-    WriterOptions options;
-    options.setCompression(options_.compression_type);
-    options.setCompressionBlockSize(options_.compress_block_size);
-    options.setCompressionStrategy(CompressionStrategy_COMPRESSION);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferOutPutStream = streamsFactory->createStream();
 
-    void* bufferOut = nullptr;
-    int sizeOut = 0;
+    // 构建 Arrow 文件头
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::COLUMNAR;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
     for (int pid = 0; pid < num_partitions_; pid++) {
-        ProtoWritePartition(pid, bufferOutPutStream, bufferOut, sizeOut);
-        LogsDebug(" MergeSpilled traversal partition( %d ) ", pid);
+        // 写出内存中该分区的 Arrow 缓存批
+        auto written = ArrowWriteColumnarPartition(
+            pid, *arrowOut, header, partition_arrow_batch_,
+            /*headerAlreadyWritten=*/(pid != 0));
+        total_bytes_written_ += written;
+        partition_lengths_[pid] += written;
+        LogsDebug(" MergeSpilled traversal partition( %d ) written: %d", pid, written);
+
+        // 追加该分区各溢写临时文件的对应段（mmap 零拷贝透传，消除 C8）
         for (auto &pair : spilled_tmp_files_info_) {
             auto tmpDataFilePath = pair.first + ".data";
             auto tmpPartitionOffset = reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
-            auto tmpPartitionSize = reinterpret_cast<uint64_t *>(pair.second->data_)[pid + 1] - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
-            LogsDebug(" get Partition Stream...tmpPartitionOffset %d tmpPartitionSize %d path %s",
-                      tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            std::unique_ptr<InputStream> inputStream = readLocalFile(tmpDataFilePath);
-            uint64_t targetLen = tmpPartitionSize;
-            uint64_t seekPosit = tmpPartitionOffset;
-            uint64_t onceReadLen = 0;
-            while ((targetLen > 0) && bufferOutPutStream->Next(&bufferOut, &sizeOut)) {
-                onceReadLen = targetLen > static_cast<uint64_t>(sizeOut) ? sizeOut : targetLen;
-                inputStream->read(bufferOut, onceReadLen, seekPosit);
-                targetLen -= onceReadLen;
-                seekPosit += onceReadLen;
-                if (onceReadLen < static_cast<uint64_t>(sizeOut)) {
-                    // Reached END.
-                    bufferOutPutStream->BackUp(sizeOut - onceReadLen);
-                    break;
-                }
-            }
-
-            uint64_t flushSize = bufferOutPutStream->flush();
-            total_bytes_written_ += flushSize;
-            LogsDebug(" Merge Flush Partition[%d] flushSize: %ld ", pid, flushSize);
-            partition_lengths_[pid] += flushSize;
+            auto tmpPartitionSize = reinterpret_cast<uint64_t *>(pair.second->data_)[pid + 1]
+                                    - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
+            LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
+                      pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
+            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
+            // flush 获取压缩后字节数
+            uint64_t flushedBytes = arrowOut->FlushAndCount();
+            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
+            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
         }
+    }
+
+    auto mergeCloseSt = arrowOut->Close();
+    if (!mergeCloseSt.ok()) {
+        LogsError("MergeSpilled Close failed: msg=%s", mergeCloseSt.ToString().c_str());
     }
 
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
     ReleaseVarcharVector();
     num_row_splited_ = 0;
     cached_vectorbatch_size_ = 0;
-    outStream->close();
 }
 
 void Splitter::MergeSpilledByRow() {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
-    LogsDebug(" Merge Spilled Tmp File: %s ", options_.data_file.c_str());
-    WriterOptions options;
-    options.setCompression(options_.compression_type);
-    options.setCompressionBlockSize(options_.compress_block_size);
-    options.setCompressionStrategy(CompressionStrategy_COMPRESSION);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferOutPutStream = streamsFactory->createStream();
 
-    void* bufferOut = nullptr;
-    int sizeOut = 0;
+    // 构建 Arrow 文件头
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::ROW;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
     for (int pid = 0; pid < num_partitions_; pid++) {
-        ProtoWritePartitionByRow(pid, bufferOutPutStream, bufferOut, sizeOut);
-        LogsDebug(" MergeSpilled traversal partition( %d ) ", pid);
+        // 写出内存中该分区的行式数据
+        auto written = ArrowWriteRowPartition(
+            pid, *arrowOut, header, partition_rows,
+            options_.spill_batch_row_num, *arrow_pool_,
+            /*headerAlreadyWritten=*/(pid != 0));
+        total_bytes_written_ += written;
+        partition_lengths_[pid] += written;
+        // 清理该分区的行数据和 arena
+        partition_arena_[pid].Reset();
+        partition_rows[pid].clear();
+        LogsDebug(" MergeSpilled traversal partition( %d ) written: %d", pid, written);
+
+        // 追加该分区各溢写临时文件的对应段（mmap 零拷贝透传，消除 C8）
         for (auto &pair : spilled_tmp_files_info_) {
             auto tmpDataFilePath = pair.first + ".data";
             auto tmpPartitionOffset = reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
-            auto tmpPartitionSize = reinterpret_cast<uint64_t *>(pair.second->data_)[pid + 1] - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
-            LogsDebug(" get Partition Stream...tmpPartitionOffset %d tmpPartitionSize %d path %s",
-                      tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            std::unique_ptr<InputStream> inputStream = readLocalFile(tmpDataFilePath);
-            uint64_t targetLen = tmpPartitionSize;
-            uint64_t seekPosit = tmpPartitionOffset;
-            uint64_t onceReadLen = 0;
-            while ((targetLen > 0) && bufferOutPutStream->Next(&bufferOut, &sizeOut)) {
-                onceReadLen = targetLen > static_cast<uint64_t>(sizeOut) ? sizeOut : targetLen;
-                inputStream->read(bufferOut, onceReadLen, seekPosit);
-                targetLen -= onceReadLen;
-                seekPosit += onceReadLen;
-                if (onceReadLen < static_cast<uint64_t>(sizeOut)) {
-                    // Reached END.
-                    bufferOutPutStream->BackUp(sizeOut - onceReadLen);
-                    break;
-                }
-            }
-
-            uint64_t flushSize = bufferOutPutStream->flush();
-            total_bytes_written_ += flushSize;
-            LogsDebug(" Merge Flush Partition[%d] flushSize: %ld ", pid, flushSize);
-            partition_lengths_[pid] += flushSize;
+            auto tmpPartitionSize = reinterpret_cast<uint64_t *>(pair.second->data_)[pid + 1]
+                                    - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
+            LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
+                      pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
+            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
+            // flush 获取压缩后字节数
+            uint64_t flushedBytes = arrowOut->FlushAndCount();
+            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
+            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
         }
     }
-    outStream->close();
+
+    auto mergeRowCloseSt = arrowOut->Close();
+    if (!mergeRowCloseSt.ok()) {
+        LogsError("MergeSpilledByRow Close failed: msg=%s", mergeRowCloseSt.ToString().c_str());
+    }
 }
 
 void Splitter::WriteSplit() {
@@ -2317,42 +2280,86 @@ void Splitter::WriteSplit() {
         partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
     }
 
-    std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
-    WriterOptions options;
-    options.setCompression(options_.compression_type);
-    options.setCompressionBlockSize(options_.compress_block_size);
-    options.setCompressionStrategy(CompressionStrategy_COMPRESSION);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferOutPutStream = streamsFactory->createStream();
-
-    void* bufferOut = nullptr;
-    int32_t sizeOut = 0;
-    for (auto pid = 0; pid < num_partitions_; ++pid) {
-        ProtoWritePartition(pid, bufferOutPutStream, bufferOut, sizeOut);
+    // 构建 Arrow 文件头：schema 由 inputDataTypes_（递归 DataType 树）通过 DataTypeToDescriptor 逐列构建
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::COLUMNAR;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
     }
 
+    std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        auto written = ArrowWriteColumnarPartition(
+            pid, *arrowOut, header, partition_arrow_batch_,
+            /*headerAlreadyWritten=*/(pid != 0));
+        total_bytes_written_ += written;
+        partition_lengths_[pid] += written;
+    }
+
+    auto writeSplitCloseSt = arrowOut->Close();
+    if (!writeSplitCloseSt.ok()) {
+        LogsError("WriteSplit Close failed: msg=%s", writeSplitCloseSt.ToString().c_str());
+    }
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
     ReleaseVarcharVector();
     num_row_splited_ = 0;
     cached_vectorbatch_size_ = 0;
-    outStream->close();
 }
 
 void Splitter::WriteSplitByRow() {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
-    WriterOptions options;
-    options.setCompression(options_.compression_type);
-    options.setCompressionBlockSize(options_.compress_block_size);
-    options.setCompressionStrategy(CompressionStrategy_COMPRESSION);
-    std::unique_ptr<StreamsFactory> streamsFactory = createStreamsFactory(options, outStream.get());
-    std::unique_ptr<BufferedOutputStream> bufferOutPutStream = streamsFactory->createStream();
 
-    void* bufferOut = nullptr;
-    int32_t sizeOut = 0;
-    for (auto pid = 0; pid < num_partitions_; ++pid) {
-        ProtoWritePartitionByRow(pid, bufferOutPutStream, bufferOut, sizeOut);
+    // 构建 Arrow 文件头：layout=ROW
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::ROW;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
     }
-    outStream->close();
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+
+    auto arrowOut = ArrowOutputStream::Make(
+        outStream.release(),
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        auto written = ArrowWriteRowPartition(
+            pid, *arrowOut, header, partition_rows,
+            options_.spill_batch_row_num, *arrow_pool_,
+            /*headerAlreadyWritten=*/(pid != 0));
+        total_bytes_written_ += written;
+        partition_lengths_[pid] += written;
+        // 清理该分区的行数据和 arena
+        partition_arena_[pid].Reset();
+        partition_rows[pid].clear();
+    }
+
+    auto writeRowCloseSt = arrowOut->Close();
+    if (!writeRowCloseSt.ok()) {
+        LogsError("WriteSplitByRow Close failed: msg=%s", writeRowCloseSt.ToString().c_str());
+    }
 }
 
 int Splitter::DeleteSpilledTmpFile() {
@@ -2377,18 +2384,27 @@ int Splitter::SpillToTmpFile() {
     }
 
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileProto();
+    WriteDataFileArrow();
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     ReleaseVarcharVector();
     num_row_splited_ = 0;
     cached_vectorbatch_size_ = 0;
-    return 0;
+    // 清除已溢写到临时文件的缓存批，防止 MergeSpilled 时重复写出
+    for (auto &batches : partition_arrow_batch_) {
+        batches.clear();
+    }
+    return 0;}
+
+// Testing helper: force spill + set isSpill so Stop() → MergeSpilled()
+void Splitter::TestForceSpill() {
+    SpillToTmpFile();
+    isSpill = true;
 }
 
 int Splitter::SpillToTmpFileByRow() {
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileProtoByRow();
+    WriteDataFileArrowByRow();
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     return 0;
@@ -2403,6 +2419,8 @@ Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_
 {
     LogsDebug("Input Schema colNum: %d", num_cols);
     ToSplitterTypeId(num_cols);
+    arrow_pool_ = std::make_shared<OmniMemoryPoolAdapter>(options_.allocator);
+    partition_arrow_batch_.resize(num_partitions_);
 }
 
 Splitter *Create(InputDataTypes inputDataTypes,
@@ -2449,9 +2467,6 @@ int Splitter::Stop() {
     } else {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplit());
     }
-    if (nullptr == vecBatchProto) {
-        throw std::runtime_error("delete nullptr error for free protobuf vecBatch memory");
-    }
     return 0;
 }
 
@@ -2463,94 +2478,5 @@ int Splitter::StopByRow() {
     } else {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplitByRow());
     }
-    if (nullptr == protoRowBatch) {
-        throw std::runtime_error("delete nullptr error for free protobuf rowBatch memory");
-    }
     return 0;
-}
-
-void Splitter::DeserializeProtoVecToOmniVector(const spark::Vec& protoVec, omniruntime::vec::BaseVector* omniVec)
-{
-    auto values = protoVec.values().data();
-    auto offsets = protoVec.offsets().data();
-    auto nulls = protoVec.nulls().data();
-    int rowCount = protoVec.size();
-
-    auto dataTypeId = omniVec->GetTypeId();
-
-    // set values and offsets
-    if (dataTypeId == OMNI_CHAR || dataTypeId == OMNI_VARCHAR || dataTypeId == OMNI_VARBINARY) {
-        auto charVec = reinterpret_cast<Vector<LargeStringContainer<std::string_view>> *>(omniVec);
-        charVec->Expand(rowCount);
-        char *valuesAddress =
-            omniruntime::vec::unsafe::UnsafeStringVector::ExpandStringBuffer(charVec, protoVec.values().size());
-        auto offsetsAddress = (uint8_t *)VectorHelper::UnsafeGetOffsetsAddr(omniVec);
-        memcpy(valuesAddress, values, protoVec.values().size());
-        memcpy(offsetsAddress, offsets, protoVec.offsets().size());
-    } else if (dataTypeId == OMNI_ARRAY) {
-        auto arrayVec =  reinterpret_cast<ArrayVector *>(omniVec);
-        // for vectors with nested complex types,
-        // when initializing, the inner vector does not have its size set, so expansion is required.
-        arrayVec->Expand(rowCount);
-        const int32_t* offsetsPtr = reinterpret_cast<const int32_t*>(protoVec.offsets().data());
-
-        // TODO: be more elegant
-        for (int j = 0; j <= rowCount; ++j) {
-            arrayVec->SetOffset(j, offsetsPtr[j]);
-        }
-
-        if (!protoVec.subvectors().empty()) {
-            omniruntime::vec::BaseVector* elementVec = arrayVec->GetElementVector().get();
-            if (elementVec) {
-                DeserializeProtoVecToOmniVector(protoVec.subvectors(0), elementVec);
-            }
-        }
-    } else if (dataTypeId == OMNI_MAP) {
-        auto mapVec = reinterpret_cast<MapVector *>(omniVec);
-        mapVec->Expand(rowCount);
-        const int32_t* offsetsPtr = reinterpret_cast<const int32_t*>(protoVec.offsets().data());
-
-        // TODO: be more elegant
-        for (int j = 0; j <= rowCount; ++j) {
-            mapVec->SetOffset(j, offsetsPtr[j]);
-        }
-
-        if (protoVec.subvectors_size() >= 2) {
-            omniruntime::vec::BaseVector* keyVec = mapVec->GetKeyVector().get();
-            omniruntime::vec::BaseVector* valueVec = mapVec->GetValueVector().get();
-            if (keyVec) {
-                DeserializeProtoVecToOmniVector(protoVec.subvectors(0), keyVec);
-            }
-            if (valueVec) {
-                DeserializeProtoVecToOmniVector(protoVec.subvectors(1), valueVec);
-            }
-        }
-    } else if (dataTypeId == OMNI_ROW) {
-        auto rowVec = reinterpret_cast<RowVector *>(omniVec);
-        rowVec->Expand(rowCount);
-        if (static_cast<int>(protoVec.subvectors_size()) != rowVec->ChildSize()) {
-            throw std::runtime_error("DeserializeProtoVecToOmniVector: size of subvectors in protoVec "
-                                     "is not equal to children size of RowVec");
-        }
-
-        int childCount = rowVec->ChildSize();
-
-        for (int i = 0; i < childCount; ++i) {
-            omniruntime::vec::BaseVector* fieldVec = rowVec->ChildAt(i).get();
-            if (fieldVec) {
-                DeserializeProtoVecToOmniVector(protoVec.subvectors(i), fieldVec);
-            }
-        }
-    } else {
-        omniVec->Expand(rowCount);
-        auto *valuesAddress = (uint8_t *)VectorHelper::UnsafeGetValues(omniVec);
-        memcpy(valuesAddress, values, protoVec.values().size());
-    }
-
-    // set nulls
-    for (auto j = 0; j < protoVec.nulls().size(); ++j) {
-        if (int(nulls[j])) {
-            omniVec->SetNull(j);
-        }
-    }
 }

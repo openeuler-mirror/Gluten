@@ -73,8 +73,6 @@ struct InputDataTypes {
     int32_t *inputVecTypeIds = nullptr;
     uint32_t *inputDataPrecisions = nullptr;
     uint32_t *inputDataScales = nullptr;
-
-    InputDataTypes *elementTypes = nullptr;
 };
 
 #endif //CPP_TYPE_H

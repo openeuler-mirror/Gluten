@@ -33,87 +33,96 @@
 #include "type.h"
 #include "../io/ColumnWriter.hh"
 #include "../common/common.h"
-#include "vec_data.pb.h"
-#include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "vector/omni_row.h"
+#include "shuffle/omni_arrow_memory_pool.h"
+#include <arrow/buffer.h>
+
+// Forward declaration for TransferSpilledSegments
+class ArrowOutputStream;
 
 using namespace std;
 using namespace spark;
-using namespace google::protobuf::io;
 using namespace omniruntime::vec;
 using namespace omniruntime::type;
 
-struct SplitRowInfo {
-    uint32_t copyedRow = 0;
-    uint32_t onceCopyRow = 0;
-    uint64_t remainCopyRow = 0;
-    vector<uint32_t> cacheBatchIndex; // 记录各定长列的溢写Batch下标
-    vector<uint32_t> cacheBatchCopyedLen; // 记录各定长列的溢写Batch内部偏移
+// Arrow 化后的列式缓存批：一个缓存批 = 一帧，持有各列 arrow::Buffer 列表
+// 定宽列 buffers 顺序 = [validity?][values]（validity 仅在该列含 null 时存在，全有效置 nullptr）
+struct ArrowColumnarCachedBatch {
+    int32_t rowCount = 0;
+    std::vector<std::shared_ptr<arrow::Buffer>> buffers;   // 按列 schema 顺序、复杂类型递归展开
+};
+
+// =====================================================================================
+// ComplexColumnAccumulator: 复杂类型列在一个分区中的 Arrow buffer 增量累积器（方案 C）
+// 递归持有 offsets / validity / child values 及写入游标，多批数据首尾接续追加，
+// 消除 MergeArrowBufferLists 合并步骤。
+// =====================================================================================
+struct ComplexColumnAccumulator {
+    enum class Kind { FIXED, VARLEN, LIST, MAP, STRUCT, ROOT };
+
+    // --- 物理缓冲（nullptr = 该层级无此 buffer）---
+    std::shared_ptr<arrow::ResizableBuffer> offsets;    // int32 offsets（LIST/MAP/变长 child 有；STRUCT/定宽 child 无）
+    std::shared_ptr<arrow::ResizableBuffer> validity;   // Arrow validity bitmap（bit=1=valid，全有效时 nullptr）
+    std::shared_ptr<arrow::ResizableBuffer> values;     // 定宽 child 值缓冲 或 变长 child 串体缓冲（叶子节点才有）
+
+    // --- 写入游标 ---
+    int64_t rowCursor = 0;          // 已写入行数
+    int64_t elemCursor = 0;         // 已写入子元素总数（LIST/MAP offsets 基址）
+    int64_t valueBytesCursor = 0;   // 变长 child 串体已写字节数
+
+    // --- 递归子节点 ---
+    std::vector<std::unique_ptr<ComplexColumnAccumulator>> children;
+
+    // --- 列元数据 ---
+    Kind kind = Kind::ROOT;
+    int32_t fixedElemSize = 0;      // kind==FIXED 时为元素字节数
+
+    // --- 内存池（所有节点共享 splitter 的 arrow_pool_）---
+    OmniMemoryPoolAdapter* pool = nullptr;
+
+    // --- 预分配行容量上限（通常 = options_.buffer_size）---
+    int32_t rowCapacity = 0;
+
+    // --- 方法 ---
+    void Init(const DataTypePtr& dataType, int32_t bufferSize, OmniMemoryPoolAdapter* arrowPool);
+    void EnsureOffsetsCapacity(int64_t needEntries);
+    void EnsureValidityCapacity(int64_t needBits);
+    void EnsureValuesCapacity(int64_t needBytes);
+    void AppendValidBit(bool isValid);
+    void CollectBuffers(std::vector<std::shared_ptr<arrow::Buffer>>& out);
+    void CollectEmptyBuffers(std::vector<std::shared_ptr<arrow::Buffer>>& out, int32_t numRows);
+    void Reset();
+    void Release();
 };
 
 class Splitter {
     virtual int DoSplit(VectorBatch& vb);
 
-    int WriteDataFileProto();
+    int WriteDataFileArrow();
 
-    int WriteDataFileProtoByRow();
+    int WriteDataFileArrowByRow();
 
     std::shared_ptr<Buffer> CaculateSpilledTmpFilePartitionOffsets();
 
-    spark::VecType::VecTypeId CastOmniTypeIdToProtoVecType(int32_t omniType);
-
-    void SerializingFixedColumns(int32_t partitionId,
-                                 spark::Vec& vec,
-                                 int fixColIndexTmp,
-                                 SplitRowInfo* splitRowInfoTmp);
-
-    void SerializingBinaryColumns(int32_t partitionId,
-                                  spark::Vec& vec,
-                                  int colIndex,
-                                  int curBatch);
-
-    void SerializeColumn(BaseVector *vector,
-                         std::vector<uint32_t> rows,
-                         spark::Vec &vec,
-                         DataTypePtr dataType = nullptr);
-
-    template<typename T>
-    void SerializeFlatVector(BaseVector *vector,
-                             std::vector<uint32_t> row_ids,
-                             spark::Vec &vec,
-                             DataTypePtr dataType = nullptr);
-
-    void SerializeStringVector(BaseVector *vector,
-                               std::vector<uint32_t> row_ids,
-                               spark::Vec &vec,
-                               DataTypeId typeId);
-
-    void SerializeArrayVector(BaseVector *vector,
-                              std::vector<uint32_t> row_ids,
-                              spark::Vec &vec,
-                              DataTypePtr dataType = nullptr);
-
-    void SerializeMapVector(BaseVector *vector,
-                            std::vector<uint32_t> row_ids,
-                            spark::Vec &vec,
-                            DataTypePtr dataType = nullptr);
-
-    void SerializeRowVector(BaseVector *vector,
-                            std::vector<uint32_t> row_ids,
-                            spark::Vec &vec,
-                            DataTypePtr dataType = nullptr);
-
     int SplitComplexColumns(VectorBatch& vb);
 
-    void MergeProtoVec(spark::Vec& dst, const spark::Vec& src);
+    // --- 方案 C: 复杂类型增量直接写入 accumulator (替代 Serialize*ToArrow + MergeArrowBufferLists) ---
+    void AppendColumnToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                             DataTypePtr dataType, ComplexColumnAccumulator& acc);
+    void AppendFlatToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                           ComplexColumnAccumulator& acc);
+    void AppendStringToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                             ComplexColumnAccumulator& acc);
+    void AppendArrayToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                            DataTypePtr dataType, ComplexColumnAccumulator& acc);
+    void AppendMapToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                          DataTypePtr dataType, ComplexColumnAccumulator& acc);
+    void AppendRowToArrow(BaseVector *vector, std::vector<uint32_t> row_ids,
+                          DataTypePtr dataType, ComplexColumnAccumulator& acc);
 
-    int protoSpillPartition(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream);
-
-    int protoSpillPartitionByRow(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream);
-
-    int32_t ProtoWritePartition(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream, void *bufferOut, int32_t &sizeOut);
-
-    int32_t ProtoWritePartitionByRow(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream, void *bufferOut, int32_t &sizeOut);
+    // 将 Omni null bytes (byte!=0=null) 转为 Arrow validity bitmap (bit=1=valid, 取反)
+    std::shared_ptr<arrow::Buffer> OmniNullsToArrowBitmap(
+        const uint8_t* nullBytes, int32_t numRows);
 
     int ComputeAndCountPartitionId(VectorBatch& vb);
 
@@ -138,11 +147,15 @@ class Splitter {
 
     void MergeSpilledByRow();
 
+    // Task 15: mmap 零拷贝透传临时文件段（行/列共用），消除 C8 拷贝
+    void TransferSpilledSegments(ArrowOutputStream& out,
+                                 const std::string& tmpDataFilePath,
+                                 uint64_t partitionOffset,
+                                 uint64_t partitionSize);
+
     void WriteSplit();
 
     void WriteSplitByRow();
-
-    void InitVecType(spark::VecType *vt, DataTypePtr dataType);
 
     // Common structures for row formats and col formats
     bool isSpill = false;
@@ -156,6 +169,9 @@ class Splitter {
     int32_t dir_selection_ = 0;
     std::vector<int32_t> sub_dir_selection_;
     std::vector<std::string> configured_dirs_;
+
+    // Task 15: 临时文件头部大小（用于修正 CaculateSpilledTmpFilePartitionOffsets 的起始偏移）
+    int64_t spill_file_header_size_ = 0;
 
     // Data structures required to handle col formats
     int64_t total_compute_pid_time_ = 0;
@@ -186,7 +202,6 @@ class Splitter {
     int32_t *partition_buffer_idx_base_; //当前已缓存的各partition行数据记录，用于定位缓冲buffer当前可用位置
     int32_t *partition_buffer_idx_offset_; //split定长列时用于统计offset的临时变量
     uint32_t *partition_serialization_size_; // 记录序列化后的各partition大小，用于stop返回partition偏移 in bytes
-    std::vector<std::vector<std::vector<std::vector<std::shared_ptr<Buffer>>>>> partition_cached_vectorbatch_;
     /*
      * varchar buffers:
      *  partition_array_buffers_[partition_id][col_id][varcharBatch_id]
@@ -194,13 +209,14 @@ class Splitter {
      */
     std::vector<std::vector<std::vector<VCBatchInfo>>> vc_partition_array_buffers_;
 
-    /*
-     * complex type protobuf vecs:
-     *  partition_complex_type_proto_vecs_[partition_id][col_id]
-     */
-    std::vector<std::vector<spark::Vec *>> partition_complex_type_proto_vecs_;
+    // --- Arrow 化新增成员 (Task 9: 定宽列散列改 Arrow ResizableBuffer) ---
+    std::shared_ptr<OmniMemoryPoolAdapter> arrow_pool_;                            // Arrow 内存统一记账适配器
+    std::vector<std::vector<std::shared_ptr<arrow::ResizableBuffer>>> partition_fixed_width_arrow_buffers_; // [col][pid] 定宽列 Arrow 值缓冲
+    std::vector<std::vector<ArrowColumnarCachedBatch>> partition_arrow_batch_;     // [pid][batchIdx] Arrow 化缓存批
 
-    spark::VecBatch *vecBatchProto = new VecBatch(); // protobuf 序列化对象结构
+    // --- 方案 C: 复杂类型列在每个分区的增量累积器 ---
+    // [partition_id][complex_col_idx] → unique_ptr<ComplexColumnAccumulator>
+    std::vector<std::vector<std::unique_ptr<ComplexColumnAccumulator>>> partition_complex_accumulators_;
 
     // Data structures required to handle row formats
     std::vector<std::vector<RowInfo *>> partition_rows; // pid : std::vector<row>
@@ -209,7 +225,6 @@ class Splitter {
     std::vector<uint32_t> partition_row_batch_count;
     uint64_t total_input_size = 0; // total row size in bytes
     uint32_t expansion = 2; // expansion coefficient
-    spark::ProtoRowBatch *protoRowBatch = new ProtoRowBatch();
 
     std::vector<DataTypePtr> inputDataTypes_;
 
@@ -255,7 +270,6 @@ public:
     // 分区数
     int32_t num_fields_;
     InputDataTypes input_col_types;
-    std::vector<spark::VecType::VecTypeId> proto_col_types_; // Avoid repeated type conversion during the split process.
     omniruntime::vec::VectorBatch *inputVecBatch = nullptr;
     std::map<std::string, std::shared_ptr<Buffer>> spilled_tmp_files_info_;
 
@@ -294,18 +308,30 @@ public:
 
     int64_t TotalBytesSpilled() const { return total_bytes_spilled_; }
 
+    // Testing helper: force spill and set isSpill flag so Stop() calls MergeSpilled()
+    void TestForceSpill();
+
     int64_t TotalWriteTime() const { return total_write_time_; }
 
     int64_t TotalSpillTime() const { return total_spill_time_; }
 
     int64_t TotalComputePidTime() const { return total_compute_pid_time_; }
 
+    // Arrow 化缓存批访问器 (Task 9)
+    int64_t TotalCachedArrowRows() const {
+        int64_t sum = 0;
+        for (const auto& batches : partition_arrow_batch_)
+            for (const auto& b : batches) sum += b.rowCount;
+        return sum;
+    }
+    const std::vector<std::vector<ArrowColumnarCachedBatch>>& ArrowCachedBatches() const {
+        return partition_arrow_batch_;
+    }
+
     const std::vector<int64_t>& PartitionLengths() const { return partition_lengths_; }
 
     virtual ~Splitter()
     {
-	delete vecBatchProto; //free protobuf vecBatch memory
-	delete protoRowBatch; //free protobuf rowBatch memory
 	delete[] partition_id_cnt_cur_;
 	delete[] partition_id_cnt_cache_;
 	delete[] partition_buffer_size_;
@@ -316,7 +342,6 @@ public:
 	delete[] fixed_nullBuffer_size_;
 	partition_fixed_width_buffers_.clear();
 	partition_binary_builders_.clear();
-	partition_cached_vectorbatch_.clear();
 	spilled_tmp_files_info_.clear();
     }
 
@@ -340,11 +365,6 @@ public:
     {
         inputVecBatch = nullptr;
     }
-
-    static void DeserializeProtoVecToOmniVector(const spark::Vec& protoVec,
-        omniruntime::vec::BaseVector* omniVec);
-
-    static std::shared_ptr<omniruntime::type::DataType> ProtoTypeToOmniType(const spark::VecType& protoType);
 };
 
 

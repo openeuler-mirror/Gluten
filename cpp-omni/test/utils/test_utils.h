@@ -85,6 +85,10 @@ VectorBatch* CreateVectorBatch_1row_varchar_withPid(int pid, std::string inputCh
 
 VectorBatch* CreateVectorBatch_1row_array_int_withPid(int pid, int* elements, int element_count);
 
+VectorBatch* CreateVectorBatch_1row_map_int_int_withPid(int pid);
+
+VectorBatch* CreateVectorBatch_1row_row_int_varchar_withPid(int pid);
+
 VectorBatch* CreateVectorBatch_4col_withPid(int parNum, int rowNum);
 
 VectorBatch* CreateVectorBatch_1FixCol_withPid(int parNum, int rowNum, DataTypePtr fixColType);
@@ -110,6 +114,10 @@ VectorBatch* CreateVectorBatch_someNullCol_vectorBatch();
 
 void Test_Shuffle_Compression(std::string compStr, int32_t numPartition, int32_t numVb, int32_t numRow);
 
+// 从扁平 InputDataTypes（typeId + precision/scale）重建 DataType 向量，供 Test_splitter_nativeMake
+// 模拟生产路径的 SetInputDataTypes。含复杂类型（ARRAY/MAP/ROW）时返回空 vector（调用方自行设置）。
+std::vector<DataTypePtr> BuildDataTypesFromInput(const InputDataTypes& types, int32_t numCols);
+
 long Test_splitter_nativeMake(std::string partitioning_name,
                               int num_partitions,
                               InputDataTypes inputDataTypes,
@@ -124,7 +132,11 @@ long Test_splitter_nativeMake(std::string partitioning_name,
 
 void Test_splitter_split(long splitter_id, VectorBatch* vb);
 
+void Test_splitter_splitbyrow(long splitter_id, VectorBatch* vb);
+
 void Test_splitter_stop(long splitter_id);
+
+void Test_splitter_stopbyrow(long splitter_id);
 
 void Test_splitter_close(long splitter_id);
 
