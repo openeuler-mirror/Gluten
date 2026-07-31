@@ -38,6 +38,7 @@ class OmniHiveTableScanMetricsUpdater(@transient val metrics: Map[String, SQLMet
       val m = opMetrics.asInstanceOf[OperatorMetrics]
       outputRows += m.getNumOutputRows
       outputVectors += m.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(metrics, m.getNumOutputRows, m.getNumOutputVecBatches)
       outputBytes += m.getNumOutputBytes
       numInputBytes += m.getNumInputBytes
       totalScanTime += m.getScanTime

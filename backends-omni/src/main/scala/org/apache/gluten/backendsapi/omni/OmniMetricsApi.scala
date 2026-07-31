@@ -60,6 +60,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       sparkContext: SparkContext): Map[String, SQLMetric] =
     Map(
       "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vectors"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "scanTime" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of scan"),
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
@@ -77,6 +79,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "rawInputRows" -> SQLMetrics.createMetric(sparkContext, "number of raw input rows"),
       "rawInputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of raw input bytes"),
       "outputVectors" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "outputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "scanTime" -> SQLMetrics.createTimingMetric(sparkContext, "time of scan"),
       "wallNanos" -> SQLMetrics.createNanoTimingMetric(sparkContext, "time of scan and filter"),
@@ -120,6 +124,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
       "numInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of input vecBatches"),
@@ -139,6 +145,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
       "numInputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of input vecBatches"),
@@ -160,6 +168,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     "numInputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of input bytes"),
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "numOutputVecBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+    "avgOutputRowsPerVecBatch" ->
+      SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
     "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
     "addInputCount" -> SQLMetrics.createMetric(sparkContext, "input calls count"),
     "addInputTime" -> SQLMetrics.createTimingMetric(sparkContext, "input time of aggregation"),
@@ -176,6 +186,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "numInputRows" -> SQLMetrics.createMetric(sparkContext, "number of input rows"),
       "numInputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of input vecBatches"),
@@ -219,6 +231,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "numInputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of input bytes"),
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
 
       "addInputTime" -> SQLMetrics.createTimingMetric(sparkContext, "input time of window"),
@@ -253,6 +267,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "output time of limit"),
       "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
@@ -280,6 +296,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
       "numSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of spilled bytes"),
       "numSpilledRows" -> SQLMetrics.createMetric(sparkContext, "number of spilled rows"),
@@ -293,6 +311,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       sparkContext: SparkContext): Map[String, SQLMetric] = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+    "avgOutputRowsPerVecBatch" ->
+      SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
     "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
     "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
     "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "output time of sortMergeJoin"),
@@ -340,6 +360,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
 
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes")
     )
 
@@ -351,6 +373,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     Map(
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+      "avgOutputRowsPerVecBatch" ->
+        SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
       "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
       "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
       "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "output time of NestedLoopJoin"),
@@ -397,6 +421,8 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
         "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
         "numOutputBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of output bytes"),
         "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
+        "avgOutputRowsPerVecBatch" ->
+          SQLMetrics.createAverageMetric(sparkContext, "avg output rows per vecBatch"),
         "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "output time of input iterator"),
         "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count")
       )

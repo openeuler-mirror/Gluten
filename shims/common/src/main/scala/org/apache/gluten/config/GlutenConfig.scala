@@ -533,6 +533,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarMaxRowCount: Int = conf.getConf(COLUMNAR_OMNI_MAX_ROW_COUNT)
 
+  def omniColumnarMaxBatchRowCount: Int = conf.getConf(COLUMNAR_MAX_BATCH_ROW_COUNT)
+
   def omniColumnarMergedBatchThreshold: Int = conf.getConf(COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD)
 
   def enableColumnarAQEShuffle: Boolean = conf.getConf(COLUMNAR_OMNI_AQE_SHUFFLE_MERGE)
@@ -580,6 +582,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarCatalogCacheExpireTime: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_EXPIRE_TIME)
 
   def enableRollupOptimization: Boolean = conf.getConf(ENABLE_ROLLUP_OPTIMIZATION)
+
+  def omniAggregateRepeatedExpressionReuseThreshold: Int =
+    conf.getConf(OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD)
 
   def enableAutoAdjustStageResourceProfile: Boolean =
     conf.getConf(AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED)
@@ -821,6 +826,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD.key,
       COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES.key,
       COLUMNAR_OMNI_MAX_ROW_COUNT.key,
+      COLUMNAR_MAX_BATCH_ROW_COUNT.key,
       COLUMNAR_MAX_BATCH_SIZE.key,
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
@@ -2572,7 +2578,12 @@ object GlutenConfig {
     .internal()
     .intConf
     .createWithDefault(2097152)
-  
+
+  val COLUMNAR_MAX_BATCH_ROW_COUNT = buildConf("spark.gluten.sql.columnar.maxBatchRowCount")
+    .internal()
+    .intConf
+    .createWithDefault(4096)
+
   val COLUMNAR_OMNI_MAX_ROW_COUNT = buildConf("spark.gluten.sql.columnar.backend.omni.maxRowCount")
     .internal()
     .intConf
@@ -2663,6 +2674,16 @@ object GlutenConfig {
     .doc("enable or disable columnar rollupOptimization")
     .booleanConf
     .createWithDefault(true)
+
+  val OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.aggregateRepeatedExpressionReuseThreshold")
+      .internal()
+      .doc(
+        "Minimum reuse count required before Omni pulls repeated aggregate " +
+          "sub-expressions into a pre-project for reuse.")
+      .intConf
+      .checkValue(_ > 1, "The reuse threshold must be greater than 1.")
+      .createWithDefault(3)
 
   val AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED =
     buildStaticConf("spark.gluten.auto.adjustStageResource.enabled")
