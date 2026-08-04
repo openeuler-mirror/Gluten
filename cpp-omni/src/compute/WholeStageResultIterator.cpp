@@ -205,6 +205,14 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<bool>(KColumnarSpillEnableCompress, false));
         configs[config::QueryConfig::KEnableAdaptivePartialAggregation] = omniCfg_->Get<std::string>(
             KEnableAdaptivePartialAggregation, "true");
+        configs[config::QueryConfig::KBuildHashTableOncePerExecutor] = omniCfg_->Get<std::string>(
+            kBuildHashTableOncePerExecutor, "false");
+        configs[config::QueryConfig::KBroadcastParallelBuildEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kBroadcastParallelBuildEnabled, false));
+        configs[config::QueryConfig::KMinTableRowsForParallelJoinBuild] = std::to_string(
+            omniCfg_->Get<int32_t>(kMinTableRowsForParallelJoinBuild, 1000));
+        configs[config::QueryConfig::KBroadcastParallelBuildTargetBytesPerThread] = std::to_string(
+            omniCfg_->Get<uint64_t>(kBroadcastParallelBuildTargetBytesPerThread, 16UL << 20));
         configs[config::QueryConfig::KAdaptivePartialAggregationMinRows] = std::to_string(
             omniCfg_->Get<int32_t>(KAdaptivePartialAggregationMinRows, 500000));
         configs[config::QueryConfig::KAdaptivePartialAggregationRatio] = std::to_string(

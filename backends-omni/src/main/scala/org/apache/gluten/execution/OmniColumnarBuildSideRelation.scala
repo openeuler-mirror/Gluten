@@ -29,10 +29,18 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import scala.collection.JavaConverters.asScalaIteratorConverter
 import scala.collection.mutable.ArrayBuffer
 
+/**
+ * @param mode         the Spark broadcast mode
+ * @param output       output attributes of the build side
+ * @param batches      serialized columnar batches (driver-side broadcast payload)
+ * @param buildHashTableId unique id for the executor-level BHJ hash table cache;
+ *                     empty string means caching is disabled for this relation
+ */
 case class OmniColumnarBuildSideRelation(
     mode: BroadcastMode,
     output: Seq[Attribute],
-    batches: Array[Array[Byte]])
+    batches: Array[Array[Byte]],
+    buildHashTableId: String = "")
   extends BuildSideRelation {
 
   private def transformProjection: UnsafeProjection = {
@@ -66,6 +74,14 @@ case class OmniColumnarBuildSideRelation(
   }
 
   override def asReadOnlyCopy(): OmniColumnarBuildSideRelation = this
+
+  /**
+   * Called by Spark when the broadcast variable is unpersisted.
+   * Notify the native executor-level cache to free the hash table memory.
+   */
+  override def reset(): Unit = {
+    OmniBroadcastBuildSideCache.invalidate(buildHashTableId)
+  }
 
   /**
    * Transform columnar broadcast value to Array[InternalRow] by key and distinct. NOTE: This method

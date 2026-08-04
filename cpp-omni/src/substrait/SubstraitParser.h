@@ -111,6 +111,14 @@ public:
     static bool ConfigExistInOptimization(
         const ::substrait::extensions::AdvancedExtension &, const std::string &config);
 
+    /// @brief Extract a string value for a key from AdvancedExtension optimization.
+    /// The format in the optimization string is "key=value\n".
+    /// @param extension Substrait advanced extension.
+    /// @param key the key prefix to look for (e.g. "buildHashTableId=").
+    /// @return The value string, or empty string if not found.
+    static std::string GetStringFromOptimization(
+        const ::substrait::extensions::AdvancedExtension &extension, const std::string &key);
+
     /// Extract input types from Substrait function signature.
     static std::vector<type::DataTypePtr> SigToTypes(const std::string &functionSig);
 

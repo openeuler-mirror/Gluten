@@ -168,6 +168,27 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
     }
   }
 
+  /**
+   * Release native resources associated with this broadcast exchange when the query cleans up.
+   * This notifies backend implementations (e.g., OmniOperator BHJ hash table cache) to free
+   * executor-level cached hash tables.
+   */
+  override def cleanupResources(): Unit = {
+    if (relationFuture.isDone) {
+      try {
+        val broadcastVal = relationFuture.get()
+        broadcastVal.value match {
+          case relation: org.apache.spark.sql.execution.joins.BuildSideRelation =>
+            relation.reset()
+          case _ =>
+        }
+      } catch {
+        case _: Exception => // best-effort; ignore errors during cleanup
+      }
+    }
+    super.cleanupResources()
+  }
+
   override protected def withNewChildInternal(newChild: SparkPlan): ColumnarBroadcastExchangeExec =
     copy(child = newChild)
 
