@@ -44,6 +44,9 @@ echo_build_properties() {
       echo velox_revision=$(git -C $BACKEND_HOME rev-parse HEAD)
       echo velox_revision_time=$(git -C $BACKEND_HOME show -s --format=%ci HEAD)
   fi
+  if [ "$BACKEND_TYPE" = "omni" ]; then
+      cat "$BACKEND_HOME/lib/omni-build-info.properties"
+  fi
   if [ "$BACKEND_TYPE" = "ch"  ]; then
       echo ch_org=$(cat $GLUTEN_ROOT/cpp-ch/clickhouse.version | grep -oP '(?<=^CH_ORG=).*')
       echo ch_branch=$(cat $GLUTEN_ROOT/cpp-ch/clickhouse.version | grep -oP '(?<=^CH_BRANCH=).*')

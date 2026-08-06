@@ -173,7 +173,7 @@
       <id>backends-omni</id>
       <properties>
         <backend.type>omni</backend.type>
-        <backend.home>${project.basedir}/../cpp-omni/Omni</backend.home>
+        <backend.home>${env.OMNI_HOME}</backend.home>
       </properties>
     </profile>
     <profile>

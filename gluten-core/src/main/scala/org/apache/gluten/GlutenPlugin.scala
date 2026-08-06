@@ -64,12 +64,15 @@ private[gluten] class GlutenDriverPlugin extends DriverPlugin with Logging {
       SoftAffinityListener.register(sc)
     }
 
-    postBuildInfoEvent(sc)
+    val components = Component.sorted()
+    val componentBuildInfos = components.map(_.buildInfo())
+    postBuildInfoEvent(sc, componentBuildInfos)
+    setBuildInfoConfigs(conf, componentBuildInfos)
 
     setPredefinedConfigs(conf)
 
     // Initialize Backend.
-    Component.sorted().foreach(_.onDriverStart(sc, pluginContext))
+    components.foreach(_.onDriverStart(sc, pluginContext))
 
     Collections.emptyMap()
   }
@@ -88,17 +91,17 @@ private[gluten] class GlutenDriverPlugin extends DriverPlugin with Logging {
     Component.sorted().reverse.foreach(_.onDriverShutdown())
   }
 
-  private def postBuildInfoEvent(sc: SparkContext): Unit = {
+  private def postBuildInfoEvent(
+      sc: SparkContext,
+      componentBuildInfos: Seq[Component.BuildInfo]): Unit = {
     // export gluten version to property to spark
     System.setProperty("gluten.version", VERSION)
 
     val glutenBuildInfo = new mutable.LinkedHashMap[String, String]()
 
-    val components = Component.sorted()
-    glutenBuildInfo.put("Components", components.map(_.buildInfo().name).mkString(", "))
-    components.foreach {
-      comp =>
-        val buildInfo = comp.buildInfo()
+    glutenBuildInfo.put("Components", componentBuildInfos.map(_.name).mkString(", "))
+    componentBuildInfos.foreach {
+      buildInfo =>
         glutenBuildInfo.put(s"Component ${buildInfo.name} Branch", buildInfo.branch)
         glutenBuildInfo.put(s"Component ${buildInfo.name} Revision", buildInfo.revision)
         glutenBuildInfo.put(s"Component ${buildInfo.name} Revision Time", buildInfo.revisionTime)
@@ -126,6 +129,23 @@ private[gluten] class GlutenDriverPlugin extends DriverPlugin with Logging {
     logInfo(loggingInfo)
     val event = GlutenBuildInfoEvent(glutenBuildInfo.toMap)
     GlutenEventUtils.post(sc, event)
+  }
+
+  private def setBuildInfoConfigs(
+      conf: SparkConf,
+      componentBuildInfos: Seq[Component.BuildInfo]): Unit = {
+    conf.set("spark.gluten.branch", BRANCH)
+    conf.set("spark.gluten.revision", REVISION)
+    conf.set("spark.gluten.revisionTime", REVISION_TIME)
+    conf.set("spark.gluten.buildTime", BUILD_DATE)
+
+    componentBuildInfos.foreach {
+      buildInfo =>
+        val prefix = s"spark.gluten.${buildInfo.name}"
+        conf.set(s"$prefix.branch", buildInfo.branch)
+        conf.set(s"$prefix.revision", buildInfo.revision)
+        conf.set(s"$prefix.revisionTime", buildInfo.revisionTime)
+    }
   }
 
   private def setPredefinedConfigs(conf: SparkConf): Unit = {
