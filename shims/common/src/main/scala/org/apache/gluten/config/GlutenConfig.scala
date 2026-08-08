@@ -20,6 +20,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 import org.apache.spark.sql.internal.SQLConf
 import com.google.common.collect.ImmutableList
+import org.apache.gluten.config.GlutenConfig.{COLUMNAR_ADAPTIVE_JOIN_ENABLED, COLUMNAR_ADAPTIVE_JOIN_PREFER_SORT_MERGE_JOIN, COLUMNAR_ADAPTIVE_JOIN_SHUFFLE_HASH_JOIN_FACTOR}
 import org.apache.hadoop.security.UserGroupInformation
 
 import java.util
@@ -81,6 +82,14 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def forceShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_FORCE_SHUFFLED_HASH_JOIN_ENABLED)
 
   def enableColumnarSortMergeJoin: Boolean = conf.getConf(COLUMNAR_SORTMERGEJOIN_ENABLED)
+
+  def adaptiveJoinEnabled: Boolean = conf.getConf(COLUMNAR_ADAPTIVE_JOIN_ENABLED)
+
+  def adaptiveJoinPreferSortMergeJoin: Boolean =
+    conf.getConf(COLUMNAR_ADAPTIVE_JOIN_PREFER_SORT_MERGE_JOIN)
+
+  def adaptiveJoinShuffleHashJoinFactor: Int =
+    conf.getConf(COLUMNAR_ADAPTIVE_JOIN_SHUFFLE_HASH_JOIN_FACTOR)
 
   def enableColumnarUnion: Boolean = conf.getConf(COLUMNAR_UNION_ENABLED)
 
@@ -574,6 +583,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarEnableDelayCartesianProduct: Boolean = conf.getConf(COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT)
 
   def columnarPreferShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_OMNI_PREFER_SHUFFLED_HASH_JOIN)
+
+  def shuffleHashJoinThreshold: Long = conf.getConf(COLUMNAR_SHUFFLE_HASH_JOIN_THRESHOLD)
 
   def omniColumnarCatalogCacheSize: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_SIZE)
 
@@ -1177,6 +1188,38 @@ object GlutenConfig {
       .doc("Enable or disable columnar union.")
       .booleanConf
       .createWithDefault(true)
+
+  val COLUMNAR_ADAPTIVE_JOIN_ENABLED =
+    buildConf("spark.gluten.sql.columnar.adaptiveJoin.enabled")
+      .doc("Enable CBO-based adaptive join strategy selection similar to Spark. " +
+        "When enabled, Gluten will choose SMJ or SHJ based on CBO statistics, " +
+        "using similar logic to Spark's getShuffleHashJoinBuildSide.")
+      .booleanConf
+      .createWithDefault(false)
+
+  val COLUMNAR_ADAPTIVE_JOIN_PREFER_SORT_MERGE_JOIN =
+    buildConf("spark.gluten.sql.columnar.adaptiveJoin.preferSortMergeJoin")
+      .doc("Similar to spark.sql.join.preferSortMergeJoin. When false and adaptiveJoin.enabled " +
+        "is true, Gluten will consider using ShuffledHashJoin when one side is small enough. " +
+        "When true, prefer SortMergeJoin unless there is a SHUFFLE_HASH hint.")
+      .booleanConf
+      .createWithDefault(false)
+
+  val COLUMNAR_ADAPTIVE_JOIN_SHUFFLE_HASH_JOIN_FACTOR =
+    buildConf("spark.gluten.sql.columnar.adaptiveJoin.shuffleHashJoinFactor")
+      .doc("Similar to spark.sql.shuffleHashJoinFactor. The build side size multiplied by " +
+        "this factor must be smaller than the other side to use ShuffledHashJoin. " +
+        "Default 3, meaning build side should be at least 3x smaller.")
+      .intConf
+      .createWithDefault(3)
+
+  val COLUMNAR_SHUFFLE_HASH_JOIN_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.shuffleHashJoinThreshold")
+      .doc("The maximum partition size threshold (in bytes) for using ShuffledHashJoin in AQE. " +
+        "If the max partition size is less than this threshold, AQE may convert SortMergeJoin to ShuffledHashJoin. " +
+        "Default value is 1073741824 bytes (1GB).")
+      .longConf
+      .createWithDefault(1024L * 1024L * 1024L)
 
   val NATIVE_UNION_ENABLED =
     buildConf("spark.gluten.sql.native.union")
