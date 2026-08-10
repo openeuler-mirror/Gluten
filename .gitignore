@@ -71,7 +71,7 @@ ep/_ep/
 *.kdev4
 *.swp
 scalastyle-output.xml
-
+.superpowers/
 # Generated C++ benchmark data
 backends-velox/generated-native-benchmark/
 backends-velox/spark-warehouse/

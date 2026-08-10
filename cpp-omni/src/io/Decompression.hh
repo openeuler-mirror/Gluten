@@ -29,8 +29,6 @@
 #include "zstd.h"
 #include "wrap/snappy_wrapper.h"
 
-#include "vec_data.pb.h"
-
 #include <cstddef>
 
 namespace spark {
@@ -46,7 +44,7 @@ public:
     int64_t shuffleCompressBlockSize;
     jobject dIn;
     jobject result;
-    /** One VecBatch/ProtoRowBatch payload after readSize + decompress. */
+    /** One shuffle batch payload after readSize + decompress. */
     std::vector<char> uncompress;
     char* output = nullptr;
 
@@ -60,9 +58,9 @@ public:
 
     virtual std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) = 0;
 
-    int32_t columnarShuffleParseBatch(JNIEnv *env, spark::VecBatch* vecBatch);
-
-    int32_t rowShuffleParseBatch(JNIEnv *env, spark::ProtoRowBatch* protoRowBatch);
+    // Arrow-aware parse methods for columnar and row shuffle deserialization
+    int32_t columnarShuffleParseArrowBatch(JNIEnv *env, const char* data, int32_t dataSize);
+    int32_t rowShuffleParseArrowBatch(JNIEnv *env, const char* data, int32_t dataSize);
 
     int32_t createResult(JNIEnv *env, int rowCount, int vecCount, jint* typeIdArrayElements, jint* precisionArrayElements,
         jint* scaleArrayElements, jlong* vecNativeIdArrayElements);

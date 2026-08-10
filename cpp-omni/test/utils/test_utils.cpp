@@ -105,6 +105,81 @@ VectorBatch* CreateVectorBatch_1row_array_int_withPid(int pid, int* elements, in
 }
 
 /**
+ * Create a VectorBatch with 1 row of MAP<INT,INT> + partition id col.
+ * The map has 2 entries: {pid=>pid*10, pid+1=>(pid+1)*10}
+ */
+VectorBatch* CreateVectorBatch_1row_map_int_int_withPid(int pid) {
+    using namespace omniruntime::type;
+    using namespace omniruntime::vec;
+    
+    auto keyType = IntType();
+    auto valueType = IntType();
+    auto mapColType = std::make_shared<MapType>(keyType, valueType);
+    
+    const int32_t numRows = 1;
+    auto *vecBatch = new VectorBatch(numRows);
+    
+    // pid column
+    auto* col1 = new int32_t[numRows];
+    col1[0] = pid;
+    vecBatch->Append(CreateVector(numRows, col1));
+    
+    // MAP<INT,INT> column: 2 key-value pairs
+    int32_t numEntries = 2;
+    auto keyVector = std::make_shared<Vector<int32_t>>(numEntries);
+    auto valueVector = std::make_shared<Vector<int32_t>>(numEntries);
+    keyVector->SetValue(0, pid);
+    keyVector->SetValue(1, pid + 1);
+    valueVector->SetValue(0, pid * 10);
+    valueVector->SetValue(1, (pid + 1) * 10);
+    
+    auto mapVec = new MapVector(numRows, keyVector, valueVector);
+    mapVec->SetOffset(0, 0);
+    mapVec->SetOffset(1, numEntries);
+    vecBatch->Append(mapVec);
+    
+    return vecBatch;
+}
+
+/**
+ * Create a VectorBatch with 1 row of ROW<INT,VARCHAR> + partition id col.
+ * The struct has 2 fields: int_value=pid*100, str_value="row_"+pid
+ */
+VectorBatch* CreateVectorBatch_1row_row_int_varchar_withPid(int pid) {
+    using namespace omniruntime::type;
+    using namespace omniruntime::vec;
+    
+    std::vector<std::shared_ptr<DataType>> fieldTypes;
+    fieldTypes.push_back(IntType());
+    fieldTypes.push_back(VarcharType());
+    auto rowColType = std::make_shared<RowType>(fieldTypes);
+    
+    const int32_t numRows = 1;
+    auto *vecBatch = new VectorBatch(numRows);
+    
+    // pid column
+    auto* col1 = new int32_t[numRows];
+    col1[0] = pid;
+    vecBatch->Append(CreateVector(numRows, col1));
+    
+    // ROW<INT,VARCHAR> column
+    auto intField = std::make_shared<Vector<int32_t>>(numRows);
+    intField->SetValue(0, pid * 100);
+    
+    auto strField = std::make_shared<Vector<LargeStringContainer<std::string_view>>>(numRows);
+    std::string strVal = "row_" + std::to_string(pid);
+    strField->SetValue(0, std::string_view(strVal));
+    
+    std::vector<std::shared_ptr<BaseVector>> children;
+    children.push_back(intField);
+    children.push_back(strField);
+    auto rowVec = new RowVector(numRows, children);
+    vecBatch->Append(rowVec);
+    
+    return vecBatch;
+}
+
+/**
  * create a VectorBatch with 4col OMNI_INT OMNI_LONG OMNI_DOUBLE OMNI_VARCHAR and it's partition id
  * 
  * @param {int} parNum partition number
@@ -433,6 +508,38 @@ void Test_Shuffle_Compression(std::string compStr, int32_t numPartition, int32_t
     }
 }
 
+std::vector<DataTypePtr> BuildDataTypesFromInput(const InputDataTypes& types, int32_t numCols)
+{
+    std::vector<DataTypePtr> out;
+    out.reserve(numCols);
+    for (int32_t i = 0; i < numCols; ++i) {
+        auto id = static_cast<omniruntime::type::DataTypeId>(types.inputVecTypeIds[i]);
+        switch (id) {
+            case OMNI_BYTE:       out.push_back(ByteDataType::Instance()); break;
+            case OMNI_BOOLEAN:    out.push_back(BooleanDataType::Instance()); break;
+            case OMNI_SHORT:      out.push_back(ShortDataType::Instance()); break;
+            case OMNI_INT:        out.push_back(IntDataType::Instance()); break;
+            case OMNI_LONG:       out.push_back(LongDataType::Instance()); break;
+            case OMNI_FLOAT:      out.push_back(FloatDataType::Instance()); break;
+            case OMNI_DOUBLE:     out.push_back(DoubleDataType::Instance()); break;
+            case OMNI_DATE32:     out.push_back(Date32DataType::Instance()); break;
+            case OMNI_DATE64:     out.push_back(Date64DataType::Instance()); break;
+            case OMNI_TIMESTAMP:  out.push_back(TimestampDataType::Instance()); break;
+            case OMNI_VARCHAR:    out.push_back(VarcharDataType::Instance()); break;
+            case OMNI_CHAR:       out.push_back(CharDataType::Instance()); break;
+            case OMNI_VARBINARY:  out.push_back(VarBinaryDataType::Instance()); break;
+            case OMNI_DECIMAL64:  out.push_back(std::make_shared<Decimal64DataType>(
+                                     types.inputDataPrecisions[i], types.inputDataScales[i])); break;
+            case OMNI_DECIMAL128: out.push_back(std::make_shared<Decimal128DataType>(
+                                     types.inputDataPrecisions[i], types.inputDataScales[i])); break;
+            default:
+                // ARRAY/MAP/ROW 或未知：无法从扁平结构重建递归类型，返回空 → 调用方自行 SetInputDataTypes
+                return {};
+        }
+    }
+    return out;
+}
+
 long Test_splitter_nativeMake(std::string partitioning_name,
                               int num_partitions,
                               InputDataTypes inputDataTypes,
@@ -458,6 +565,12 @@ long Test_splitter_nativeMake(std::string partitioning_name,
     splitOptions.task_spill_mem_threshold = task_spill_mem_threshold;
     splitOptions.executor_spill_mem_threshold = executor_spill_mem_threshold;
     auto splitter = Splitter::Make(partitioning_name, inputDataTypes, numCols, num_partitions, std::move(splitOptions));
+    // 模拟生产路径：nativeMake 通过 SetInputDataTypes 传入完整递归 DataType（写 Arrow 文件头 schema 用）。
+    // 标量类型由扁平 InputDataTypes 重建；复杂类型返回空时由测试自行 SetInputDataTypes（现有复杂测试已如此）。
+    auto dataTypes = BuildDataTypesFromInput(inputDataTypes, numCols);
+    if (!dataTypes.empty()) {
+        splitter->SetInputDataTypes(dataTypes);
+    }
     return reinterpret_cast<intptr_t>(static_cast<void *>(splitter));
 }
 
@@ -474,6 +587,20 @@ void Test_splitter_stop(long splitter_addr) {
         throw std::runtime_error("Test no splitter.");
     }
     splitter->Stop();
+}
+
+void Test_splitter_splitbyrow(long splitter_addr, VectorBatch* vb) {
+    auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+    splitter->SplitByRow(vb);
+}
+
+void Test_splitter_stopbyrow(long splitter_addr) {
+    auto splitter = reinterpret_cast<Splitter *>(splitter_addr);
+    if (!splitter) {
+        std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
+        throw std::runtime_error("Test no splitter.");
+    }
+    splitter->StopByRow();
 }
 
 void Test_splitter_close(long splitter_addr) {
