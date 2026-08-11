@@ -1069,6 +1069,20 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OnHeapJniByteInputStrea
   JNI_METHOD_END()
 }
 
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_JniByteInputStreams_newDirectByteBuffer( // NOLINT
+    JNIEnv* env,
+    jclass,
+    jlong address,
+    jint capacity) {
+  JNI_METHOD_START
+  jobject buffer = env->NewDirectByteBuffer(reinterpret_cast<void*>(address), capacity);
+  if (buffer == nullptr) {
+    throw GlutenException("Unable to create a direct ByteBuffer for the shuffle input");
+  }
+  return buffer;
+  JNI_METHOD_END(nullptr)
+}
+
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_ShuffleReaderJniWrapper_make( // NOLINT
     JNIEnv* env,
     jobject wrapper,
