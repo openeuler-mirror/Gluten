@@ -44,10 +44,12 @@ object HudiCommitMessageBuilder {
     try {
       // Hudi: WriteStatus with HoodieWriteStat (path, record count, file size)
       val writeStatusClass = Class.forName("org.apache.hudi.client.WriteStatus")
-      val writeStatus = writeStatusClass.getConstructor().newInstance()
+      val writeStatus: Object =
+        writeStatusClass.getConstructor().newInstance().asInstanceOf[Object]
       val setStat = writeStatusClass.getMethod("setStat", Class.forName("org.apache.hudi.client.HoodieWriteStat"))
       val hoodieWriteStatClass = Class.forName("org.apache.hudi.client.HoodieWriteStat")
-      val stat = hoodieWriteStatClass.getConstructor().newInstance()
+      val stat: Object =
+        hoodieWriteStatClass.getConstructor().newInstance().asInstanceOf[Object]
       hoodieWriteStatClass.getMethod("setPath", classOf[String]).invoke(stat, info.getPath)
       hoodieWriteStatClass.getMethod("setNumWrites", classOf[Long]).invoke(stat, java.lang.Long.valueOf(info.getRecordCount))
       hoodieWriteStatClass.getMethod("setFileSizeInBytes", classOf[Long]).invoke(stat, java.lang.Long.valueOf(info.getFileSizeInBytes))
