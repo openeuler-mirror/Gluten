@@ -107,22 +107,26 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi {
   }
 
   override def genTryArithmeticTransformer(
-      substraitExprName: String,
+      tryArithmeticExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: TryEval,
+      original: Expression,
       checkArithmeticExprName: String): ExpressionTransformer = {
-    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(original.child)) {
-      throw new GlutenNotSupportException(
-        s"${original.child.prettyName} with ansi mode is not supported")
+    val arithmetic = original match {
+      case tryEval: TryEval => tryEval.child
+      case expression => expression
     }
-    original.child.dataType match {
+    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(arithmetic)) {
+      throw new GlutenNotSupportException(
+        s"${arithmetic.prettyName} with ansi mode is not supported")
+    }
+    arithmetic.dataType match {
       case LongType | IntegerType | ShortType | ByteType =>
-      case _ => throw new GlutenNotSupportException(s"$substraitExprName is not supported")
+      case _ => throw new GlutenNotSupportException(s"$tryArithmeticExprName is not supported")
     }
     // Offload to velox for only IntegralTypes.
     GenericExpressionTransformer(
-      substraitExprName,
+      ExpressionNames.TRY_EVAL,
       Seq(GenericExpressionTransformer(checkArithmeticExprName, Seq(left, right), original)),
       original)
   }

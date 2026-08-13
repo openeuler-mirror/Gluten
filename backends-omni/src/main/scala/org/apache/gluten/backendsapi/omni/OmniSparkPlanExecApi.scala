@@ -19,7 +19,19 @@ package org.apache.gluten.backendsapi.omni
 import org.apache.gluten.backendsapi.SparkPlanExecApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
-import org.apache.gluten.expression.{ExpressionConverter, ExpressionMappings, ExpressionNames, ExpressionTransformer, GenericExpressionTransformer, LiteralTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniGetStructFieldTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer, Sig}
+import org.apache.gluten.expression.{
+  ExpressionConverter,
+  ExpressionMappings,
+  ExpressionNames,
+  ExpressionTransformer,
+  GenericExpressionTransformer,
+  LiteralTransformer,
+  OmniAliasTransformer,
+  OmniFromUnixTimeTransformer,
+  OmniGetStructFieldTransformer,
+  OmniHashExpressionTransformer,
+  OmniUnixTimestampTransformer,
+  Sig}
 import org.apache.gluten.expression.aggregate.OmniHLLAdapter
 import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.spark.{ShuffleDependency, SparkException}
@@ -138,24 +150,40 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
     OmniUnixTimestampTransformer(substraitExprName, children, original)
 
   override def genTryArithmeticTransformer(
-      substraitExprName: String,
+      tryArithmeticExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: TryEval,
+      original: Expression,
       checkArithmeticExprName: String): ExpressionTransformer = {
-    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(original.child)) {
+    val arithmetic = original match {
+      case tryEval: TryEval => tryEval.child
+      case expression => expression
+    }
+    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(arithmetic)) {
       throw new GlutenNotSupportException(
-        s"${original.child.prettyName} with ansi mode is not supported")
+        s"${arithmetic.prettyName} with ansi mode is not supported")
     }
-    original.child.dataType match {
-      case LongType | IntegerType | ShortType | ByteType =>
-      case _ => throw new GlutenNotSupportException(s"$substraitExprName is not supported")
+
+    def isPrimitiveNumeric(dataType: DataType): Boolean = dataType match {
+      case ByteType | ShortType | IntegerType | LongType | FloatType | DoubleType => true
+      case _ => false
     }
-    // Offload to omni for only IntegralTypes.
+
+    val inputTypes = Seq(left.dataType, right.dataType)
+    val allDecimal = inputTypes.forall(_.isInstanceOf[DecimalType]) &&
+      original.dataType.isInstanceOf[DecimalType]
+    val samePrimitive = inputTypes.forall(isPrimitiveNumeric) &&
+      inputTypes.distinct.size == 1 && original.dataType == inputTypes.head
+    if (!allDecimal && !samePrimitive) {
+      throw new GlutenNotSupportException(
+        s"$tryArithmeticExprName does not support (${left.dataType}, ${right.dataType}) " +
+          s"to ${original.dataType}")
+    }
     GenericExpressionTransformer(
-      substraitExprName,
-      Seq(GenericExpressionTransformer(checkArithmeticExprName, Seq(left, right), original)),
-      original)
+      tryArithmeticExprName,
+      Seq(left, right),
+      original,
+      Some(Seq(left.dataType, right.dataType)))
   }
 
   /** Generate HashAggregateExecTransformer. */
