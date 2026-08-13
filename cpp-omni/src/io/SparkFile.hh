@@ -21,6 +21,8 @@
 
 #include <string>
 #include <memory>
+#include <vector>
+#include <cstdint>
 
 namespace spark {
 
@@ -112,6 +114,33 @@ namespace spark {
    * @param path the name of the file in the local file system
    */
   std::unique_ptr<OutputStream> writeLocalFile(const std::string& path);
+
+  /**
+   * In-memory OutputStream for RSS push serialization.
+   */
+  class MemoryOutputStream : public OutputStream {
+  public:
+    MemoryOutputStream();
+
+    uint64_t getLength() const override;
+
+    uint64_t getNaturalWriteSize() const override;
+
+    void write(const void* buf, size_t length) override;
+
+    const std::string& getName() const override;
+
+    void close() override;
+
+    const std::vector<uint8_t>& data() const { return buffer_; }
+
+  private:
+    std::vector<uint8_t> buffer_;
+    std::string name_;
+    bool closed_;
+  };
+
+  std::unique_ptr<OutputStream> writeMemoryBuffer();
 }
 
 #endif
