@@ -31,12 +31,13 @@ trait ExpressionTransformer {
   def original: Expression
   def dataType: DataType = original.dataType
   def nullable: Boolean = original.nullable
+  def signatureInputTypes: Seq[DataType] = original.children.map(_.dataType)
 
   def doTransform(args: java.lang.Object): ExpressionNode = {
     val functionMap = args.asInstanceOf[java.util.HashMap[String, java.lang.Long]]
     // TODO: the funcName seems can be simplified to `substraitExprName`
     val funcName: String =
-      ConverterUtils.makeFuncName(substraitExprName, original.children.map(_.dataType))
+      ConverterUtils.makeFuncName(substraitExprName, signatureInputTypes)
     val functionId = ExpressionBuilder.newScalarFunction(functionMap, funcName)
     val childNodes = children.map(_.doTransform(args)).asJava
     val typeNode = ConverterUtils.getTypeNode(dataType, nullable)
@@ -64,15 +65,27 @@ trait BinaryExpressionTransformer extends ExpressionTransformer {
 case class GenericExpressionTransformer(
     substraitExprName: String,
     children: Seq[ExpressionTransformer],
-    original: Expression)
-  extends ExpressionTransformer
+    original: Expression,
+    signatureInputTypesOverride: Option[Seq[DataType]])
+  extends ExpressionTransformer {
+
+  override def signatureInputTypes: Seq[DataType] =
+    signatureInputTypesOverride.getOrElse(super.signatureInputTypes)
+}
 
 object GenericExpressionTransformer {
   def apply(
       substraitExprName: String,
+      children: Seq[ExpressionTransformer],
+      original: Expression): GenericExpressionTransformer = {
+    GenericExpressionTransformer(substraitExprName, children, original, None)
+  }
+
+  def apply(
+      substraitExprName: String,
       child: ExpressionTransformer,
       original: Expression): GenericExpressionTransformer = {
-    GenericExpressionTransformer(substraitExprName, child :: Nil, original)
+    GenericExpressionTransformer(substraitExprName, child :: Nil, original, None)
   }
 }
 

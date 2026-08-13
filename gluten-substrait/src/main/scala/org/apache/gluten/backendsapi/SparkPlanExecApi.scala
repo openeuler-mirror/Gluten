@@ -201,12 +201,12 @@ trait SparkPlanExecApi {
   }
 
   def genTryArithmeticTransformer(
-      substraitExprName: String,
+      tryArithmeticExprName: String,
       left: ExpressionTransformer,
       right: ExpressionTransformer,
-      original: TryEval,
+      original: Expression,
       checkArithmeticExprName: String): ExpressionTransformer = {
-    throw new GlutenNotSupportException(s"$checkArithmeticExprName is not supported")
+    throw new GlutenNotSupportException(s"$tryArithmeticExprName is not supported")
   }
 
   def genTryEvalTransformer(
