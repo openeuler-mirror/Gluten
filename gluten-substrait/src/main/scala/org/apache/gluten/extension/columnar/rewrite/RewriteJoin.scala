@@ -17,173 +17,59 @@
 package org.apache.gluten.extension.columnar.rewrite
 
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.extension.columnar.offload.OffloadJoin
+
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide, JoinSelectionHelper}
-import org.apache.spark.sql.catalyst.plans.logical.{Join, JoinHint, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical.Join
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.joins.{ShuffledHashJoinExec, SortMergeJoinExec}
-import org.apache.spark.sql.internal.SQLConf
 
+/** If force ShuffledHashJoin, convert [[SortMergeJoinExec]] to [[ShuffledHashJoinExec]]. */
 object RewriteJoin extends RewriteSingleNode with JoinSelectionHelper {
-
-    private def canBuildLocalHashMapBySize(
-        plan: LogicalPlan,
-        conf: SQLConf): Boolean = {
-        plan.stats.sizeInBytes < conf.autoBroadcastJoinThreshold * conf.numShufflePartitions
-
-        val threshold = conf.autoBroadcastJoinThreshold
-        val partitions = conf.numShufflePartitions
-        val size = plan.stats.sizeInBytes
-
-        threshold > 0 &&
-          partitions > 0 &&
-          size >= 0 &&
-          size < BigInt(threshold) * BigInt(partitions)
-    }
-
-    private def getOmniBuildSide(
-                              canBuildLeft: Boolean,
-                              canBuildRight: Boolean,
-                              left: LogicalPlan,
-                              right: LogicalPlan): Option[BuildSide] = {
-        if (canBuildLeft && canBuildRight) {
-            // returns the smaller side base on its estimated physical size, if we want to build the
-            // both sides.
-            Some(getSmallerSide(left, right))
-        } else if (canBuildLeft) {
-            Some(BuildLeft)
-        } else if (canBuildRight) {
-            Some(BuildRight)
-        } else {
-            None
-        }
-    }
-
-    private def muchSmaller(
-        smaller: LogicalPlan,
-        larger: LogicalPlan,
-        conf: SQLConf): Boolean = {
-
-        val factor = conf.getConf(SQLConf.SHUFFLE_HASH_JOIN_FACTOR)
-        val smallerSize = smaller.stats.sizeInBytes
-        val largerSize = larger.stats.sizeInBytes
-
-        factor > 0 &&
-          smallerSize >= 0 &&
-          largerSize >= 0 &&
-          smallerSize * BigInt(factor) <= largerSize
-    }
-
-    private def getOmniShuffleHashJoinBuildSide(
-        left: LogicalPlan,
-        right: LogicalPlan,
-        joinType: org.apache.spark.sql.catalyst.plans.JoinType,
-        hint: JoinHint,
-        hintOnly: Boolean,
-        conf: SQLConf,
-        forceShuffledHashJoin: Boolean): Option[BuildSide] = {
-
-        val buildLeft =
-            if (hintOnly) {
-                hintToShuffleHashJoinLeft(hint)
-            } else {
-                hintToPreferShuffleHashJoinLeft(hint) ||
-                  (
-                    (forceShuffledHashJoin || !conf.preferSortMergeJoin) &&
-                      canBuildLocalHashMapBySize(left, conf) &&
-                      muchSmaller(left, right, conf)
-                    )
-            }
-
-        val buildRight =
-            if (hintOnly) {
-                hintToShuffleHashJoinRight(hint)
-            } else {
-                hintToPreferShuffleHashJoinRight(hint) ||
-                  (
-                    (forceShuffledHashJoin || !conf.preferSortMergeJoin) &&
-                      canBuildLocalHashMapBySize(right, conf) &&
-                      muchSmaller(right, left, conf)
-                    )
-            }
-
-        getOmniBuildSide(
-            canBuildShuffledHashJoinLeft(joinType) && buildLeft,
-            canBuildShuffledHashJoinRight(joinType) && buildRight,
-            left,
-            right)
-    }
-
-    private def getShjBuildSide(smj: SortMergeJoinExec): Option[BuildSide] = {
-
-        val config = GlutenConfig.get
-        val conf = SQLConf.get
-
-        smj.logicalLink match {
-            case Some(join: Join) =>
-                val hint = join.hint
-
-                if (hintToSortMergeJoin(hint)) {
-                    return None
-                }
-
-                val hintedBuildSide =
-                    getOmniShuffleHashJoinBuildSide(
-                        join.left,
-                        join.right,
-                        join.joinType,
-                        hint,
-                        hintOnly = true,
-                        conf,
-                        false)
-
-                if (hintedBuildSide.isDefined) {
-                    return hintedBuildSide
-                }
-
-
-                getOmniShuffleHashJoinBuildSide(
-                    join.left,
-                    join.right,
-                    join.joinType,
-                    hint,
-                    hintOnly = false,
-                    conf,
-                    config.forceShuffledHashJoin)
-
-            case _ =>
-                None
-        }
-    }
-
-      private def rewriteJoin(
-                               smj: SortMergeJoinExec,
-                               buildSide: BuildSide): SparkPlan = {
-          val shj = ShuffledHashJoinExec(
-              smj.leftKeys,
-              smj.rightKeys,
-              smj.joinType,
-              buildSide,
-              smj.condition,
-              smj.left,
-              smj.right,
-              smj.isSkewJoin)
-
-          shj.copyTagsFrom(smj)
-          smj.logicalLink.foreach(shj.setLogicalLink)
-          shj
-      }
-
-
-  override def rewrite(plan: SparkPlan): SparkPlan = plan match {
-    case smj: SortMergeJoinExec =>
-        getShjBuildSide(smj)
-              .map(buildSide => rewriteJoin(smj, buildSide))
-              .getOrElse(smj)
-    case other => other
-  }
-
-
   override def isRewritable(plan: SparkPlan): Boolean = {
     RewriteEligibility.isRewritable(plan)
+  }
+
+  private def getSmjBuildSide(join: SortMergeJoinExec): Option[BuildSide] = {
+    val leftBuildable = canBuildShuffledHashJoinLeft(join.joinType)
+    val rightBuildable = canBuildShuffledHashJoinRight(join.joinType)
+    if (!leftBuildable && !rightBuildable) {
+      return None
+    }
+    if (!leftBuildable) {
+      return Some(BuildRight)
+    }
+    if (!rightBuildable) {
+      return Some(BuildLeft)
+    }
+    val side = join.logicalLink
+      .flatMap {
+        case join: Join => Some(OffloadJoin.getOptimalBuildSide(join))
+        case _ => None
+      }
+      .getOrElse {
+        // If smj has no logical link, or its logical link is not a join,
+        // then we always choose left as build side.
+        BuildLeft
+      }
+    Some(side)
+  }
+
+  override def rewrite(plan: SparkPlan): SparkPlan = plan match {
+    case smj: SortMergeJoinExec if GlutenConfig.get.forceShuffledHashJoin =>
+      getSmjBuildSide(smj) match {
+        case Some(buildSide) =>
+          ShuffledHashJoinExec(
+            smj.leftKeys,
+            smj.rightKeys,
+            smj.joinType,
+            buildSide,
+            smj.condition,
+            smj.left,
+            smj.right,
+            smj.isSkewJoin)
+        case _ => plan
+      }
+    case _ => plan
   }
 }
