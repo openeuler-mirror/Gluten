@@ -159,7 +159,12 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       case tryEval: TryEval => tryEval.child
       case expression => expression
     }
-    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(arithmetic)) {
+    // Spark may represent TRY arithmetic as TryEval(Arithmetic(EvalMode.ANSI)).
+    // The outer TryEval converts failures from the strict child into null results.
+    if (
+      !original.isInstanceOf[TryEval] &&
+        SparkShimLoader.getSparkShims.withAnsiEvalMode(arithmetic)
+    ) {
       throw new GlutenNotSupportException(
         s"${arithmetic.prettyName} with ansi mode is not supported")
     }
