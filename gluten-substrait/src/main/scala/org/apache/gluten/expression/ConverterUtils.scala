@@ -242,9 +242,14 @@ object ConverterUtils extends Logging {
       case s: StructType =>
         val fieldNodes = new JArrayList[TypeNode]
         val fieldNames = new JArrayList[String]
-        for (structField <- s.fields) {
-          fieldNodes.add(getTypeNode(structField.dataType, structField.nullable))
-          fieldNames.add(normalizeStructFieldName(structField.name))
+        if (s.fields.isEmpty) {
+          fieldNodes.add(TypeBuilder.makeBoolean(nullable = true))
+          fieldNames.add("__omni_empty_struct")
+        } else {
+          for (structField <- s.fields) {
+            fieldNodes.add(getTypeNode(structField.dataType, structField.nullable))
+            fieldNames.add(normalizeStructFieldName(structField.name))
+          }
         }
         TypeBuilder.makeStruct(nullable, fieldNodes, fieldNames)
       case _: NullType =>

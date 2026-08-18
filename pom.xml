@@ -65,6 +65,7 @@
     <delta.package.name>delta-core</delta.package.name>
     <delta.version>2.4.0</delta.version>
     <delta.binary.version>24</delta.binary.version>
+    <paimon.version>1.4.1</paimon.version>
     <celeborn.version>0.5.2</celeborn.version>
     <uniffle.version>0.9.1</uniffle.version>
     <arrow.version>15.0.0</arrow.version>
@@ -559,6 +560,15 @@
           </plugin>
         </plugins>
       </build>
+    </profile>
+    <profile>
+      <id>paimon</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <modules>
+        <module>gluten-paimon</module>
+      </modules>
     </profile>
     <profile>
       <id>delta</id>

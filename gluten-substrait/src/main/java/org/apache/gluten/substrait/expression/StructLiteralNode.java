@@ -22,73 +22,25 @@ import io.substrait.proto.Expression;
 import io.substrait.proto.Expression.Literal.Builder;
 import org.apache.spark.sql.catalyst.InternalRow;
 
+/**
+ * Substrait literal node for struct values.
+ *
+ * @since 2026
+ */
 public class StructLiteralNode extends LiteralNodeWithValue<InternalRow> {
   public StructLiteralNode(InternalRow row, TypeNode typeNode) {
     super(row, typeNode);
   }
 
-  public LiteralNode getFieldLiteral(int index) {
-    InternalRow value = getValue();
-    TypeNode type = ((StructNode) getTypeNode()).getFieldTypes().get(index);
-    if (value.isNullAt(index)) {
-      return ExpressionBuilder.makeNullLiteral(type);
+    /**
+     * Returns the Substrait literal for one struct field.
+     *
+     * @param index field index in the struct type
+     * @return literal node for the field
+     */
+    public LiteralNode getFieldLiteral(int index) {
+        return StructLiteralNodeSupport.getFieldLiteral(getValue(), getTypeNode(), index);
     }
-
-    if (type instanceof BooleanTypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getBoolean(index), type);
-    }
-    if (type instanceof I8TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getByte(index), type);
-    }
-    if (type instanceof I16TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getShort(index), type);
-    }
-    if (type instanceof I32TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getInt(index), type);
-    }
-    if (type instanceof I64TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getLong(index), type);
-    }
-    if (type instanceof FP32TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getFloat(index), type);
-    }
-    if (type instanceof FP64TypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getDouble(index), type);
-    }
-    if (type instanceof DateTypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getInt(index), type);
-    }
-    if (type instanceof TimestampTypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getLong(index), type);
-    }
-    if (type instanceof StringTypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getUTF8String(index), type);
-    }
-    if (type instanceof BinaryTypeNode) {
-      return ExpressionBuilder.makeLiteral(value.getBinary(index), type);
-    }
-    if (type instanceof DecimalTypeNode) {
-      return ExpressionBuilder.makeLiteral(
-          value.getDecimal(
-              index, ((DecimalTypeNode) type).precision, ((DecimalTypeNode) type).scale),
-          type);
-    }
-    if (type instanceof ListNode) {
-      return ExpressionBuilder.makeLiteral(value.getArray(index), type);
-    }
-    if (type instanceof MapNode) {
-      return ExpressionBuilder.makeLiteral(value.getMap(index), type);
-    }
-    if (type instanceof StructNode) {
-      return ExpressionBuilder.makeLiteral(
-          value.getStruct(index, ((StructNode) type).getFieldTypes().size()), type);
-    }
-    if (type instanceof NothingNode) {
-      return ExpressionBuilder.makeNullLiteral(type);
-    }
-    throw new UnsupportedOperationException(
-        type.toString() + " is not supported in getFieldLiteral.");
-  }
 
   @Override
   protected void updateLiteralBuilder(Builder literalBuilder, InternalRow row) {
@@ -98,4 +50,105 @@ public class StructLiteralNode extends LiteralNodeWithValue<InternalRow> {
     }
     literalBuilder.setStruct(structBuilder.build());
   }
+}
+
+/**
+ * Helpers for {@link StructLiteralNode}, including empty-struct placeholder handling.
+ *
+ * @since 2026
+ */
+final class StructLiteralNodeSupport {
+    private static final String EMPTY_STRUCT_DUMMY_FIELD = "__omni_empty_struct";
+
+    private StructLiteralNodeSupport() {
+    }
+
+    static LiteralNode getFieldLiteral(InternalRow value, TypeNode typeNode, int index) {
+        if (!(typeNode instanceof StructNode)) {
+            throw new IllegalStateException("StructLiteralNode requires StructNode type");
+        }
+        StructNode structType = (StructNode) typeNode;
+        TypeNode type = structType.getFieldTypes().get(index);
+        if (isEmptyStructDummyField(value, structType, index)) {
+            return ExpressionBuilder.makeLiteral(false, type);
+        }
+        return buildFieldLiteral(value, type, index);
+    }
+
+    private static boolean isEmptyStructDummyField(InternalRow value, StructNode structType, int index) {
+        return value.numFields() == 0
+                && index == 0
+                && structType.getFieldTypes().size() == 1
+                && structType.getFieldTypes().get(0) instanceof BooleanTypeNode
+                && structType.getNames().size() == 1
+                && EMPTY_STRUCT_DUMMY_FIELD.equals(structType.getNames().get(0));
+    }
+
+    private static LiteralNode buildFieldLiteral(InternalRow value, TypeNode type, int index) {
+        if (value.isNullAt(index)) {
+            return ExpressionBuilder.makeNullLiteral(type);
+        }
+        return buildPrimitiveFieldLiteral(value, type, index);
+    }
+
+    private static LiteralNode buildPrimitiveFieldLiteral(InternalRow value, TypeNode type, int index) {
+        if (type instanceof BooleanTypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getBoolean(index), type);
+        }
+        if (type instanceof I8TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getByte(index), type);
+        }
+        if (type instanceof I16TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getShort(index), type);
+        }
+        if (type instanceof I32TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getInt(index), type);
+        }
+        if (type instanceof I64TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getLong(index), type);
+        }
+        if (type instanceof FP32TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getFloat(index), type);
+        }
+        if (type instanceof FP64TypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getDouble(index), type);
+        }
+        if (type instanceof DateTypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getInt(index), type);
+        }
+        if (type instanceof TimestampTypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getLong(index), type);
+        }
+        return buildComplexFieldLiteral(value, type, index);
+    }
+
+    private static LiteralNode buildComplexFieldLiteral(InternalRow value, TypeNode type, int index) {
+        if (type instanceof StringTypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getUTF8String(index), type);
+        }
+        if (type instanceof BinaryTypeNode) {
+            return ExpressionBuilder.makeLiteral(value.getBinary(index), type);
+        }
+        if (type instanceof DecimalTypeNode) {
+            return ExpressionBuilder.makeLiteral(
+                    value.getDecimal(
+                            index, ((DecimalTypeNode) type).precision, ((DecimalTypeNode) type).scale),
+                    type);
+        }
+        if (type instanceof ListNode) {
+            return ExpressionBuilder.makeLiteral(value.getArray(index), type);
+        }
+        if (type instanceof MapNode) {
+            return ExpressionBuilder.makeLiteral(value.getMap(index), type);
+        }
+        if (type instanceof StructNode) {
+            return ExpressionBuilder.makeLiteral(
+                    value.getStruct(index, ((StructNode) type).getFieldTypes().size()), type);
+        }
+        if (type instanceof NothingNode) {
+            return ExpressionBuilder.makeNullLiteral(type);
+        }
+        throw new UnsupportedOperationException(
+                type.toString() + " is not supported in getFieldLiteral.");
+    }
 }

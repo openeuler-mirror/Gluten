@@ -14,7 +14,8 @@ import org.apache.spark.sql.execution.SparkPlan
 object PushDownFilterToOmniScanRegistry {
   private val handlers = Seq(
     "org.apache.gluten.backendsapi.omni.DeltaOffloadRegistry$",
-    "org.apache.gluten.backendsapi.omni.HudiOffloadRegistry$"
+    "org.apache.gluten.backendsapi.omni.HudiOffloadRegistry$",
+    "org.apache.gluten.backendsapi.omni.PaimonOffloadRegistry$"
   )
 
   def pushDown(plan: SparkPlan): Option[SparkPlan] = {
