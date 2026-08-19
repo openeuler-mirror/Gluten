@@ -216,6 +216,9 @@ const std::string KAdaptivePartialAggregationRatio = "spark.gluten.sql.columnar.
 
 const std::string KPreferVectorizationExpression = "spark.gluten.sql.columnar.backend.omni.preferVectorizationExpression";
 
+const std::string kDynamicFilterPushdownEnabled =
+    "spark.gluten.sql.columnar.backend.omni.dynamicFilterPushdown.enabled";
+
 // others
 const std::string kHiveDefaultPartition = "__HIVE_DEFAULT_PARTITION__";
 
