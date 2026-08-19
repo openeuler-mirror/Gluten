@@ -59,8 +59,8 @@ import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
 import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
 import org.apache.gluten.extension.PushDownFilterToOmniScan
-import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer
 import org.apache.gluten.sql.shims.SparkShimLoader
+import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
@@ -155,14 +155,9 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       right: ExpressionTransformer,
       original: Expression,
       checkArithmeticExprName: String): ExpressionTransformer = {
-    val arithmetic = original match {
-      case tryEval: TryEval => tryEval.child
-      case expression => expression
-    }
-    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(arithmetic)) {
-      throw new GlutenNotSupportException(
-        s"${arithmetic.prettyName} with ansi mode is not supported")
-    }
+    // ExpressionConverter calls this entry only after resolving an effective TRY
+    // context. An ANSI child introduced by Spark's implicit cast is the checked
+    // computation protected by TRY, not an unprotected ANSI expression.
 
     def isPrimitiveNumeric(dataType: DataType): Boolean = dataType match {
       case ByteType | ShortType | IntegerType | LongType | FloatType | DoubleType => true
@@ -184,6 +179,19 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       Seq(left, right),
       original,
       Some(Seq(left.dataType, right.dataType)))
+  }
+
+  override def genArithmeticTransformer(
+      substraitExprName: String,
+      left: ExpressionTransformer,
+      right: ExpressionTransformer,
+      original: Expression,
+      checkArithmeticExprName: String): ExpressionTransformer = {
+    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(original)) {
+      throw new GlutenNotSupportException(
+        s"${original.prettyName} with ansi mode is not supported")
+    }
+    GenericExpressionTransformer(substraitExprName, Seq(left, right), original)
   }
 
   /** Generate HashAggregateExecTransformer. */
