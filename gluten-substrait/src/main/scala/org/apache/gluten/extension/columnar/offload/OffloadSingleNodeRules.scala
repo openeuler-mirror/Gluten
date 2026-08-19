@@ -395,6 +395,13 @@ object OffloadJoin extends Logging {
       smj: SortMergeJoinExec,
       left: SparkPlan,
       right: SparkPlan): Option[SparkPlan] = {
+
+    if (hasJoinStrategyHint(smj)) {
+      logInfo(
+        s"Skip AQE SMJ -> BHJ because explicit join hint exists: " +
+          s"joinType=${smj.joinType}")
+      return None
+    }
     val leftStageOpt = findShuffleQueryStage(left)
     val rightStageOpt = findShuffleQueryStage(right)
 
@@ -523,6 +530,42 @@ object OffloadJoin extends Logging {
         }
     }
   }
+  private def hasJoinStrategyHint(
+    smj: SortMergeJoinExec): Boolean = {
+
+    smj.logicalLink match {
+      case Some(join: Join) =>
+        val hint = join.hint
+
+        logInfo(
+          s"AQE SMJ -> BHJ hint check: " +
+            s"joinType=${smj.joinType}, " +
+            s"hint=$hint, " +
+            s"leftHint=${hint.leftHint}, " +
+            s"rightHint=${hint.rightHint}")
+
+        if (!hint.isEmpty) {
+          logInfo(
+            s"AQE SMJ -> BHJ: explicit join hint detected, " +
+              s"keep original SMJ.")
+          true
+        } else {
+          false
+        }
+
+      case Some(logicalPlan) =>
+        logDebug(
+          s"AQE SMJ -> BHJ hint check: logicalLink is not Join: " +
+            s"${logicalPlan.getClass.getName}")
+        false
+
+      case None =>
+        logDebug(
+          "AQE SMJ -> BHJ hint check: no logicalLink found.")
+        false
+    }
+  }
+
 
   /**
    * Try to offload a SortMergeJoin as ShuffledHashJoin using AQE runtime
@@ -545,6 +588,15 @@ object OffloadJoin extends Logging {
       smj: SortMergeJoinExec,
       left: SparkPlan,
       right: SparkPlan): Option[SparkPlan] = {
+
+    if (hasJoinStrategyHint(smj)) {
+      logInfo(
+        s"Skip AQE SMJ -> SHJ because explicit join hint exists: " +
+          s"joinType=${smj.joinType}")
+      return None
+    }
+
+
     val leftStageOpt = findShuffleQueryStage(left)
     val rightStageOpt = findShuffleQueryStage(right)
 
