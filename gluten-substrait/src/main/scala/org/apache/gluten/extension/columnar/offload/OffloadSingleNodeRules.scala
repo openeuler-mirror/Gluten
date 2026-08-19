@@ -28,7 +28,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{BindReferences, SortOrder}
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
-import org.apache.spark.sql.catalyst.plans.logical.Join
+import org.apache.spark.sql.catalyst.plans.logical.{BROADCAST, Join, JoinHint, JoinStrategyHint, SHUFFLE_HASH, SHUFFLE_MERGE, SHUFFLE_REPLICATE_NL}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
@@ -281,6 +281,18 @@ object OffloadJoin extends Logging {
     BuildLeft
   }
 
+  // Read the original logical JoinHint attached to this SMJ.
+  private def getJoinHint(smj: SortMergeJoinExec): Option[JoinHint] = {
+    smj.logicalLink.collect {
+      case join: Join => join.hint
+    }
+  }
+
+  private def hasHint(hint: JoinHint, strategy: JoinStrategyHint): Boolean = {
+    hint.leftHint.exists(_.strategy.contains(strategy)) ||
+    hint.rightHint.exists(_.strategy.contains(strategy))
+  }
+
   /**
    * Find the ShuffleQueryStageExec that provides the input of one SMJ side.
    *
@@ -395,53 +407,85 @@ object OffloadJoin extends Logging {
       smj: SortMergeJoinExec,
       left: SparkPlan,
       right: SparkPlan): Option[SparkPlan] = {
+    val joinHint = getJoinHint(smj)
 
-    if (hasJoinStrategyHint(smj)) {
-      logInfo(
-        s"Skip AQE SMJ -> BHJ because explicit join hint exists: " +
-          s"joinType=${smj.joinType}")
-      return None
-    }
-    val leftStageOpt = findShuffleQueryStage(left)
-    val rightStageOpt = findShuffleQueryStage(right)
-
-    if (leftStageOpt.isEmpty || rightStageOpt.isEmpty) {
-      logDebug(
-        s"Skip SMJ -> BHJ: cannot find both ShuffleQueryStageExec nodes, " +
-          s"leftStage=${leftStageOpt.isDefined}, rightStage=${rightStageOpt.isDefined}")
+    // Hint first. BHJ only consumes BROADCAST.
+    // MERGE keeps SMJ; SHUFFLE_HASH is handled by checkAndConvertSmjToShj.
+    if (joinHint.exists(h =>
+        hasHint(h, SHUFFLE_MERGE) ||
+        hasHint(h, SHUFFLE_HASH) ||
+        hasHint(h, SHUFFLE_REPLICATE_NL))) {
       return None
     }
 
-    val leftStage = leftStageOpt.get
-    val rightStage = rightStageOpt.get
-
-    if (!leftStage.isMaterialized || !rightStage.isMaterialized) {
-      logDebug(
-        s"Skip SMJ -> BHJ: shuffle stages are not both materialized, " +
-          s"leftMaterialized=${leftStage.isMaterialized}, " +
-          s"rightMaterialized=${rightStage.isMaterialized}")
-      return None
-    }
-
-    val leftStats = leftStage.getRuntimeStatistics
-    val rightStats = rightStage.getRuntimeStatistics
-    if (leftStats == null || rightStats == null) {
-      logDebug("Skip SMJ -> BHJ: runtime statistics are unavailable.")
-      return None
-    }
-
-    val leftSize = leftStats.sizeInBytes
-    val rightSize = rightStats.sizeInBytes
-    val autoBroadcastJoinThreshold = SQLConf.get.autoBroadcastJoinThreshold
-
+    val hasBroadcastHint = joinHint.exists(hasHint(_, BROADCAST))
     val buildSideOpt =
+    if (hasBroadcastHint) {
+      val hint = joinHint.get
+      val hintLeft = hint.leftHint.exists(_.strategy.contains(BROADCAST))
+      val hintRight = hint.rightHint.exists(_.strategy.contains(BROADCAST))
+
+      // Explicit BROADCAST hint has priority over the automatic size threshold.
+      // Prefer the hinted side; if that side is illegal for this join type,
+      // fall back to the other legal side.
+      val leftBuildable = canBuildBroadcastLeft(smj.joinType)
+      val rightBuildable = canBuildBroadcastRight(smj.joinType)
+      if (hintLeft && hintRight) {
+        // Both sides have BROADCAST: use the smaller legal side.
+        (leftBuildable, rightBuildable) match {
+          case (true, true) => Some(BuildLeft)
+          case (true, false) => Some(BuildLeft)
+          case (false, true) => Some(BuildRight)
+          case _ => None
+        }
+      } else if (hintLeft && leftBuildable) {
+        Some(BuildLeft)
+      } else if (hintRight && rightBuildable) {
+        Some(BuildRight)
+      } else if (leftBuildable) {
+        Some(BuildLeft)
+      } else if (rightBuildable) {
+        Some(BuildRight)
+      } else {
+        None
+      }
+    } else {
+      val leftStageOpt = findShuffleQueryStage(left)
+      val rightStageOpt = findShuffleQueryStage(right)
+
+      if (leftStageOpt.isEmpty || rightStageOpt.isEmpty) {
+        logDebug(
+          s"Skip SMJ -> BHJ: cannot find both ShuffleQueryStageExec nodes, " +
+            s"leftStage=${leftStageOpt.isDefined}, rightStage=${rightStageOpt.isDefined}")
+        return None
+      }
+
+      val leftStage = leftStageOpt.get
+      val rightStage = rightStageOpt.get
+
+      if (!leftStage.isMaterialized || !rightStage.isMaterialized) {
+        logDebug(
+          s"Skip SMJ -> BHJ: shuffle stages are not both materialized, " +
+            s"leftMaterialized=${leftStage.isMaterialized}, " +
+            s"rightMaterialized=${rightStage.isMaterialized}")
+        return None
+      }
+
+      val leftStats = leftStage.getRuntimeStatistics
+      val rightStats = rightStage.getRuntimeStatistics
+      if (leftStats == null || rightStats == null) {
+        logDebug("Skip SMJ -> BHJ: runtime statistics are unavailable.")
+        return None
+      }
+
+      val leftSize = leftStats.sizeInBytes
+      val rightSize = rightStats.sizeInBytes
+      val autoBroadcastJoinThreshold = SQLConf.get.autoBroadcastJoinThreshold
+
       chooseBroadcastBuildSide(smj, leftSize, rightSize, autoBroadcastJoinThreshold)
+    }
 
     if (buildSideOpt.isEmpty) {
-      logDebug(
-        s"Skip SMJ -> BHJ: no legal side is below autoBroadcastJoinThreshold, " +
-          s"joinType=${smj.joinType}, leftSize=$leftSize, rightSize=$rightSize, " +
-          s"threshold=$autoBroadcastJoinThreshold")
       return None
     }
 
@@ -465,11 +509,6 @@ object OffloadJoin extends Logging {
     val bhjLeft = if (buildSide == BuildLeft) broadcastExchange else hashLeft
     val bhjRight = if (buildSide == BuildRight) broadcastExchange else hashRight
 
-    logInfo(
-      s"AQE SMJ -> BHJ check passed: joinType=${smj.joinType}, buildSide=$buildSide, " +
-        s"leftRuntimeSize=$leftSize, rightRuntimeSize=$rightSize, " +
-        s"autoBroadcastJoinThreshold=$autoBroadcastJoinThreshold")
-
     val bhjTransformer = BackendsApiManager.getSparkPlanExecApiInstance
       .genBroadcastHashJoinExecTransformer(
         smj.leftKeys,
@@ -483,10 +522,6 @@ object OffloadJoin extends Logging {
 
     val validateResult = bhjTransformer.doValidate()
     if (validateResult.ok()) {
-      logInfo(
-        s"AQE converted SMJ -> BHJ: joinType=${smj.joinType}, buildSide=$buildSide, " +
-          s"leftRuntimeSize=$leftSize, rightRuntimeSize=$rightSize, " +
-          s"threshold=$autoBroadcastJoinThreshold")
       Some(bhjTransformer)
     } else {
       logDebug(
@@ -530,42 +565,6 @@ object OffloadJoin extends Logging {
         }
     }
   }
-  private def hasJoinStrategyHint(
-    smj: SortMergeJoinExec): Boolean = {
-
-    smj.logicalLink match {
-      case Some(join: Join) =>
-        val hint = join.hint
-
-        logInfo(
-          s"AQE SMJ -> BHJ hint check: " +
-            s"joinType=${smj.joinType}, " +
-            s"hint=$hint, " +
-            s"leftHint=${hint.leftHint}, " +
-            s"rightHint=${hint.rightHint}")
-
-        if (!hint.isEmpty) {
-          logInfo(
-            s"AQE SMJ -> BHJ: explicit join hint detected, " +
-              s"keep original SMJ.")
-          true
-        } else {
-          false
-        }
-
-      case Some(logicalPlan) =>
-        logDebug(
-          s"AQE SMJ -> BHJ hint check: logicalLink is not Join: " +
-            s"${logicalPlan.getClass.getName}")
-        false
-
-      case None =>
-        logDebug(
-          "AQE SMJ -> BHJ hint check: no logicalLink found.")
-        false
-    }
-  }
-
 
   /**
    * Try to offload a SortMergeJoin as ShuffledHashJoin using AQE runtime
@@ -588,65 +587,116 @@ object OffloadJoin extends Logging {
       smj: SortMergeJoinExec,
       left: SparkPlan,
       right: SparkPlan): Option[SparkPlan] = {
+    val joinHint = getJoinHint(smj)
 
-    if (hasJoinStrategyHint(smj)) {
-      logInfo(
-        s"Skip AQE SMJ -> SHJ because explicit join hint exists: " +
-          s"joinType=${smj.joinType}")
+    // Hint first. SHJ only consumes SHUFFLE_HASH.
+    // BROADCAST is handled by BHJ; MERGE keeps SMJ.
+    if (joinHint.exists(h =>
+        hasHint(h, BROADCAST) ||
+        hasHint(h, SHUFFLE_MERGE) ||
+        hasHint(h, SHUFFLE_REPLICATE_NL))) {
       return None
     }
 
+    val hasShuffleHashHint = joinHint.exists(hasHint(_, SHUFFLE_HASH))
 
-    val leftStageOpt = findShuffleQueryStage(left)
-    val rightStageOpt = findShuffleQueryStage(right)
+    val buildSideOpt =
+      if (hasShuffleHashHint) {
+        val hint = joinHint.get
+        val hintLeft = hint.leftHint.exists(_.strategy.contains(SHUFFLE_HASH))
+        val hintRight = hint.rightHint.exists(_.strategy.contains(SHUFFLE_HASH))
+        val leftBuildable =
+          BackendsApiManager.getSettings.supportHashBuildJoinTypeOnLeft(smj.joinType)
+        val rightBuildable =
+          BackendsApiManager.getSettings.supportHashBuildJoinTypeOnRight(smj.joinType)
 
-    if (leftStageOpt.isEmpty || rightStageOpt.isEmpty) {
-      logDebug(
-        s"Skip SMJ -> SHJ: cannot find ShuffleQueryStageExec, " +
-          s"leftStage=${leftStageOpt.isDefined}, rightStage=${rightStageOpt.isDefined}")
-      return None
+        // Explicit SHUFFLE_HASH hint: prefer its build side. If that side is
+        // illegal (e.g. BuildLeft for LeftSemi), reuse the original legal-side logic.
+        if (hintLeft && hintRight) {
+          // Both sides have SHUFFLE_HASH: keep the original smaller/legal-side selection.
+          Some(BuildLeft)
+        } else if (hintLeft && leftBuildable) {
+          Some(BuildLeft)
+        } else if (hintRight && rightBuildable) {
+          Some(BuildRight)
+        } else {
+          None
+        }
+      } else {
+        val leftStageOpt = findShuffleQueryStage(left)
+        val rightStageOpt = findShuffleQueryStage(right)
+
+        if (leftStageOpt.isEmpty || rightStageOpt.isEmpty) {
+          logDebug(
+            s"Skip SMJ -> SHJ: cannot find ShuffleQueryStageExec, " +
+              s"leftStage=${leftStageOpt.isDefined}, rightStage=${rightStageOpt.isDefined}")
+          return None
+        }
+
+        val leftStage = leftStageOpt.get
+        val rightStage = rightStageOpt.get
+
+        // getRuntimeStatistics is meaningful only after stage materialization.
+        if (!leftStage.isMaterialized || !rightStage.isMaterialized) {
+          logDebug(
+            s"Skip SMJ -> SHJ: shuffle stages are not both materialized, " +
+              s"leftMaterialized=${leftStage.isMaterialized}, " +
+              s"rightMaterialized=${rightStage.isMaterialized}")
+          return None
+        }
+
+        val leftStats = leftStage.getRuntimeStatistics
+        val rightStats = rightStage.getRuntimeStatistics
+
+        if (leftStats == null || rightStats == null) {
+          logDebug("Skip SMJ -> SHJ: runtime statistics are unavailable.")
+          return None
+        }
+
+        val leftSize = leftStats.sizeInBytes
+        val rightSize = rightStats.sizeInBytes
+
+        // For SHJ, each task builds a hash table for one shuffle partition. The
+        // per-partition size therefore matters more than only the total stage size.
+        val leftMaxPartitionOpt = maxPartitionSize(leftStage)
+        val rightMaxPartitionOpt = maxPartitionSize(rightStage)
+
+        if (leftMaxPartitionOpt.isEmpty || rightMaxPartitionOpt.isEmpty) {
+          logDebug(
+            s"Skip SMJ -> SHJ: MapOutputStatistics unavailable, " +
+              s"leftMapStats=${leftStage.mapStats.isDefined}, " +
+              s"rightMapStats=${rightStage.mapStats.isDefined}")
+          return None
+        }
+
+        val leftMaxPartition = leftMaxPartitionOpt.get
+        val rightMaxPartition = rightMaxPartitionOpt.get
+
+        // No hint: original logic unchanged.
+        val buildSideOpt = chooseBuildSide(smj, leftSize, rightSize)
+        if (buildSideOpt.isEmpty) {
+          logDebug(
+            s"Skip SMJ -> SHJ: joinType=${smj.joinType} has no supported hash build side.")
+          return None
+        }
+
+        val buildMaxPartitionSize = buildSideOpt.get match {
+          case BuildLeft => leftMaxPartition
+          case BuildRight => rightMaxPartition
+        }
+
+        val shuffleHashJoinThreshold = GlutenConfig.get.shuffleHashJoinThreshold
+
+        if (buildMaxPartitionSize > shuffleHashJoinThreshold) {
+          logDebug(
+            s"Keep SMJ: buildMaxPartitionSize=$buildMaxPartitionSize > " +
+              s"shuffleHashJoinThreshold=$shuffleHashJoinThreshold")
+          return None
+        }
+
+        buildSideOpt
     }
 
-    val leftStage = leftStageOpt.get
-    val rightStage = rightStageOpt.get
-
-    // getRuntimeStatistics is meaningful only after stage materialization.
-    if (!leftStage.isMaterialized || !rightStage.isMaterialized) {
-      logDebug(
-        s"Skip SMJ -> SHJ: shuffle stages are not both materialized, " +
-          s"leftMaterialized=${leftStage.isMaterialized}, " +
-          s"rightMaterialized=${rightStage.isMaterialized}")
-      return None
-    }
-
-    val leftStats = leftStage.getRuntimeStatistics
-    val rightStats = rightStage.getRuntimeStatistics
-
-    if (leftStats == null || rightStats == null) {
-      logDebug("Skip SMJ -> SHJ: runtime statistics are unavailable.")
-      return None
-    }
-
-    val leftSize = leftStats.sizeInBytes
-    val rightSize = rightStats.sizeInBytes
-
-    // For SHJ, each task builds a hash table for one shuffle partition. The
-    // per-partition size therefore matters more than only the total stage size.
-    val leftMaxPartitionOpt = maxPartitionSize(leftStage)
-    val rightMaxPartitionOpt = maxPartitionSize(rightStage)
-
-    if (leftMaxPartitionOpt.isEmpty || rightMaxPartitionOpt.isEmpty) {
-      logDebug(
-        s"Skip SMJ -> SHJ: MapOutputStatistics unavailable, " +
-          s"leftMapStats=${leftStage.mapStats.isDefined}, " +
-          s"rightMapStats=${rightStage.mapStats.isDefined}")
-      return None
-    }
-
-    val leftMaxPartition = leftMaxPartitionOpt.get
-    val rightMaxPartition = rightMaxPartitionOpt.get
-
-    val buildSideOpt = chooseBuildSide(smj, leftSize, rightSize)
     if (buildSideOpt.isEmpty) {
       logDebug(
         s"Skip SMJ -> SHJ: joinType=${smj.joinType} has no supported hash build side.")
@@ -654,26 +704,6 @@ object OffloadJoin extends Logging {
     }
 
     val buildSide = buildSideOpt.get
-    val buildMaxPartitionSize = buildSide match {
-      case BuildLeft => leftMaxPartition
-      case BuildRight => rightMaxPartition
-    }
-
-    val shuffleHashJoinThreshold = GlutenConfig.get.shuffleHashJoinThreshold
-
-    logInfo(
-      s"AQE SMJ -> SHJ check: joinType=${smj.joinType}, " +
-        s"leftTotalSize=$leftSize, rightTotalSize=$rightSize, " +
-        s"leftMaxPartition=$leftMaxPartition, rightMaxPartition=$rightMaxPartition, " +
-        s"buildSide=$buildSide, buildMaxPartitionSize=$buildMaxPartitionSize, " +
-        s"threshold=$shuffleHashJoinThreshold")
-
-    if (buildMaxPartitionSize > shuffleHashJoinThreshold) {
-      logDebug(
-        s"Keep SMJ: buildMaxPartitionSize=$buildMaxPartitionSize > " +
-          s"shuffleHashJoinThreshold=$shuffleHashJoinThreshold")
-      return None
-    }
 
     // SHJ has no child-ordering requirement. Remove only the local SortExec nodes that
     // were inserted to satisfy this SMJ's join-key ordering.
@@ -693,10 +723,6 @@ object OffloadJoin extends Logging {
 
     val validateResult = shjTransformer.doValidate()
     if (validateResult.ok()) {
-      logInfo(
-        s"AQE converted SMJ -> SHJ: joinType=${smj.joinType}, " +
-          s"buildSide=$buildSide, buildMaxPartitionSize=$buildMaxPartitionSize, " +
-          s"threshold=$shuffleHashJoinThreshold")
       Some(shjTransformer)
     } else {
       logDebug(
