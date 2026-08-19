@@ -240,6 +240,14 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_write_jni_OrcColumnarBatchJniWr
         std::cout << "[warning] OrcColumnarBatchJniWriter : timezone not found in writerOptions" << std::endl;
     }
 
+    // Spark-compatible instant writer: modern raw tz offset (millis) from the JVM, used to
+    // match Spark's stored bytes (ORC's bundled tz data exposes LMT, not the modern offset).
+    // Always present (0 for the Iceberg/identity path).
+    jstring rawOffsetKey = env->NewStringUTF("timezone raw offset millis");
+    jlong rawOffsetMillis = env->CallLongMethod(writerOptionsJson, jsonMethodLong, rawOffsetKey);
+    int64_t timezoneRawOffsetMicros = static_cast<int64_t>(rawOffsetMillis) * 1000L;
+    env->DeleteLocalRef(rawOffsetKey);
+
     std::unique_ptr<common::JulianGregorianRebase> timestampRebase;
     std::string rebaseTz = getJsonString(env, writerOptionsJson, jsonMethodString, "timestamp rebase tz");
     std::string rebaseSwitches = getJsonString(env, writerOptionsJson, jsonMethodString, "timestamp rebase switches");
@@ -256,7 +264,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_write_jni_OrcColumnarBatchJniWr
     ::orc::Type *writeType = (::orc::Type *)schemaType;
 
     std::unique_ptr<OmniWriter> writer = createOmniWriterWithTimestampRebase(
-        (*writeType), stream, writerOptions, std::move(timestampRebase));
+        (*writeType), stream, writerOptions, std::move(timestampRebase), timezoneRawOffsetMicros);
     OmniWriter *writerNew = writer.release();
     return (jlong)(writerNew);
     JNI_FUNC_END(runtimeExceptionClass)

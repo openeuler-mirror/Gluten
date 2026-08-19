@@ -26,6 +26,7 @@ import org.apache.gluten.substrait.type.MapNode;
 import org.apache.gluten.substrait.type.StructNode;
 import org.apache.gluten.substrait.type.TypeNode;
 import org.apache.spark.sql.execution.vectorized.WritableColumnVector;
+import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.sql.types.BooleanType;
 import org.apache.spark.sql.types.ByteType;
 import org.apache.spark.sql.types.DataType;
@@ -222,6 +223,7 @@ public class OmniColumnVector extends WritableColumnVector {
     private ArrayVec arrayDataVec;
     private MapVec mapDataVec;
     private StructVec structVec;
+    private OmniColumnVector emptyStructDummyChild;
 
     private ConstVec constVec;
 
@@ -334,12 +336,31 @@ public class OmniColumnVector extends WritableColumnVector {
             ((OmniColumnVector)(getChild(0))).setVec(mapDataVec.getKeyVec());
             ((OmniColumnVector)(getChild(1))).setVec(mapDataVec.getValueVec());
         } else if (type instanceof StructType) {
-            this.structVec = (StructVec) vec;
-            for (int i = 0; i < ((StructType) type).fields().length; i++) {
-                ((OmniColumnVector)(getChild(i))).setVec(structVec.getChild(i));
-            }
+            bindStructVec(vec);
         } else {
             return;
+        }
+    }
+
+    private void bindStructVec(Vec vec) {
+        if (!(vec instanceof StructVec)) {
+            throw new IllegalArgumentException("Expected StructVec");
+        }
+        if (!(type instanceof StructType)) {
+            throw new IllegalStateException("Expected StructType");
+        }
+        StructType structType = (StructType) type;
+        this.structVec = (StructVec) vec;
+        for (int i = 0; i < structType.fields().length; i++) {
+            ColumnVector child = getChild(i);
+            if (!(child instanceof OmniColumnVector)) {
+                throw new IllegalStateException("Expected OmniColumnVector child");
+            }
+            ((OmniColumnVector) child).setVec(structVec.getChild(i));
+        }
+        if (structType.fields().length == 0) {
+            emptyStructDummyChild = new OmniColumnVector(capacity, DataTypes.BooleanType, true);
+            structVec.setChild(0, emptyStructDummyChild.getVec());
         }
     }
 
@@ -402,6 +423,10 @@ public class OmniColumnVector extends WritableColumnVector {
         if (structVec != null) {
             structVec.close();
             structVec = null;
+        }
+        if (emptyStructDummyChild != null) {
+            emptyStructDummyChild.close();
+            emptyStructDummyChild = null;
         }
     }
 
@@ -1255,6 +1280,10 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof StructType) {
             nova.hetu.omniruntime.type.StructDataType dataType = (nova.hetu.omniruntime.type.StructDataType) OmniExpressionAdaptor.sparkTypeToOmniTypeWithComplex(type, Metadata.empty());
             structVec = new StructVec(dataType, newCapacity, true);
+            if (((StructType) type).fields().length == 0) {
+                emptyStructDummyChild = new OmniColumnVector(newCapacity, DataTypes.BooleanType, true);
+                structVec.setChild(0, emptyStructDummyChild.getVec());
+            }
         } else {
             throw new UnsupportedOperationException("reserveInternal is not supported for type:" + type);
         }
@@ -1295,6 +1324,9 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof StructType) {
             for (int i = 0; i < ((StructType) type).fields().length; i++) {
                 structVec.setChild(i, ((OmniColumnVector) (getChild(i))).getVec());
+            }
+            if (((StructType) type).fields().length == 0 && emptyStructDummyChild != null) {
+                structVec.setChild(0, emptyStructDummyChild.getVec());
             }
         }
     }

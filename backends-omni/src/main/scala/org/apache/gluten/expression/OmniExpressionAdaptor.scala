@@ -1347,7 +1347,12 @@ object OmniExpressionAdaptor extends Logging {
       case map: MapType =>
         new MapDataType(sparkTypeToOmniTypeWithComplex(map.keyType), sparkTypeToOmniTypeWithComplex(map.valueType))
       case s: StructType =>
-        val children = s.fields.map(f => sparkTypeToOmniTypeWithComplex(f.dataType, f.metadata))
+        val children: Array[nova.hetu.omniruntime.`type`.DataType] =
+          if (s.fields.isEmpty) {
+            Array[nova.hetu.omniruntime.`type`.DataType](BooleanDataType.BOOLEAN)
+          } else {
+            s.fields.map(f => sparkTypeToOmniTypeWithComplex(f.dataType, f.metadata))
+          }
         new StructDataType(children)
       case NullType => BooleanDataType.BOOLEAN
       case _ =>
@@ -1391,8 +1396,18 @@ object OmniExpressionAdaptor extends Logging {
       case m: MapType =>
         new MapDataType(sparkTypeToOmniTypeWithComplex(m.keyType), sparkTypeToOmniTypeWithComplex(m.valueType))
       case s: StructType =>
-        val children = s.fields.map(f => sparkTypeToOmniTypeWithComplex(f.dataType, f.metadata))
-        val names = s.fields.map(_.name)
+        val children: Array[nova.hetu.omniruntime.`type`.DataType] =
+          if (s.fields.isEmpty) {
+            Array[nova.hetu.omniruntime.`type`.DataType](BooleanDataType.BOOLEAN)
+          } else {
+            s.fields.map(f => sparkTypeToOmniTypeWithComplex(f.dataType, f.metadata))
+          }
+        val names =
+          if (s.fields.isEmpty) {
+            Array("__omni_empty_struct")
+          } else {
+            s.fields.map(_.name)
+          }
         new StructDataType(children, names)
       case NullType =>
         BooleanDataType.BOOLEAN

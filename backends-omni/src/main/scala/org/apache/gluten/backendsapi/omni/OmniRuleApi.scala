@@ -77,6 +77,7 @@ object OmniRuleApi {
     injector.injectPreTransform(c => FallbackBroadcastHashJoin.apply(c.session))
 //    injector.injectPreTransform(c => BloomFilterMightContainJointRewriteRule.apply(c.session))
 //    injector.injectPreTransform(c => ArrowScanReplaceRule.apply(c.session))
+    PaimonOffloadRegistry.injectPreTransformRules(injector)
     HudiOffloadRegistry.injectPreTransformRules(injector)
     DeltaOffloadRegistry.injectPreTransformRules(injector)
 
@@ -84,6 +85,7 @@ object OmniRuleApi {
     val offloads =
       Seq(OffloadOthers(), OffloadExchange(), OffloadJoin(), OffloadWrite()) ++
         IcebergOffloadRegistry.offloads ++
+        PaimonOffloadRegistry.offloads ++
         HudiOffloadRegistry.offloads ++
         DeltaOffloadRegistry.offloads
     val validatorBuilder: GlutenConfig => Validator = conf =>
