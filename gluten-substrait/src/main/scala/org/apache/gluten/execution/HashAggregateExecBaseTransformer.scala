@@ -20,6 +20,7 @@ import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression._
+import org.apache.gluten.extension.MixedStorageTags
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.metrics.MetricsUpdater
 import org.apache.gluten.substrait.{AggregationParams, SubstraitContext}
@@ -75,6 +76,12 @@ abstract class HashAggregateExecBaseTransformer(
 
   override def metricsUpdater(): MetricsUpdater =
     BackendsApiManager.getMetricsApiInstance.genHashAggregateTransformerMetricsUpdater(metrics)
+
+  /**
+   * Optionally enables mixed (RowSegment) output on this transformer. Only backends that support
+   * mixed storage override this; the default leaves the node unchanged.
+   */
+  def withMixedOutputEnabled(enabled: Boolean): HashAggregateExecBaseTransformer = this
 
   override def verboseString(maxFields: Int): String = toString(verbose = true, maxFields)
 
@@ -185,7 +192,7 @@ object HashAggregateExecBaseTransformer {
   }
 
   def from(agg: BaseAggregateExec): HashAggregateExecBaseTransformer = {
-    BackendsApiManager.getSparkPlanExecApiInstance
+    val transformer = BackendsApiManager.getSparkPlanExecApiInstance
       .genHashAggregateExecTransformer(
         agg.requiredChildDistributionExpressions,
         agg.groupingExpressions,
@@ -195,6 +202,7 @@ object HashAggregateExecBaseTransformer {
         agg.resultExpressions,
         agg.child
       )
+    transformer.withMixedOutputEnabled(MixedStorageTags.getMixedOutput(agg))
   }
 }
 

@@ -137,6 +137,40 @@ public class OmniColumnVector extends WritableColumnVector {
         }
     }
 
+    /**
+     * Allocate {@link OmniColumnVector} columns for a batch. When {@code isMixed} is true, an extra
+     * slot is reserved at the end for the mixed vector (key columns + trailing MixedVec).
+     *
+     * @param capacity    number of rows
+     * @param typeNode    column types
+     * @param isInitVec   whether to initialize the underlying buffers
+     * @param isMixed     whether the batch is a mixed (row-column hybrid) batch
+     * @param columnCount number of columns used to size the array when isMixed is true
+     * @return allocated vectors
+     */
+    public static OmniColumnVector[] allocateColumns(int capacity, TypeNode[] typeNode,
+                                                     boolean isInitVec, boolean isMixed,
+                                                     int columnCount) {
+        int length = isMixed ? columnCount + 1 : typeNode.length;
+        OmniColumnVector[] vectors = new OmniColumnVector[length];
+        try {
+            for (int i = 0; i < typeNode.length; i++) {
+                vectors[i] = new OmniColumnVector(capacity, populateVec(typeNode[i]), isInitVec);
+            }
+            return vectors;
+        } catch (Exception e) {
+            if (isInitVec) {
+                for (int i = 0; i < typeNode.length; i++) {
+                    OmniColumnVector vec = vectors[i];
+                    if (vec != null) {
+                        vec.close();
+                    }
+                }
+            }
+            throw new RuntimeException("allocate columns failed. errmsg:" + e.getMessage());
+        }
+    }
+
     public static DataType populateVec(TypeNode typeNode) {
         String simpleName = typeNode.getClass().getSimpleName();
         switch (simpleName) {
@@ -226,6 +260,7 @@ public class OmniColumnVector extends WritableColumnVector {
     private OmniColumnVector emptyStructDummyChild;
 
     private ConstVec constVec;
+    private MixedVec mixedVec;
 
     // init vec
     private boolean initVec;
@@ -246,6 +281,9 @@ public class OmniColumnVector extends WritableColumnVector {
      * @return Vec
      */
     public Vec getVec() {
+        if (mixedVec != null) {
+            return mixedVec;
+        }
         if (constVec != null) {
             return constVec;
         }
@@ -296,6 +334,11 @@ public class OmniColumnVector extends WritableColumnVector {
      * @param vec Vec
      */
     public void setVec(Vec vec) {
+        if (vec instanceof MixedVec) {
+            this.mixedVec = (MixedVec) vec;
+            return;
+        }
+
         if (vec instanceof ConstVec) {
             this.constVec = (ConstVec) vec;
             return;
@@ -371,6 +414,10 @@ public class OmniColumnVector extends WritableColumnVector {
         if (constVec != null) {
             constVec.close();
             constVec = null;
+        }
+        if (mixedVec != null) {
+            mixedVec.close();
+            mixedVec = null;
         }
         if (booleanDataVec != null) {
             booleanDataVec.close();

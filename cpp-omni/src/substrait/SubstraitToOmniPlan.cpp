@@ -577,6 +577,10 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
 {
     auto childNode = ConvertSingleInput<::substrait::AggregateRel>(aggRel);
     AggregationNode::Step aggStep = toAggregationStep(aggRel);
+    bool mixedInputExpected = aggRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(aggRel.advanced_extension(), "mixedInput=");
+    bool mixedOutputEnabled = aggRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(aggRel.advanced_extension(), "mixedOutput=");
 
     PlanNodePtr expandPlanNode = nullptr;
     if (aggRel.has_advanced_extension() && std::dynamic_pointer_cast<const ExpandNode>(childNode) != nullptr) {
@@ -704,7 +708,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
     outputType = std::make_shared<DataTypes>(std::move(nodeOutputTypes));
     auto aggregationNode = std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys,
         sourceDataTypes, outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial,
-        isStatisticalAggregate, outputType, childNode, aggStep);
+        isStatisticalAggregate, outputType, childNode, aggStep, mixedInputExpected, mixedOutputEnabled);
     if (expandPlanNode) {
         if (auto expandNode = std::dynamic_pointer_cast<const ExpandNode>(expandPlanNode)) {
             return std::make_shared<GroupingNode>(NextPlanNodeId(), expandNode, aggregationNode);

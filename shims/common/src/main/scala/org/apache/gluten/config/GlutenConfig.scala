@@ -601,6 +601,10 @@ class GlutenConfig(conf: SQLConf) extends Logging {
     conf.getConf(AUTO_ADJUST_STAGE_RESOURCES_FALLEN_NODE_RATIO_THRESHOLD)
 
   def getHdfsReadMode: Int = conf.getConf(HDFS_READ_MODE)
+
+  def enableMixedStorage: Boolean = conf.getConf(ENABLE_MIXED_STORAGE)
+
+  def mixedStorageMinKeys: Int = conf.getConf(MIXED_STORAGE_MIN_KEYS)
 }
 
 object GlutenConfig {
@@ -2751,4 +2755,16 @@ object GlutenConfig {
           "hash aggregation keys.")
       .booleanConf
       .createWithDefault(false)
+
+  val ENABLE_MIXED_STORAGE = buildConf("spark.gluten.sql.columnar.backend.omni.mixedStorage.enabled")
+    .internal()
+    .doc("enable or disable mixed storage")
+    .booleanConf
+    .createWithDefault(false)
+
+  val MIXED_STORAGE_MIN_KEYS = buildConf("spark.gluten.sql.columnar.backend.omni.mixedStorage.minKeys")
+    .internal()
+    .doc("minimum number of group-by columns to enable mixed storage for a hash aggregate")
+    .intConf
+    .createWithDefault(6)
 }

@@ -63,6 +63,7 @@ jfieldID fidScales;
 jfieldID fidVecIds;
 jfieldID fidRowCount;
 jfieldID fidVecCount;
+jfieldID fidBatchHandle;
 
 static jint JNI_VERSION = JNI_VERSION_1_8;
 
@@ -168,7 +169,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     threadGetId = env->GetMethodID(threadClass, "getId", "()J");
 
     vecBatchCls = CreateGlobalClassReference(env, "nova/hetu/omniruntime/vector/VecBatch");
-    vecBatchInitMethodId = env->GetMethodID(vecBatchCls, "<init>", "(J[J[J[J[J[I[II)V");
+    vecBatchInitMethodId = env->GetMethodID(vecBatchCls, "<init>", "(J[J[J[J[J[I[III)V");
 
     runtimeAwareClass = CreateGlobalClassReference(env, "Lorg/apache/gluten/runtime/RuntimeAware;");
     runtimeAwareCtxHandle = getMethodIdOrError(env, runtimeAwareClass, "rtHandle", "()J");
@@ -190,6 +191,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     fidVecIds = env->GetFieldID(metaInfoClass, "vecNativeIdArray", "[J");
     fidRowCount = env->GetFieldID(metaInfoClass, "rowCount", "I");
     fidVecCount = env->GetFieldID(metaInfoClass, "vecCount", "I");
+    fidBatchHandle = env->GetFieldID(metaInfoClass, "batchHandle", "J");
 
     return JNI_VERSION;
 }

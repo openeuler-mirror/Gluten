@@ -16,12 +16,14 @@
  */
 package org.apache.gluten.vectorized;
 
+import nova.hetu.omniruntime.vector.MixedVec;
 import nova.hetu.omniruntime.vector.VecBatch;
 
 import org.apache.gluten.iterator.ClosableIterator;
 import org.apache.gluten.runtime.RuntimeAware;
 import org.apache.gluten.substrait.type.TypeNode;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
+import org.apache.spark.sql.types.DataTypes;
 
 import java.io.IOException;
 import java.util.List;
@@ -99,11 +101,21 @@ public class OmniColumnarBatchOutIterator extends ClosableIterator implements Ru
             return null; // stream ended
         }
         VecBatch vecBatch = transform(batchHandle);
+
+        boolean isMixed = vecBatch.getMixType() != 0;
+        List<TypeNode> typeNodes =
+                isMixed ? outputTypes.subList(0, vecBatch.getVectorCount())
+                        : outputTypes;
         OmniColumnVector[] omniColumnVectors = OmniColumnVector.allocateColumns(vecBatch.getRowCount(),
-                outputTypes.toArray(new TypeNode[0]), false);
-        for (int i = 0; i < omniColumnVectors.length; i++) {
+                typeNodes.toArray(new TypeNode[0]), false, isMixed, vecBatch.getVectorCount());
+        for (int i = 0; i < typeNodes.size(); i++) {
             omniColumnVectors[i].setVec(vecBatch.getVector(i));
         }
+        if (isMixed) {
+            omniColumnVectors[omniColumnVectors.length - 1] = new OmniColumnVector(1, DataTypes.LongType, false);
+            omniColumnVectors[omniColumnVectors.length - 1].setVec(new MixedVec(batchHandle));
+        }
+
         return new ColumnarBatch(omniColumnVectors, vecBatch.getRowCount());
     }
 

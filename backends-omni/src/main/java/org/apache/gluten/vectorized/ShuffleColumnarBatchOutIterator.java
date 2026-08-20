@@ -22,9 +22,12 @@ package org.apache.gluten.vectorized;
 import com.huawei.boostkit.spark.serialize.SerializerMeta;
 import com.huawei.boostkit.spark.serialize.ShuffleDataSerializer;
 
+import nova.hetu.omniruntime.vector.MixedVec;
+
 import org.apache.gluten.iterator.ClosableIterator;
 import org.apache.gluten.runtime.RuntimeAware;
 import org.apache.gluten.substrait.type.TypeNode;
+import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
@@ -81,16 +84,24 @@ public class ShuffleColumnarBatchOutIterator extends ClosableIterator implements
 
         SerializerMeta meta = nativeMetaInfo(iterHandle);
 
+        long mixedBatchHandle = meta.getBatchHandle();
         int vecCount = meta.getVecCount();
         int rowCount = meta.getRowCount();
         int[] typeIdArray = meta.getTypeIdArray();
         int[] precisionArray = meta.getPrecisionArray();
         int[] scaleArray = meta.getScaleArray();
         long[] vecNativeIdArray = meta.getVecNativeIdArray();
-        ColumnVector[] vecs = new ColumnVector[vecCount];
+
+        boolean isMixed = mixedBatchHandle != 0;
+        ColumnVector[] vecs = new ColumnVector[vecCount + (isMixed ? 1 : 0)];
         for (int i = 0; i < vecCount; i++) {
             vecs[i] = ShuffleDataSerializer
                     .buildVector(typeIdArray[i], vecNativeIdArray[i], rowCount, precisionArray[i], scaleArray[i]);
+        }
+        if (isMixed) {
+            OmniColumnVector mixedVec = new OmniColumnVector(1, DataTypes.LongType, false);
+            mixedVec.setVec(new MixedVec(mixedBatchHandle));
+            vecs[vecCount] = mixedVec;
         }
         return new ColumnarBatch(vecs, rowCount);
     }

@@ -31,7 +31,7 @@ import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.{OmniHLLRewriteRule, RewriteAQEShuffleRead}
 import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast, CombineProject}
-import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, OmniRewriteCollectFuncRule, RewriteAQEShuffleRead, OmniRewriteJoin, AdaptiveHashAggregateRule}
+import org.apache.gluten.extension.{AdaptiveHashAggregateRule, FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, MixedStorageFallbackGuard, OmniMixedStoragePrepRule, OmniRewriteCollectFuncRule, OmniRewriteJoin, PushDownFilterToOmniScan, RewriteAQEShuffleRead}
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenAutoAdjustStageResourceProfile, GlutenFallbackReporter}
 
@@ -52,6 +52,7 @@ object OmniRuleApi {
     injector.injectQueryStagePrepRule(FallbackMultiCodegens.apply)
     injector.injectQueryStagePrepRule(FallbackBroadcastHashJoinPrepQueryStage.apply)
     injector.injectQueryStagePrepRule(DedupLeftSemiJoin.apply)
+    injector.injectQueryStagePrepRule(OmniMixedStoragePrepRule.apply)
     injector.injectPlannerStrategy(_ => ShuffleJoinStrategy)
     injector.injectOptimizerRule(OmniRewriteCollectFuncRule.apply)
     injector.injectOptimizerRule(OmniHLLRewriteRule.apply)
@@ -124,6 +125,7 @@ object OmniRuleApi {
       c => ExpandFallbackPolicy(c.ac.isAdaptiveContext(), c.ac.originalPlan()))
 
     // Gluten columnar: Post rules.
+    injector.injectPost(c => MixedStorageFallbackGuard(c.session))
     injector.injectPost(c => RemoveTopmostColumnarToRow(c.session, c.ac.isAdaptiveContext()))
     SparkShimLoader.getSparkShims
       .getExtendedColumnarPostRules()

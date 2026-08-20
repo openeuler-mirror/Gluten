@@ -61,6 +61,7 @@ private class ColumnarBatchSerializerInstance(
   private val conf = SparkEnv.get.conf
 
   private val shuffleCompressBlockSize = columnarConf.omniColumnarShuffleCompressBlockSize
+  private val enableMix = columnarConf.enableMixedStorage
   private val enableShuffleCompress = conf.getBoolean("spark.shuffle.compress", defaultValue = true)
 
   private val jniWrapper = new SparkJniWrapper()
@@ -84,7 +85,7 @@ private class ColumnarBatchSerializerInstance(
       private val dIn: JniByteInputStream = JniByteInputStreams.create(in)
 
       private val shuffleReaderHandle =
-        jniWrapper.makeNativeDeserializer(dIn, shuffleCompressionCodec, shuffleCompressBlockSize, isRowShuffle)
+        jniWrapper.makeNativeDeserializer(dIn, shuffleCompressionCodec, shuffleCompressBlockSize, isRowShuffle, enableMix)
       private var cb: ColumnarBatch = _
       private val wrappedOut: ShuffleColumnarBatchOutIterator = new ShuffleColumnarBatchOutIterator(shuffleReaderHandle)
 
@@ -131,14 +132,14 @@ private class ColumnarBatchSerializerInstance(
       }
 
       override def close(): Unit = {
+        if (!closeCalled.compareAndSet(false, true)) {
+          return
+        }
         if (numBatchesTotal > 0) {
           readBatchNumRows.set(numRowsTotal.toDouble / numBatchesTotal)
         }
         numOutputRows += numRowsTotal
         dIn.close()
-        if (!closeCalled.compareAndSet(false, true)) {
-          return
-        }
         jniWrapper.closeDeserializer(shuffleReaderHandle)
       }
     }

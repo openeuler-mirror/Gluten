@@ -32,6 +32,8 @@ public class SerializerMeta {
     int[] scaleArray;
     long[] vecNativeIdArray;
 
+    long batchHandle;
+
 
     public int getRowCount() {
         return rowCount;
@@ -55,5 +57,9 @@ public class SerializerMeta {
 
     public long[] getVecNativeIdArray() {
         return vecNativeIdArray;
+    }
+
+    public long getBatchHandle() {
+        return batchHandle;
     }
 }

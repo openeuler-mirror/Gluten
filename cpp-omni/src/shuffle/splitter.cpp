@@ -2407,6 +2407,7 @@ int Splitter::Stop() {
     } else {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplit());
     }
+
     if (nullptr == vecBatchProto) {
         throw std::runtime_error("delete nullptr error for free protobuf vecBatch memory");
     }
@@ -2511,4 +2512,22 @@ void Splitter::DeserializeProtoVecToOmniVector(const spark::Vec& protoVec, omnir
             omniVec->SetNull(j);
         }
     }
+}
+
+int Splitter::SpillToTmpFileByMixed()
+{
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        CacheVectorBatchForMixed(pid, true);
+        partition_buffer_size_[pid] = 0;
+    }
+
+    options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
+    WriteDataFileProtoByMixed();
+    std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
+    spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
+    ReleaseVarcharVector();
+    num_row_splited_ = 0;
+    cached_vectorbatch_size_ = 0;
+
+    return 0;
 }

@@ -210,4 +210,5 @@ extern jfieldID fidScales;
 extern jfieldID fidVecIds;
 extern jfieldID fidRowCount;
 extern jfieldID fidVecCount;
+extern jfieldID fidBatchHandle;
 #endif //THESTRAL_PLUGIN_MASTER_JNI_COMMON_H
