@@ -619,6 +619,10 @@ object OffloadJoin extends Logging {
           Some(BuildLeft)
         } else if (hintRight && rightBuildable) {
           Some(BuildRight)
+        }  else if (leftBuildable) {
+          Some(BuildLeft)
+        } else if (rightBuildable) {
+          Some(BuildRight)
         } else {
           None
         }
