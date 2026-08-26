@@ -64,7 +64,9 @@ public class PaimonWriteJniWrapper implements RuntimeAware {
     private static final Logger LOG = LoggerFactory.getLogger(PaimonWriteJniWrapper.class);
     private static final int FORMAT_ORC = 0;
     private static final int FORMAT_PARQUET = 1;
-    private static final String DEFAULT_PARTITION_PATH = "__HIVE_DEFAULT_PARTITION__";
+
+    // Must match Paimon table option partition.default-name (default: __DEFAULT_PARTITION__).
+    private static final String DEFAULT_PARTITION_PATH = "__DEFAULT_PARTITION__";
     private static final String HDFS_SCHEME_WITH_SLASH = "hdfs:/";
     private static final String HDFS_SCHEME_WITH_AUTHORITY = "hdfs://";
     private static final ObjectMapper MAPPER = new ObjectMapper();

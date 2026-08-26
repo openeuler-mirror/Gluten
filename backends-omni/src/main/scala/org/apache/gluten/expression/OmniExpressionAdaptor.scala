@@ -1217,7 +1217,8 @@ object OmniExpressionAdaptor extends Logging {
       case DoubleType => OMNI_DOUBLE_TYPE
       case FloatType => OMNI_FLOAT_TYPE
       case BooleanType => OMNI_BOOLEAN_TYPE
-      case StringType => OMNI_VARCHAR_TYPE
+      case StringType | _: VarcharType => OMNI_VARCHAR_TYPE
+      case _: CharType => OMNI_CHAR_TYPE
       case BinaryType => OMNI_BINARY_TYPE
       case DateType => OMNI_DATE_TYPE
       case TimestampType => OMNI_TIMESTAMP_TYPE
@@ -1244,6 +1245,14 @@ object OmniExpressionAdaptor extends Logging {
           jsonObject
             .put(jsonAttributeKey, omniTypeIdStr.toInt)
             .put("width", DEFAULT_STRING_TYPE_LENGTH)
+        case v: VarcharType =>
+          jsonObject
+            .put(jsonAttributeKey, omniTypeIdStr.toInt)
+            .put("width", v.length)
+        case c: CharType =>
+          jsonObject
+            .put(jsonAttributeKey, omniTypeIdStr.toInt)
+            .put("width", c.length)
         case dt: DecimalType =>
           jsonObject
             .put(jsonAttributeKey, omniTypeIdStr.toInt)
@@ -1332,6 +1341,10 @@ object OmniExpressionAdaptor extends Logging {
         BooleanDataType.BOOLEAN
       case StringType =>
         new VarcharDataType(getStringLength(metadata))
+      case v: VarcharType =>
+        new VarcharDataType(v.length)
+      case c: CharType =>
+        new CharDataType(c.length)
       case BinaryType =>
         new VarBinaryDataType(getStringLength(metadata))
       case DateType =>
@@ -1381,6 +1394,10 @@ object OmniExpressionAdaptor extends Logging {
         BooleanDataType.BOOLEAN
       case StringType =>
         new VarcharDataType(getStringLength(metadata))
+      case v: VarcharType =>
+        new VarcharDataType(v.length)
+      case c: CharType =>
+        new CharDataType(c.length)
       case BinaryType =>
         new VarBinaryDataType(getStringLength(metadata))
       case DateType =>
@@ -1455,6 +1472,20 @@ object OmniExpressionAdaptor extends Logging {
           .put("dataType", omniDataType.toInt)
           .put("colVal", colVal)
           .put("width", getStringLength(metadata))
+          .toString
+      case v: VarcharType =>
+        new JsonObject()
+          .put("exprType", "FIELD_REFERENCE")
+          .put("dataType", omniDataType.toInt)
+          .put("colVal", colVal)
+          .put("width", v.length)
+          .toString
+      case c: CharType =>
+        new JsonObject()
+          .put("exprType", "FIELD_REFERENCE")
+          .put("dataType", omniDataType.toInt)
+          .put("colVal", colVal)
+          .put("width", c.length)
           .toString
       case dt: DecimalType =>
         var omniDataType = OMNI_DECIMAL128_TYPE
