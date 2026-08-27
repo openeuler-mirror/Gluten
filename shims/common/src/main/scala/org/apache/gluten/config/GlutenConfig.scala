@@ -535,6 +535,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableOmniRowShuffle: Boolean = conf.getConf(ENABLE_OMNI_ROW_SHUFFLE)
 
+  def enableOmniCascadingJoin: Boolean = conf.getConf(ENABLE_OMNI_CASCADING_JOIN)
+
   def omniRowShuffleColumnsThreshold: Int =
     conf.getConf(COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD)
   
@@ -833,6 +835,7 @@ object GlutenConfig {
       ENABLE_JOIN_REORDER_ENHANCE.key,
       ENABLE_SHUFFLE_BATCH_MERGE.key,
       ENABLE_OMNI_ROW_SHUFFLE.key,
+      ENABLE_OMNI_CASCADING_JOIN.key,
       COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD.key,
       COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES.key,
       COLUMNAR_OMNI_MAX_ROW_COUNT.key,
@@ -2609,6 +2612,13 @@ object GlutenConfig {
       .doc("enable or disable row shuffle")
       .booleanConf
       .createWithDefault(true)
+
+  val ENABLE_OMNI_CASCADING_JOIN =
+    buildConf("spark.gluten.sql.columnar.backend.omni.cascadingJoin.enabled")
+      .internal()
+      .doc("enable or disable omni cascading join rewrite")
+      .booleanConf
+      .createWithDefault(false)
 
   val COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD =
     buildConf("spark.gluten.sql.columnar.backend.omni.rowShuffle.columnsThreshold")

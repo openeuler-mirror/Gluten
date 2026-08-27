@@ -144,6 +144,17 @@ public:
     /// Used to convert Substrait CrossRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::CrossRel &crossRel);
 
+    /// Create CascadingJoinNode for multi-table joins without intermediate results.
+    /// This method traverses nested JoinRel structure to collect all build nodes
+    /// and creates a single CascadingJoinNode that executes all joins in one pass.
+    ///
+    /// @param joinRel The outermost JoinRel in the cascading chain
+    /// @param cascadeLevels Expected number of cascade levels from extension parameter
+    /// @return CascadingJoinNode containing all build nodes and join information
+    PlanNodePtr CreateCascadingJoinNode(
+        const ::substrait::JoinRel &joinRel,
+        int32_t cascadeLevels);
+
     /// Used to convert Substrait AggregateRel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::AggregateRel &aggRel);
 
@@ -173,6 +184,13 @@ public:
     PlanNodePtr ToOmniPlan(const ::substrait::ReadRel &sRead);
 
     PlanNodePtr ConstructValueStreamNode(const ::substrait::ReadRel &sRead, int32_t streamIdx);
+
+    /// Used by CascadingJoin to construct a ValueStreamNode without changing
+    /// the existing ConstructValueStreamNode behavior.
+    PlanNodePtr ConstructValueStreamNode(
+        const ::substrait::ReadRel &sRead,
+        int32_t streamIdx,
+        bool isCascading);
 
     /// Used to convert Substrait Rel into Omni PlanNode.
     PlanNodePtr ToOmniPlan(const ::substrait::Rel &sRel);
@@ -270,6 +288,10 @@ private:
     /// if output order is 'kDriect'.
     PlanNodePtr ProcessEmit(const ::substrait::RelCommon &relCommon, const PlanNodePtr &noEmitNode);
 
+    /// Convert one CascadingJoin input subtree. Unary nodes such as ProjectRel/FilterRel
+    /// are preserved; only the terminal stream ReadRel uses the Cascading ValueStream overload.
+    PlanNodePtr ToOmniPlanCascadingInput(const ::substrait::Rel &rel);
+
     /// Check the Substrait type extension only has one unknown extension.
     static bool CheckTypeExtension(const ::substrait::Plan &substraitPlan);
 
@@ -334,5 +356,14 @@ private:
 
     /// A flag used to specify validation.
     bool validationMode = false;
+
+    /// True only while converting a CascadingJoin probe/build input subtree.
+    bool cascadingInputMode = false;
 };
+
+/// Helper function to check if a JoinRel is part of a cascading join chain.
+/// @param joinRel The JoinRel to check
+/// @return true if the JoinRel has isCascading=1 in its extension, false otherwise
+bool IsCascadingJoinRel(const ::substrait::JoinRel& joinRel);
+
 } // namespace omniruntime

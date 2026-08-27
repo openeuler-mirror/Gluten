@@ -35,6 +35,12 @@ case class JoinParams() {
 
   // Whether the join is with condition
   var isWithCondition = false
+
+  // Whether this is a cascading join
+  var isCascading = false
+
+  // Number of cascade levels (number of joins in the chain)
+  var cascadeLevels = 0
 }
 
 case class AggregationParams() {
