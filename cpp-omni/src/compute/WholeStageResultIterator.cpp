@@ -159,7 +159,7 @@ void WholeStageResultIterator::ConstructPartitionColumns(
     for (const auto& partitionColumn : map) {
         auto key = partitionColumn.first;
         const auto value = partitionColumn.second;
-        if (value == kHiveDefaultPartition) {
+        if (IsNullPartitionMarker(value)) {
             partitionKeys[key] = std::nullopt;
         } else {
             partitionKeys[key] = value;

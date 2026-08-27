@@ -201,6 +201,13 @@ const std::string kHashAggNormalizedKeyEnabled =
 
 // others
 const std::string kHiveDefaultPartition = "__HIVE_DEFAULT_PARTITION__";
+// Paimon partition.default-name default (CoreOptions); null partition directory marker on read.
+const std::string kPaimonDefaultPartition = "__DEFAULT_PARTITION__";
+
+inline bool IsNullPartitionMarker(const std::string& value)
+{
+    return value == kHiveDefaultPartition || value == kPaimonDefaultPartition;
+}
 
 inline std::unordered_map<std::string, std::string> ParseConfMap(const uint8_t *planData, const int32_t planDataLength)
 {

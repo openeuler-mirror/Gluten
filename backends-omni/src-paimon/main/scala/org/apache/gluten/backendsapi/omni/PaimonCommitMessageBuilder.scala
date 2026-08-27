@@ -28,7 +28,8 @@ import scala.collection.JavaConverters._
 /** Builds Paimon Spark writer commit messages from Omni-written file metadata. */
 object PaimonCommitMessageBuilder {
   private val mapper = new ObjectMapper()
-  private val DefaultPartitionName = "__HIVE_DEFAULT_PARTITION__"
+  // Must match Paimon CoreOptions partition.default-name (default: __DEFAULT_PARTITION__).
+  private val DefaultPartitionName = "__DEFAULT_PARTITION__"
 
   /** Task-side message: only JSON metadata crosses executor -> driver boundary. */
   def packageTaskCommitMessage(fileInfoJsonArray: Array[String]): WriterCommitMessage = {

@@ -302,8 +302,9 @@ object GlutenPaimonSourceUtil extends Logging {
     Try {
       val uri = new URI(path)
       val scheme = Option(uri.getScheme).map(_.toLowerCase)
+      val defaultFs = defaultFsFromSpark()
       if (scheme.exists(s => s == "hdfs" || s == "viewfs") && uri.getAuthority == null) {
-        defaultFsFromSpark()
+        defaultFs
           .map(new URI(_))
           .filter(defaultUri =>
             Option(defaultUri.getScheme).map(_.toLowerCase) == scheme &&
@@ -315,6 +316,14 @@ object GlutenPaimonSourceUtil extends Logging {
               uri.getPath,
               uri.getQuery,
               uri.getFragment).toString
+          }
+          .getOrElse(path)
+      } else if (scheme.isEmpty && path.startsWith("/")) {
+        // Paimon may return warehouse-relative paths; native HDFS reader needs hdfs://authority/path.
+        defaultFs
+          .map { fs =>
+            val base = if (fs.endsWith("/")) fs.substring(0, fs.length - 1) else fs
+            base + path
           }
           .getOrElse(path)
       } else {

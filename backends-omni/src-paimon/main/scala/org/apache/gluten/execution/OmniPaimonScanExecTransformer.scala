@@ -52,7 +52,17 @@ class OmniPaimonScanExecTransformer(
   }
 
   override protected def buildPushFilterJson: String = {
-    val sourceFilter = FilterConverter.toSourceFilters(filterExprs()).orNull
+    // Partition columns are not stored inside the ORC/Parquet data files, so filters that
+    // reference partition columns (e.g. IsNotNull(sr_returned_date_sk) on a partitioned table)
+    // must not be pushed down to the native file-level reader. They are handled by partition
+    // pruning instead. Stripping them avoids "Field X does not exist" errors in
+    // OrcPushFilterBuilder/ParquetPushFilterBuilder, whose schema (getDataSchema) excludes
+    // partition columns.
+    val partitionNames = getPartitionSchema.fieldNames.toSet
+    val dataOnlyFilters = filterExprs().filterNot { expr =>
+      expr.references.exists(attr => partitionNames.contains(attr.name))
+    }
+    val sourceFilter = FilterConverter.toSourceFilters(dataOnlyFilters).orNull
     fileFormat match {
       case ReadFileFormat.OrcReadFormat =>
         new OrcPushFilterBuilder(getDataSchema, getDataSchema).buildPushFilterJson(
