@@ -1906,9 +1906,11 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
         RowBatch *rowBatch = VectorHelper::TransRowBatchFromVectorBatch(vecBatch);
         for (int i = 0; i < rowCount; ++i) {
             RowInfo *rowInfo = rowBatch->Get(i);
-            partition_rows[0].emplace_back(rowInfo);
+            partition_rows[0].emplace_back(std::unique_ptr<RowInfo>(rowInfo));
             total_input_size += rowInfo->length;
         }
+        delete rowBatch;
+        delete vecBatch;
     } else {
         auto tmpVectorBatch = new VectorBatch(rowCount);
         partition_id_.resize(rowCount);
@@ -1972,7 +1974,7 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
             for (; pos < end; ++pos) {
                 rowBuffer->TransValueFromVectorBatch(tmpVectorBatch, static_cast<int32_t>(row_offset_row_id_[pos]));
                 auto oneRowLen = rowBuffer->FillBuffer(partition_arena_[pid]);
-                partition_rows[pid].emplace_back(new RowInfo(rowBuffer->TakeRowBuffer(), oneRowLen));
+                partition_rows[pid].emplace_back(std::make_unique<RowInfo>(rowBuffer->TakeRowBuffer(), oneRowLen, false));
                 total_input_size += oneRowLen;
             }
         }

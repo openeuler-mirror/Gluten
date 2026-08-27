@@ -33,7 +33,7 @@
 // @param partition_id         目标分区编号
 // @param out                  Arrow 文件输出流（已选压缩/非压缩模式）
 // @param header               文件头（含版本、layout=ROW、schema）
-// @param partitionRows        [pid] 的 RowInfo* 列表（const 引用，调用方负责清理）
+// @param partitionRows        [pid] 的 RowInfo 列表（unique_ptr 持有，const 引用，调用方负责清理）
 // @param spillBatchRowNum     每批最大行数（分批阈值）
 // @param pool                 Arrow 内存池适配器（统一记账）
 // @param headerAlreadyWritten 若为 true，跳过文件头写出（同一文件多分区连续写时复用）
@@ -41,7 +41,7 @@
 int32_t ArrowWriteRowPartition(int32_t partition_id,
                                ArrowOutputStream& out,
                                const ArrowFileHeader& header,
-                               const std::vector<std::vector<RowInfo*>>& partitionRows,
+                               const std::vector<std::vector<std::unique_ptr<RowInfo>>>& partitionRows,
                                uint64_t spillBatchRowNum,
                                OmniMemoryPoolAdapter& pool,
                                bool headerAlreadyWritten);
