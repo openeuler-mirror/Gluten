@@ -1476,9 +1476,11 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
         RowBatch *rowBatch = VectorHelper::TransRowBatchFromVectorBatch(vecBatch);
         for (int i = 0; i < rowCount; ++i) {
             RowInfo *rowInfo = rowBatch->Get(i);
-            partition_rows[0].emplace_back(rowInfo);
+            partition_rows[0].emplace_back(std::unique_ptr<RowInfo>(rowInfo));
             total_input_size += rowInfo->length;
         }
+        delete rowBatch;
+        delete vecBatch;
     } else {
         auto tmpVectorBatch = new VectorBatch(rowCount);
         partition_id_.resize(rowCount);
@@ -1542,7 +1544,7 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
             for (; pos < end; ++pos) {
                 rowBuffer->TransValueFromVectorBatch(tmpVectorBatch, static_cast<int32_t>(row_offset_row_id_[pos]));
                 auto oneRowLen = rowBuffer->FillBuffer(partition_arena_[pid]);
-                partition_rows[pid].emplace_back(new RowInfo(rowBuffer->TakeRowBuffer(), oneRowLen));
+                partition_rows[pid].emplace_back(std::make_unique<RowInfo>(rowBuffer->TakeRowBuffer(), oneRowLen, false));
                 total_input_size += oneRowLen;
             }
         }
@@ -1975,13 +1977,13 @@ int32_t Splitter::ProtoWritePartitionByRow(int32_t partition_id, std::unique_ptr
         std::vector<int32_t> offset_vec(onceCopyRow + 1, 0);
         auto rowInfoPtr = partition_rows[partition_id].data() + offset;
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
+            RowInfo *rowInfo = rowInfoPtr[i].get();
             offset_vec[i + 1] = offset_vec[i] + rowInfo->length;
         }
         std::string rows;
         rows.reserve(offset_vec[onceCopyRow]);
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
+            RowInfo *rowInfo = rowInfoPtr[i].get();
             rows.append(reinterpret_cast<const char*>(rowInfo->row), rowInfo->length);
         }
         protoRowBatch->set_rows(std::move(rows));
@@ -2137,13 +2139,13 @@ int Splitter::protoSpillPartitionByRow(int32_t partition_id, std::unique_ptr<Buf
         std::vector<int32_t> offset_vec(onceCopyRow + 1, 0);
         auto rowInfoPtr = partition_rows[partition_id].data() + offset;
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
+            RowInfo *rowInfo = rowInfoPtr[i].get();
             offset_vec[i + 1] = offset_vec[i] + rowInfo->length;
         }
         std::string rows;
         rows.reserve(offset_vec[onceCopyRow]);
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo *rowInfo = rowInfoPtr[i];
+            RowInfo *rowInfo = rowInfoPtr[i].get();
             rows.append(reinterpret_cast<const char*>(rowInfo->row), rowInfo->length);
         }
         protoRowBatch->set_rows(std::move(rows));
