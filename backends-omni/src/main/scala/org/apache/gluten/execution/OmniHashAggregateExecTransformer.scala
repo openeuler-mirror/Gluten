@@ -22,7 +22,8 @@ import org.apache.gluten.expression.{OmniExpressionAdaptor, OmniRegrMeasureBuild
 import org.apache.gluten.expression.OmniExpressionAdaptor.{sparkTypeToOmniTypeWithComplex, toOmniAggFunType}
 import org.apache.gluten.expression.aggregate.{OmniHLLAdapter,OmniCollectSet, OmniCollectList}
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
-import org.apache.gluten.extension.ValidationResult
+import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.extension.{HashAggEligibility, ValidationResult}
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
 import org.apache.gluten.substrait.expression.{AggregateFunctionNode, ExpressionBuilder, ExpressionNode}
 import org.apache.gluten.substrait.extensions.{AdvancedExtensionNode, ExtensionBuilder}
@@ -32,6 +33,8 @@ import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
+
+import org.apache.spark.internal.Logging
 
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.types._
@@ -303,6 +306,10 @@ abstract class HashAggregateExecTransformer(
 
   protected def allowFlush: Boolean = false
 
+  def mixedInputExpected: Boolean = false
+
+  def mixedOutputEnabled: Boolean = false
+
   private def getAggRelInternal(
       context: SubstraitContext,
       originalInputAttributes: Seq[Attribute],
@@ -406,7 +413,9 @@ abstract class HashAggregateExecTransformer(
     }
 
     val allowFlushStr = if (allowFlush) "1" else "0"
-    val str = s"allowFlush=$allowFlushStr\n"
+    val mixedInputStr = if (mixedInputExpected) "1" else "0"
+    val mixedOutputStr = if (mixedOutputEnabled) "1" else "0"
+    val str = s"allowFlush=$allowFlushStr\nmixedInput=$mixedInputStr\nmixedOutput=$mixedOutputStr\n"
     val optimization =
       BackendsApiManager.getTransformerApiInstance.packPBMessage(
         StringValue.newBuilder.setValue(str).build)
@@ -425,7 +434,9 @@ case class OmniAdaptiveHashAggregateExecTransformer(
   aggregateAttributes: Seq[Attribute],
   initialInputBufferOffset: Int,
   resultExpressions: Seq[NamedExpression],
-  child: SparkPlan)
+  child: SparkPlan,
+  override val mixedInputExpected: Boolean = false,
+  override val mixedOutputEnabled: Boolean = false)
   extends HashAggregateExecTransformer(
     requiredChildDistributionExpressions,
     groupingExpressions,
@@ -433,9 +444,26 @@ case class OmniAdaptiveHashAggregateExecTransformer(
     aggregateAttributes,
     initialInputBufferOffset,
     resultExpressions,
-    child) {
+    child)
+  with Logging {
 
   override protected def allowFlush: Boolean = true
+
+  override def withMixedOutputEnabled(enabled: Boolean): HashAggregateExecBaseTransformer = {
+    if (!enabled) { return this }
+    val shouldEnable = GlutenConfig.get.enableMixedStorage &&
+      aggregateExpressions.forall(p => p.mode == Partial || p.mode == PartialMerge) &&
+      !groupingExpressions.exists(_.dataType.isInstanceOf[MapType]) &&
+      !HashAggEligibility.isAggInputAlreadyDistributedWithAggKeys(this)
+    if (!shouldEnable) {
+      logWarning(s"Mixed storage not enabled for ${nodeName}: conditions not met in withMixedOutputEnabled")
+    }
+    if (shouldEnable != mixedOutputEnabled) {
+      copy(mixedOutputEnabled = shouldEnable)
+    } else {
+      this
+    }
+  }
 
   override def simpleString(maxFields: Int): String =
     s"OmniAdaptive${super.simpleString(maxFields)}"
@@ -455,7 +483,9 @@ case class OmniHashAggregateExecTransformer(
   aggregateAttributes: Seq[Attribute],
   initialInputBufferOffset: Int,
   resultExpressions: Seq[NamedExpression],
-  child: SparkPlan)
+  child: SparkPlan,
+  override val mixedInputExpected: Boolean = false,
+  override val mixedOutputEnabled: Boolean = false)
   extends HashAggregateExecTransformer(
     requiredChildDistributionExpressions,
     groupingExpressions,
@@ -463,9 +493,26 @@ case class OmniHashAggregateExecTransformer(
     aggregateAttributes,
     initialInputBufferOffset,
     resultExpressions,
-    child) {
+    child)
+  with Logging {
 
   override protected def allowFlush: Boolean = false
+
+  override def withMixedOutputEnabled(enabled: Boolean): HashAggregateExecBaseTransformer = {
+    if (!enabled) { return this }
+    val shouldEnable = GlutenConfig.get.enableMixedStorage &&
+      aggregateExpressions.forall(p => p.mode == Partial || p.mode == PartialMerge) &&
+      !groupingExpressions.exists(_.dataType.isInstanceOf[MapType]) &&
+      !HashAggEligibility.isAggInputAlreadyDistributedWithAggKeys(this)
+    if (!shouldEnable) {
+      logWarning(s"Mixed storage not enabled for ${nodeName}: conditions not met in withMixedOutputEnabled")
+    }
+    if (shouldEnable != mixedOutputEnabled) {
+      copy(mixedOutputEnabled = shouldEnable)
+    } else {
+      this
+    }
+  }
 
   override def simpleString(maxFields: Int): String =
     s"Omni${super.simpleString(maxFields)}"

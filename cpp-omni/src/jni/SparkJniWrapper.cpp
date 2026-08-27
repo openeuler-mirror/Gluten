@@ -189,6 +189,24 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSp
     JNI_FUNC_END_WITH_VECBATCH(runtimeExceptionClass, splitter->GetInputVecBatch())
 }
 
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_mixedSplit(JNIEnv *env, jobject jObj,
+    jlong splitter_addr, jlong jVecBatchAddress)
+{
+    auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
+    if (!splitter) {
+        std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
+        env->ThrowNew(runtimeExceptionClass, error_message.c_str());
+        return -1;
+    }
+
+    auto vecBatch = reinterpret_cast<MixedVectorBatch*>(jVecBatchAddress);
+    splitter->SetInputVecBatch(vecBatch);
+    JNI_FUNC_START
+    splitter->SplitByMixed(vecBatch);
+    return 0L;
+    JNI_FUNC_END_WITH_VECBATCH(runtimeExceptionClass, splitter->GetInputVecBatch())
+}
+
 JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(JNIEnv *env, jobject,
     jlong splitter_addr)
 {
@@ -234,6 +252,30 @@ JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_row
             splitter->TotalBytesSpilled(), partition_length_arr);
 
         return split_result;
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_mixedStop(JNIEnv *env, jobject,
+    jlong splitter_addr, jboolean isMixed)
+{
+    JNI_FUNC_START
+    auto splitter = reinterpret_cast<Splitter*>(splitter_addr);
+    if (!splitter) {
+        std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
+        env->ThrowNew(runtimeExceptionClass, error_message.c_str());
+        return nullptr;
+    }
+    splitter->StopByMixed();
+
+    const auto &partition_length = splitter->PartitionLengths();
+    auto partition_length_arr = env->NewLongArray(partition_length.size());
+    auto src = reinterpret_cast<const jlong*>(partition_length.data());
+    env->SetLongArrayRegion(partition_length_arr, 0, partition_length.size(), src);
+    jobject split_result = env->NewObject(splitResultClass, splitResultConstructor, splitter->TotalComputePidTime(),
+        splitter->TotalWriteTime(), splitter->TotalSpillTime(), splitter->TotalBytesWritten(),
+        splitter->TotalBytesSpilled(), partition_length_arr);
+
+    return split_result;
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
@@ -412,7 +454,7 @@ static jobject Transform(JNIEnv *env, VectorBatch &result)
 
     // create vector batch java object.
     jobject obj = env->NewObject(vecBatchCls, vecBatchInitMethodId, (jlong)((int64_t)(&result)), jVecAddresses,
-        jVecValueBufAddrs, jVecNullBufAddrs, jVecOffsetsBufAddrs, jVecEncodingIds, jDataTypeIds, result.GetRowCount());
+        jVecValueBufAddrs, jVecNullBufAddrs, jVecOffsetsBufAddrs, jVecEncodingIds, jDataTypeIds, result.GetRowCount(), result.MixType());
     return obj;
 }
 
@@ -561,17 +603,17 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_udf_UdfJniWrapper_registerFunction
 }
 
 std::unique_ptr<omniruntime::ColumnarBatchIterator> createDeserializer(JNIEnv *env, jobject jniIn, jstring codec_jstr,
-    int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
+    int64_t shuffleCompressBlockSize, jboolean isRowShuffle, jboolean enableMix)
 {
     auto codec = GetCompressionType(env, codec_jstr);
-    return std::make_unique<ShuffleReaderDeserializer>(env, jniIn, codec, shuffleCompressBlockSize, isRowShuffle);
+    return std::make_unique<ShuffleReaderDeserializer>(env, jniIn, codec, shuffleCompressBlockSize, isRowShuffle, enableMix);
 }
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_makeNativeDeserializer(JNIEnv *env, jobject obj,
-    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
+    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle, jboolean enableMix)
 {
     JNI_FUNC_START
-    auto handler = std::make_unique<omniruntime::ResultIterator>(createDeserializer(env, jniIn, codec_jstr, shuffleCompressBlockSize, isRowShuffle));
+    auto handler = std::make_unique<omniruntime::ResultIterator>(createDeserializer(env, jniIn, codec_jstr, shuffleCompressBlockSize, isRowShuffle, enableMix));
     return reinterpret_cast<long>(static_cast<void*>(handler.release()));
     JNI_FUNC_END(runtimeExceptionClass)
 }

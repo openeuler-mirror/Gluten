@@ -44,11 +44,17 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowSplit(JNIEnv *env, jobject jObj,
     jlong splitter_id, jlong jVecBatchAddress);
 
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_mixedSplit(JNIEnv *env, jobject jObj,
+    jlong splitter_id, jlong jVecBatchAddress);
+
 JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_stop(JNIEnv *env, jobject,
     jlong splitter_id);
 
 JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_rowStop(JNIEnv *env, jobject,
     jlong splitter_id);
+
+JNIEXPORT jobject JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_mixedStop(JNIEnv *env, jobject,
+    jlong splitter_id, jboolean isMixed);
 
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(JNIEnv *env, jobject, jlong splitter_id);
@@ -92,7 +98,7 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_udf_UdfJniWrapper_registerFunction
     JNIEnv *env, jclass);
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_makeNativeDeserializer(JNIEnv *env, jobject obj,
-    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle);
+    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle, jboolean enableMix);
 
 JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_closeDeserializer(JNIEnv *env, jobject obj, jlong handler);
 

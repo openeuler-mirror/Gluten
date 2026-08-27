@@ -199,6 +199,8 @@ const std::string KPreferVectorizationExpression = "spark.gluten.sql.columnar.ba
 const std::string kHashAggNormalizedKeyEnabled =
     "spark.gluten.sql.columnar.backend.omni.hashAgg.normalizedKey.enabled";
 
+const std::string KEnableMixedStorage = "spark.gluten.sql.columnar.backend.omni.mixedStorage.enabled";
+
 // others
 const std::string kHiveDefaultPartition = "__HIVE_DEFAULT_PARTITION__";
 // Paimon partition.default-name default (CoreOptions); null partition directory marker on read.

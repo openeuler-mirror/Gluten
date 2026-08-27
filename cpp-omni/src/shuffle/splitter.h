@@ -36,6 +36,7 @@
 #include "vec_data.pb.h"
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "vector/omni_row.h"
+#include "vector/mixed_vector.h"
 
 using namespace std;
 using namespace spark;
@@ -142,6 +143,43 @@ class Splitter {
 
     void WriteSplitByRow();
 
+    // Mixed shuffle methods
+    int WriteDataFileProtoByMixed();
+
+    int protoSpillPartitionByMixed(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream);
+
+    int32_t ProtoWritePartitionByMixed(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream, void *bufferOut, int32_t &sizeOut);
+
+    void MergeSpilledByMixed();
+
+    void WriteSplitByMixed();
+
+    void InitializeMixedColumnarIndices(MixedVectorBatch& mixedBatch);
+
+    int AllocatePartitionBuffersForMixed(int32_t partition_id, int32_t new_size);
+
+    int SplitFixedWidthValueBufferForMixed(MixedVectorBatch& mixedBatch);
+
+    int SplitFixedWidthValidityBufferForMixed(MixedVectorBatch& mixedBatch);
+
+    int SplitBinaryArrayForMixed(MixedVectorBatch& mixedBatch);
+
+    template<bool HasNull>
+    void SplitBinaryVectorForMixed(BaseVector *varcharVector, int col_schema);
+
+    int SplitComplexColumnsForMixed(MixedVectorBatch& mixedBatch);
+
+    int CacheVectorBatchForMixed(int32_t partition_id, bool reset_buffers);
+
+    void SerializingFixedColumnsForMixed(int32_t partitionId,
+                                         spark::Vec& vec,
+                                         int fixColIndexTmp,
+                                         SplitRowInfo* splitRowInfoTmp);
+
+    void SerializingBinaryColumnsForMixed(int32_t partitionId, spark::Vec& vec, int colIndex, int curBatch);
+
+    int DoSplitByMixed(MixedVectorBatch* mixedBatch);
+
     void InitVecType(spark::VecType *vt, DataTypePtr dataType);
 
     // Common structures for row formats and col formats
@@ -211,6 +249,34 @@ class Splitter {
     uint32_t expansion = 2; // expansion coefficient
     spark::ProtoRowBatch *protoRowBatch = new ProtoRowBatch();
 
+    // Mixed shuffle data structures
+    // 立即拷贝 row segment 到 partition buffer，不再持有 batch 引用
+
+    struct PartitionRowData {
+        std::string rowBytes;          // 所有行的 row segment 数据（连续 append）
+        std::vector<int32_t> offsets;  // 每行在 rowBytes 中的起始偏移
+        std::vector<int32_t> keyLengths;
+        std::vector<int32_t> stateOffsets;
+    };
+    std::vector<PartitionRowData> partition_row_data_;
+    MixedBatchMode mixedBatchMode_ = MixedBatchMode::HYBRID_ROW_COLUMN;
+
+    spark::ProtoMixedBatch *protoMixedBatch = new ProtoMixedBatch();
+    int32_t mixed_vector_count_ = 0;
+    int32_t mixed_column_count_ = 0;
+
+    std::vector<int32_t> mixed_fixed_width_array_idx_;
+    std::vector<int32_t> mixed_binary_array_idx_;
+    std::vector<int32_t> mixed_complex_type_array_idx_;
+    
+    std::vector<std::vector<std::vector<std::shared_ptr<Buffer>>>> partition_mixed_fixed_width_buffers_;
+    std::vector<std::vector<uint8_t*>> partition_mixed_fixed_width_value_addrs_;
+    std::vector<std::vector<uint8_t*>> partition_mixed_fixed_width_validity_addrs_;
+    
+    std::vector<std::vector<std::vector<std::vector<std::shared_ptr<Buffer>>>>> partition_mixed_cached_vectorbatch_;
+    std::vector<std::vector<std::vector<VCBatchInfo>>> vc_partition_mixed_array_buffers_;
+    std::vector<std::vector<spark::Vec *>> partition_mixed_complex_type_proto_vecs_;
+
     std::vector<DataTypePtr> inputDataTypes_;
 
 private:
@@ -243,6 +309,14 @@ private:
         delete vb;
     }
 
+    void ClearPartitionMixedRefs(int partition_id)
+    {
+        partition_row_data_[partition_id].rowBytes.clear();
+        partition_row_data_[partition_id].offsets.clear();
+        partition_row_data_[partition_id].keyLengths.clear();
+        partition_row_data_[partition_id].stateOffsets.clear();
+    }
+
 
 
     // Data structures required to handle col formats
@@ -272,6 +346,13 @@ public:
     int SpillToTmpFile();
 
     int SpillToTmpFileByRow();
+
+    // Mixed shuffle public interface
+    virtual int SplitByMixed(MixedVectorBatch* vb);
+
+    int StopByMixed();
+
+    int SpillToTmpFileByMixed();
 
     Splitter(InputDataTypes inputDataTypes,
              int32_t num_cols,
@@ -306,6 +387,7 @@ public:
     {
 	delete vecBatchProto; //free protobuf vecBatch memory
 	delete protoRowBatch; //free protobuf rowBatch memory
+	delete protoMixedBatch; //free protobuf mixedBatch memory
 	delete[] partition_id_cnt_cur_;
 	delete[] partition_id_cnt_cache_;
 	delete[] partition_buffer_size_;

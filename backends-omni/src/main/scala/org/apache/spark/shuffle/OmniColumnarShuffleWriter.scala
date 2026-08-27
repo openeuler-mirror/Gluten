@@ -82,12 +82,16 @@ class OmniColumnarShuffleWriter[K, V](
 
   private var nativeSplitter: Long = 0
 
+  private var usedMixed: Boolean = false
+
   // TODO: use GlutenSplitResult
   private var splitResult: SplitResult = _
 
   private var partitionLengths: Array[Long] = _
 
   private val handleRow = dep.serializer.asInstanceOf[OmniColumnarBatchSerializer].isRowShuffle()
+
+  private val enableMix = GlutenConfig.get.enableMixedStorage
 
   @throws[IOException]
   override def write(records: Iterator[Product2[K, V]]): Unit = {
@@ -131,12 +135,15 @@ class OmniColumnarShuffleWriter[K, V](
           dep.metrics("dataSize").add(input(col).getRealNullBufCapacityInBytes)
           dep.metrics("dataSize").add(input(col).getRealOffsetBufCapacityInBytes)
         }
-        val vb = new VecBatch(input, cb.numRows())
-
-        if (!handleRow) {
-          jniWrapper.split(nativeSplitter, vb.getNativeVectorBatch)
-        } else {
+        val vb = new VecBatch(input, cb.numRows(), enableMix)
+        // Mixed has priority; split and rowSplit are parallel strategies for non-mixed
+        if (vb.getMixType != 0) {
+          usedMixed = true
+          jniWrapper.mixedSplit(nativeSplitter, vb.getNativeVectorBatch)
+        } else if (handleRow) {
           jniWrapper.rowSplit(nativeSplitter, vb.getNativeVectorBatch)
+        } else {
+          jniWrapper.split(nativeSplitter, vb.getNativeVectorBatch)
         }
         dep.metrics("splitTime").add(System.nanoTime() - startTime)
         dep.metrics("numInputRows").add(cb.numRows)
@@ -144,10 +151,12 @@ class OmniColumnarShuffleWriter[K, V](
       }
     }
     val startTime = System.nanoTime()
-    if (!handleRow) {
-      splitResult = jniWrapper.stop(nativeSplitter)
+    splitResult = if (usedMixed) {
+      jniWrapper.mixedStop(nativeSplitter, true)
+    } else if (handleRow) {
+      jniWrapper.rowStop(nativeSplitter)
     } else {
-      splitResult = jniWrapper.rowStop(nativeSplitter)
+      jniWrapper.stop(nativeSplitter)
     }
 
     dep

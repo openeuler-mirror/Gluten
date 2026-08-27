@@ -64,12 +64,16 @@ public:
 
     int32_t rowShuffleParseBatch(JNIEnv *env, spark::ProtoRowBatch* protoRowBatch);
 
+    int32_t mixedShuffleParseBatch(JNIEnv *env, spark::ProtoMixedBatch* protoMixedBatch);
+
     int32_t createResult(JNIEnv *env, int rowCount, int vecCount, jint* typeIdArrayElements, jint* precisionArrayElements,
-        jint* scaleArrayElements, jlong* vecNativeIdArrayElements);
+        jint* scaleArrayElements, jlong* vecNativeIdArrayElements, jlong batchHandle = 0);
 
     std::pair<char*, int32_t> decompress(JNIEnv *pEnv, int32_t dataSize);
 
     int32_t readSize(JNIEnv *env);
+
+    static bool IsMixedBatch(const char* buf, int32_t len);
 
 protected:
     /** Sliding window: last readHeader payload (plain or decompressed); readSize/decompress consume from here. */
@@ -138,7 +142,7 @@ protected:
 
 class ShuffleReaderDeserializer final: public omniruntime::ColumnarBatchIterator {
 public:
-    ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn, CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle);
+    ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn, CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle, jboolean enableMix);
 
     ~ShuffleReaderDeserializer()
     {
@@ -155,7 +159,14 @@ private:
     jobject jniIn;
     int64_t shuffleCompressBlockSize;
     bool isRowShuffle;
+    bool enableMix_;
     std::unique_ptr<DecompressionStream> decompressionStream;
+
+    // 方案C：首批锁存流类型。canOutputMixed_ 在算子 Init 时一次算定（执行期不变），
+    // 同 stage 的 map task 算子配置相同 → 一条读流内批次全混存或全非混存。
+    // 仅首个批次扫描 mixType 锁定，后续批次 O(1) 直接分派。
+    enum class StreamType { UNKNOWN, MIXED, NORMAL };
+    StreamType streamType_ = StreamType::UNKNOWN;
 };
 
 }

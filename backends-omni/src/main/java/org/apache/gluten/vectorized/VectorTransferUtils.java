@@ -22,6 +22,7 @@ import nova.hetu.omniruntime.vector.Decimal128Vec;
 import nova.hetu.omniruntime.vector.DoubleVec;
 import nova.hetu.omniruntime.vector.IntVec;
 import nova.hetu.omniruntime.vector.LongVec;
+import nova.hetu.omniruntime.vector.MixedVec;
 import nova.hetu.omniruntime.vector.ShortVec;
 import nova.hetu.omniruntime.vector.VarcharVec;
 import nova.hetu.omniruntime.vector.Vec;
@@ -58,6 +59,9 @@ public class VectorTransferUtils {
                                     .getVec()
                                     .slice(0, nativeColumnarBatch.numRows());
                 }
+            }
+            if (vecNum > 0 && vecs[vecNum - 1] instanceof MixedVec) {
+                return new VecBatch(vecs, nativeColumnarBatch.numRows(), true);
             }
         } catch (Exception exception) {
             for (int i = 0; i < vecNum; i++) {

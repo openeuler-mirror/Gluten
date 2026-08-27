@@ -21,8 +21,29 @@
 #include <stdexcept>
 #include <vector/vector_common.h>
 #include "shuffle/splitter.h"
+#include <cstdint>
 
 namespace spark {
+
+namespace {
+bool readVarint(const uint8_t* buf, int32_t len, size_t& pos, uint64_t& out)
+{
+    out = 0;
+    int shift = 0;
+    while (pos < static_cast<size_t>(len)) {
+        const uint8_t b = buf[pos++];
+        out |= static_cast<uint64_t>(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) {
+            return true;
+        }
+        shift += 7;
+        if (shift >= 64) {
+            return false;
+        }
+    }
+    return false;
+}
+}
 
 bool DecompressionStream::ensureBufferHasData(JNIEnv* env)
 {
@@ -223,8 +244,8 @@ std::pair<char*, int32_t> ZstdDecompressionStream::doDecompression(char* input, 
 }
 
 ShuffleReaderDeserializer::ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn,
-    CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
-: env(env), shuffleCompressBlockSize(shuffleCompressBlockSize), isRowShuffle(JNI_TRUE == isRowShuffle)
+    CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle, jboolean enableMix)
+: env(env), shuffleCompressBlockSize(shuffleCompressBlockSize), isRowShuffle(JNI_TRUE == isRowShuffle), enableMix_(JNI_TRUE == enableMix)
 {
     if (env->GetJavaVM(&vm_) != JNI_OK) {
         throw std::runtime_error("GetJavaVM failed");
@@ -335,9 +356,103 @@ int32_t DecompressionStream::rowShuffleParseBatch(JNIEnv *env, spark::ProtoRowBa
         precisionArrayElements, scaleArrayElements, vecNativeIdArrayElements);
 }
 
+int32_t DecompressionStream::mixedShuffleParseBatch(JNIEnv *env, spark::ProtoMixedBatch* protoMixedBatch)
+{
+    int32_t columnarVecCount = protoMixedBatch->veccnt();
+    int32_t rowCount = protoMixedBatch->rowcnt();
+    int32_t rowVecTypeCount = protoMixedBatch->vectypes_size();
+    
+    std::vector<omniruntime::type::DataTypeId> rowOmniDataTypeIds;
+    rowOmniDataTypeIds.reserve(rowVecTypeCount);
+    
+    for (int32_t i = 0; i < rowVecTypeCount; ++i) {
+        const spark::VecType& protoTypeId = protoMixedBatch->vectypes(i);
+        auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(protoTypeId.typeid_());
+        rowOmniDataTypeIds.push_back(vectorDataTypeId);
+    }
+    
+    auto *mixedBatch = new omniruntime::vec::MixedVectorBatch(rowCount, rowOmniDataTypeIds);
+    
+    std::vector<omniruntime::vec::BaseVector*> columnarVecs;
+    columnarVecs.reserve(columnarVecCount);
+    
+    std::vector<jint> typeIdArrayElements(columnarVecCount);
+    std::vector<jint> precisionArrayElements(columnarVecCount);
+    std::vector<jint> scaleArrayElements(columnarVecCount);
+    std::vector<jlong> vecNativeIdArrayElements(columnarVecCount);
+    
+    if (protoMixedBatch->vecs_size() > 0) {
+        for (int32_t i = 0; i < columnarVecCount; ++i) {
+            const spark::Vec& protoVec = protoMixedBatch->vecs(i);
+            const spark::VecType& protoType = protoVec.vectype();
+            
+            typeIdArrayElements[i] = static_cast<jint>(protoType.typeid_());
+            precisionArrayElements[i] = protoType.precision();
+            scaleArrayElements[i] = protoType.scale();
+            
+            auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(protoType.typeid_());
+            omniruntime::vec::BaseVector* vec = nullptr;
+            
+            if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
+                auto dataType = Splitter::ProtoTypeToOmniType(protoType);
+                vec = VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+            } else {
+                vec = VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+            }
+            
+            Splitter::DeserializeProtoVecToOmniVector(protoVec, vec);
+            columnarVecs.push_back(vec);
+            mixedBatch->Append(vec);
+            vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vec);
+        }
+    }
+    
+    char *rows = const_cast<char*>(protoMixedBatch->rows().data());
+    const int32_t *offsets = reinterpret_cast<const int32_t*>(protoMixedBatch->offsets().data());
+    
+    const int32_t *keyLengths = nullptr;
+    const int32_t *stateOffsets = nullptr;
+    bool hasMetadata = (protoMixedBatch->key_lengths().size() > 0);
+    
+    if (hasMetadata) {
+        keyLengths = reinterpret_cast<const int32_t*>(protoMixedBatch->key_lengths().data());
+        stateOffsets = reinterpret_cast<const int32_t*>(protoMixedBatch->state_offsets().data());
+    }
+    
+    size_t totalBufferSize = protoMixedBatch->rows().size();
+    
+    mixedBatch->PrepareRowArena(totalBufferSize);
+    auto *arenaAllocator = mixedBatch->GetRowArena();
+    
+    for (int32_t i = 0; i < rowCount; ++i) {
+        int32_t rowLength = (i < rowCount - 1) ? 
+            (offsets[i + 1] - offsets[i]) : 
+            (static_cast<int32_t>(protoMixedBatch->rows().size()) - offsets[i]);
+        char *rowPtr = rows + offsets[i];
+        
+        const uint8_t *start = nullptr;
+        auto *pos = arenaAllocator->AllocateContinue(rowLength, start);
+        memcpy(pos, rowPtr, rowLength);
+        
+        if (hasMetadata) {
+            mixedBatch->SetArenaRow(i, start, keyLengths[i], stateOffsets[i], rowLength);
+        } else {
+            mixedBatch->SetArenaRow(i, start, rowLength);
+        }
+    }
+    
+    mixedBatch->SetMode(protoMixedBatch->vecs_size() == 0 ? 
+        omniruntime::vec::COMPLETE_ROW_ONLY : 
+        omniruntime::vec::HYBRID_ROW_COLUMN);
+    
+    return createResult(env, rowCount, columnarVecCount, typeIdArrayElements.data(),
+        precisionArrayElements.data(), scaleArrayElements.data(), vecNativeIdArrayElements.data(),
+        reinterpret_cast<jlong>(mixedBatch));
+}
+
 int32_t DecompressionStream::createResult(JNIEnv *env, int rowCount, int vecCount,
     jint* typeIdArrayElements, jint* precisionArrayElements,
-    jint* scaleArrayElements, jlong* vecNativeIdArrayElements)
+    jint* scaleArrayElements, jlong* vecNativeIdArrayElements, jlong batchHandle)
 {
     this->result = env->NewObject(metaInfoClass, ctor);
     if (result == nullptr) return -1;
@@ -352,15 +467,63 @@ int32_t DecompressionStream::createResult(JNIEnv *env, int rowCount, int vecCoun
     env->SetIntArrayRegion(scaleArr,   0, vecCount, scaleArrayElements);
     env->SetLongArrayRegion(vecIdArr,  0, vecCount, vecNativeIdArrayElements);
 
-    // === 5. 设置字段值 ===
     env->SetObjectField(result, fidTypeIds, typeIdsArr);
     env->SetObjectField(result, fidPrec,    precArr);
     env->SetObjectField(result, fidScales,  scaleArr);
     env->SetObjectField(result, fidVecIds,  vecIdArr);
     env->SetIntField(result, fidRowCount, rowCount);
     env->SetIntField(result, fidVecCount, vecCount);
+    
+    if (batchHandle != 0) {
+        env->SetLongField(result, fidBatchHandle, batchHandle);
+    }
 
     return rowCount;
+}
+
+bool DecompressionStream::IsMixedBatch(const char* buf, int32_t len)
+{
+    if (buf == nullptr || len <= 0) {
+        return false;
+    }
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(buf);
+    size_t pos = 0;
+    const size_t total = static_cast<size_t>(len);
+    while (pos < total) {
+        uint64_t tag = 0;
+        if (!readVarint(p, len, pos, tag)) {
+            return false;
+        }
+        const uint32_t fieldNumber = static_cast<uint32_t>(tag >> 3);
+        const uint32_t wireType = static_cast<uint32_t>(tag & 0x07);
+        if (wireType == 0) {
+            uint64_t value = 0;
+            if (!readVarint(p, len, pos, value)) {
+                return false;
+            }
+            if (fieldNumber == 7) {
+                return value != 0;
+            }
+        } else if (wireType == 1) {
+            if (pos + 8 > total) return false;
+            pos += 8;
+        } else if (wireType == 2) {
+            uint64_t length = 0;
+            if (!readVarint(p, len, pos, length)) {
+                return false;
+            }
+            if (length > static_cast<uint64_t>(total - pos)) {
+                return false;
+            }
+            pos += static_cast<size_t>(length);
+        } else if (wireType == 5) {
+            if (pos + 4 > total) return false;
+            pos += 4;
+        } else {
+            return false;
+        }
+    }
+    return false;
 }
 
 jobject ShuffleReaderDeserializer::getMetaInfo(JNIEnv *pEnv)
@@ -382,8 +545,22 @@ omniruntime::vec::VectorBatch* ShuffleReaderDeserializer::Next()
         return nullptr;
     }
 
+    // 首批锁存（方案C）：流内批次全混存或全非混存（canOutputMixed_ 执行期不变），
+    // 只扫首个批次锁定类型；enableMix_ 关闭时连首扫都跳过（锁定 NORMAL）。
+    if (streamType_ == StreamType::UNKNOWN) {
+        streamType_ = (this->enableMix_ &&
+                       DecompressionStream::IsMixedBatch(uncompress.first, uncompress.second))
+            ? StreamType::MIXED
+            : StreamType::NORMAL;
+    }
+
     int32_t rowCnt = 0;
-    if (this->isRowShuffle) {
+    if (streamType_ == StreamType::MIXED) {
+        auto *protoMixedBatch = new spark::ProtoMixedBatch();
+        protoMixedBatch->ParseFromArray(uncompress.first, uncompress.second);
+        rowCnt = this->decompressionStream->mixedShuffleParseBatch(env, protoMixedBatch);
+        delete protoMixedBatch;
+    } else if (this->isRowShuffle) {
         auto *protoRowBatch = new spark::ProtoRowBatch();
         protoRowBatch->ParseFromArray(uncompress.first, uncompress.second);
         rowCnt = this->decompressionStream->rowShuffleParseBatch(env, protoRowBatch);

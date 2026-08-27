@@ -111,16 +111,35 @@ public class SparkJniWrapper {
   public native void close(long splitterId);
 
     /**
+     * Split one MixedVectorBatch into several batches.
+     *
+     * @param splitterId Addresses of splitter
+     * @param nativeVectorBatch Addresses of MixedVectorBatch
+     */
+    public native void mixedSplit(long splitterId, long nativeVectorBatch);
+
+    /**
+     * Write the data remained in the MixedVectorBatch buffers and stop processing
+     *
+     * @param splitterId splitter instance id
+     * @param isMixed whether the batch is mixed
+     * @return SplitResult
+     */
+    public native SplitResult mixedStop(long splitterId, boolean isMixed);
+
+    /**
      * make shuffle deserializer hold by native
      *
      * @param inputStream              JniByteInputStream
      * @param compressCodec            compress Codec
      * @param shuffleCompressBlockSize configured compress block size
      * @param isRowShuffle             if support row shuffle
+     * @param isMixedEnabled           if enable mixed storage
      * @return Deserializer result
      */
     public native long makeNativeDeserializer(JniByteInputStream inputStream, String compressCodec,
-                                              int shuffleCompressBlockSize, boolean isRowShuffle);
+                                              int shuffleCompressBlockSize, boolean isRowShuffle,
+                                              boolean isMixedEnabled);
 
     /**
      * Release resources

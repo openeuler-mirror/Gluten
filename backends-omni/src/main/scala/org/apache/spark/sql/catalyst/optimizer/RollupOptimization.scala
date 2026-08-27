@@ -36,8 +36,8 @@ case class RollupOptimization(session: SparkSession) extends Rule[SparkPlan] {
 
   def replaceWithColumnarPlan(plan: SparkPlan): SparkPlan = {
     plan.transformUp {
-      case p @ (OmniHashAggregateExecTransformer(_, _, _, _, _, _, ExpandExecTransformer(_, _, _))
-           | OmniAdaptiveHashAggregateExecTransformer(_, _, _, _, _, _, ExpandExecTransformer(_, _, _))) =>
+      case p @ (OmniHashAggregateExecTransformer(_, _, _, _, _, _, ExpandExecTransformer(_, _, _), _, _)
+           | OmniAdaptiveHashAggregateExecTransformer(_, _, _, _, _, _, ExpandExecTransformer(_, _, _), _, _)) =>
         transformer(p.asInstanceOf[HashAggregateExecTransformer])
     }
   }

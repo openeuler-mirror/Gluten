@@ -75,3 +75,15 @@ message ProtoRowBatch {
     bytes rows = 4;
     bytes offsets = 5;
 }
+
+message ProtoMixedBatch {
+    int32 rowCnt = 1;
+    int32 vecCnt = 2;
+    repeated Vec vecs = 3;
+    repeated VecType vecTypes = 4;
+    bytes rows = 5;
+    bytes offsets = 6;
+    int32 mixType = 7;
+    bytes key_lengths = 8;
+    bytes state_offsets = 9;
+}

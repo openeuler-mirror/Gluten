@@ -21,7 +21,6 @@ import org.apache.gluten.utils.Constant.IS_SKIP_VERIFY_EXP
 import org.apache.gluten.utils.OmniAdaptorUtil
 import org.apache.gluten.utils.OmniAdaptorUtil.{addLeakSafeTaskCompletionListener, transColBatchToOmniVecs}
 import org.apache.gluten.vectorized.{NativePartitioning, OmniColumnVector}
-
 import org.apache.spark.{Partitioner, RangePartitioner, ShuffleDependency, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
@@ -37,12 +36,12 @@ import org.apache.spark.sql.types.IntegerType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.MutablePair
 import org.apache.spark.util.random.XORShiftRandom
-
 import nova.hetu.omniruntime.`type`.{DataType, DataTypeSerializer}
 import nova.hetu.omniruntime.operator.config.{OperatorConfig, OverflowConfig, SpillConfig}
 import nova.hetu.omniruntime.operator.project.OmniProjectOperatorFactory
 import nova.hetu.omniruntime.utils.ShuffleHashHelper
-import nova.hetu.omniruntime.vector.{IntVec, VecBatch}
+import nova.hetu.omniruntime.vector.{IntVec, MixedVec, VecBatch}
+import org.apache.gluten.config.GlutenConfig
 
 import scala.collection.JavaConverters.asScalaIteratorConverter
 
@@ -50,6 +49,8 @@ object OmniShuffleUtil {
 
   val defaultMm3HashSeed: Int = 42;
   val rollupConst: String = "spark_grouping_id"
+
+  private val enableMix = GlutenConfig.get.enableMixedStorage
 
   // scalastyle:off argcount
   def genShuffleDependency(
@@ -237,18 +238,29 @@ object OmniShuffleUtil {
                 cb =>
                   val vecs = transColBatchToOmniVecs(cb)
 
-                  val projectedVecs: Array[Long] = exprIds
-                    .map(
-                      exprId => {
-                        vecs(outputIndexMap(exprId)).getNativeVector
-                      })
-                    .toArray
-                  val nativeIntVecAddr =
-                    ShuffleHashHelper.computePartitionIds(
-                      projectedVecs,
-                      numPartitions,
-                      cb.numRows())
-                  addPid2ColumnBatch(new IntVec(nativeIntVecAddr), cb)
+                  if (enableMix && vecs(vecs.length - 1).isInstanceOf[MixedVec]) {
+                    val mixHandler = vecs(vecs.length - 1).getNativeVector
+                    val nativeIntVecAddr =
+                      ShuffleHashHelper.computeMixedPartitionIds(
+                        mixHandler,
+                        numPartitions,
+                        cb.numRows())
+                    addPid2ColumnBatch(new IntVec(nativeIntVecAddr), cb)
+                  } else {
+
+                    val projectedVecs: Array[Long] = exprIds
+                      .map(
+                        exprId => {
+                          vecs(outputIndexMap(exprId)).getNativeVector
+                        })
+                      .toArray
+                    val nativeIntVecAddr =
+                      ShuffleHashHelper.computePartitionIds(
+                        projectedVecs,
+                        numPartitions,
+                        cb.numRows())
+                    addPid2ColumnBatch(new IntVec(nativeIntVecAddr), cb)
+                  }
               }
             } else {
               // omni project
