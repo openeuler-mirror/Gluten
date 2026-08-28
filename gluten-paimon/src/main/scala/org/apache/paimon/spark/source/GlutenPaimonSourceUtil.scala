@@ -22,7 +22,7 @@ import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.spark.sql.connector.read.{InputPartition, Scan}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{DataType, StructType, TimestampNTZType, TimestampType}
 
 import java.net.URI
 import java.util.{Collections, Optional}
@@ -278,10 +278,53 @@ object GlutenPaimonSourceUtil extends Logging {
         .flatMap {
           segment =>
             val idx = segment.indexOf('=')
-            if (idx > 0) Some(segment.substring(0, idx) -> segment.substring(idx + 1)) else None
+            if (idx > 0) {
+              Some(segment.substring(0, idx) -> unescapePathValue(segment.substring(idx + 1)))
+            } else {
+              None
+            }
         }
         .toMap
-      partitionSchema.fieldNames.flatMap(name => pairs.get(name).map(name -> _)).toMap
+      partitionSchema.fields.flatMap { field =>
+        pairs.get(field.name).map(value => field.name -> toNativePartitionValue(value, field.dataType))
+      }.toMap
+    }
+  }
+
+  /**
+   * Paimon partition paths use Timestamp.toString() / LocalDateTime ISO-8601
+   * (e.g. 2024-10-10T00:00). Omni Hive SplitReader.StringToTimestamp only
+   * accepts yyyy-MM-dd HH:mm:ss (space separator, seconds required, timegm).
+   */
+  private def toNativePartitionValue(value: String, dataType: DataType): String = {
+    dataType match {
+      case TimestampType | TimestampNTZType => toOmniTimestampPartitionValue(value)
+      case _ => value
+    }
+  }
+
+  private def toOmniTimestampPartitionValue(value: String): String = {
+    if (value == null || value.isEmpty || value == "__DEFAULT_PARTITION__") {
+      value
+    } else {
+      val wall = value.replace('T', ' ')
+      val space = wall.indexOf(' ')
+      if (space < 0) {
+        if (wall.length >= 10) wall.substring(0, 10) + " 00:00:00" else wall
+      } else {
+        val timePart = {
+          val raw = wall.substring(space + 1)
+          val dot = raw.indexOf('.')
+          if (dot >= 0) raw.substring(0, dot) else raw
+        }
+        val fields = timePart.split(':')
+        val hhmmss =
+          if (fields.length >= 3) s"${fields(0)}:${fields(1)}:${fields(2)}"
+          else if (fields.length == 2) s"${fields(0)}:${fields(1)}:00"
+          else if (fields.length == 1 && fields(0).nonEmpty) s"${fields(0)}:00:00"
+          else "00:00:00"
+        wall.substring(0, space) + " " + hhmmss
+      }
     }
   }
 
@@ -299,7 +342,7 @@ object GlutenPaimonSourceUtil extends Logging {
   }
 
   private def normalizeNativePath(path: String): String = {
-    Try {
+    val normalized = Try {
       val uri = new URI(path)
       val scheme = Option(uri.getScheme).map(_.toLowerCase)
       val defaultFs = defaultFsFromSpark()
@@ -330,6 +373,61 @@ object GlutenPaimonSourceUtil extends Logging {
         path
       }
     }.getOrElse(path)
+    // Hadoop Path.toString() decodes %3A back to ':'. Native libhdfs / DFS.getPathName
+    // reject ':' in the pathname. Re-escape only the DFS path, not scheme://host:port.
+    escapeHdfsPathColons(normalized)
+  }
+
+  private def dfsPathStart(path: String): Int = {
+    val schemeAuth = path.indexOf("://")
+    if (schemeAuth >= 0) {
+      path.indexOf('/', schemeAuth + 3)
+    } else {
+      val schemeOnly = path.indexOf(":/")
+      if (schemeOnly >= 0 && !path.substring(0, schemeOnly).contains("/")) {
+        schemeOnly + 1
+      } else if (path.startsWith("/")) {
+        0
+      } else {
+        -1
+      }
+    }
+  }
+
+  private def escapeHdfsPathColons(path: String): String = {
+    val pathStart = dfsPathStart(path)
+    if (pathStart < 0) {
+      path
+    } else {
+      val dfsPath = path.substring(pathStart)
+      if (!dfsPath.contains(":")) {
+        path
+      } else {
+        path.substring(0, pathStart) +
+          dfsPath.split("/", -1).map(escapeColonInSegment).mkString("/")
+      }
+    }
+  }
+
+  private def escapeColonInSegment(segment: String): String = {
+    if (segment.indexOf(':') < 0) {
+      segment
+    } else {
+      val eq = segment.indexOf('=')
+      if (eq > 0) {
+        segment.substring(0, eq + 1) + segment.substring(eq + 1).replace(":", "%3A")
+      } else {
+        segment.replace(":", "%3A")
+      }
+    }
+  }
+
+  private def unescapePathValue(value: String): String = {
+    if (value.indexOf('%') < 0) {
+      value
+    } else {
+      value.replace("%3A", ":").replace("%3a", ":")
+    }
   }
 
   private def defaultFsFromSpark(): Option[String] = {

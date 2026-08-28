@@ -160,9 +160,6 @@ class PaimonScanTransformer(
       case ReadFileFormat.OrcReadFormat | ReadFileFormat.ParquetReadFormat =>
         val base = s"""{"includedColumns":"${escapeJson(includedColumns)}","allColumns":"${escapeJson(includedColumns)}"}"""
         if (ReadFileFormat.OrcReadFormat == fileFormat) {
-          // Pass the session-timezone modern raw offset so the native ORC instant reader can
-          // reverse the Spark-compatible writer transform (ORC's bundled tz data exposes LMT,
-          // not the modern offset that Spark uses). Only set for ORC (instant type).
           val tzId = org.apache.spark.sql.internal.SQLConf.get.sessionLocalTimeZone
           val rawOffsetMillis = java.util.TimeZone.getTimeZone(tzId).getRawOffset
           s"""${base.dropRight(1)},"timezone raw offset millis":$rawOffsetMillis}"""
@@ -188,17 +185,12 @@ class PaimonScanTransformer(
     val pushFilter = buildPushFilterJson
     if (pushFilter.isEmpty || pushFilter == "{}") {
       fileReadJson
+    } else if (fileFormat == ReadFileFormat.OrcReadFormat) {
+      val tzId = org.apache.spark.sql.internal.SQLConf.get.sessionLocalTimeZone
+      val rawOffsetMillis = java.util.TimeZone.getTimeZone(tzId).getRawOffset
+      s"""${pushFilter.dropRight(1)},"timezone raw offset millis":$rawOffsetMillis}"""
     } else {
-      // pushFilter (from OrcPushFilterBuilder/ParquetPushFilterBuilder) already contains
-      // allColumns/includedColumns and filter fields. Only append the ORC timezone offset
-      // that buildFileReadJson would have added.
-      if (fileFormat == ReadFileFormat.OrcReadFormat) {
-        val tzId = org.apache.spark.sql.internal.SQLConf.get.sessionLocalTimeZone
-        val rawOffsetMillis = java.util.TimeZone.getTimeZone(tzId).getRawOffset
-        s"""${pushFilter.dropRight(1)},"timezone raw offset millis":$rawOffsetMillis}"""
-      } else {
-        pushFilter
-      }
+      pushFilter
     }
   }
 

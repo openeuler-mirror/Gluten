@@ -8,18 +8,37 @@ import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.gluten.connector.write.PaimonFileInfoJson
 
-import org.apache.paimon.data.BinaryRow
-import org.apache.paimon.data.serializer.InternalRowSerializer
+import org.apache.paimon.data.{BinaryRow, BinaryRowWriter, BinaryString, Decimal, Timestamp}
 import org.apache.paimon.fs.Path
 import org.apache.paimon.io.{CompactIncrement, DataIncrement}
 import org.apache.paimon.migrate.FileMetaUtils
 import org.apache.paimon.table.FileStoreTable
 import org.apache.paimon.table.sink.{CommitMessage, CommitMessageImpl}
-import org.apache.paimon.types.RowType
-import org.apache.paimon.utils.InternalRowPartitionComputer
+import org.apache.paimon.types.{
+  BigIntType,
+  BinaryType,
+  BooleanType,
+  CharType,
+  DateType,
+  DecimalType,
+  DoubleType,
+  FloatType,
+  IntType,
+  LocalZonedTimestampType,
+  RowKind,
+  RowType,
+  SmallIntType,
+  TimestampType,
+  TinyIntType,
+  VarBinaryType,
+  VarCharType
+}
+import org.apache.paimon.utils.{InternalRowPartitionComputer, TypeUtils}
 
 import org.apache.spark.sql.connector.write.WriterCommitMessage
 
+import java.nio.charset.StandardCharsets
+import java.time.LocalDate
 import java.util
 
 import scala.collection.mutable
@@ -92,25 +111,26 @@ object PaimonCommitMessageBuilder {
 
     val messagesByPartitionBucket =
       new util.LinkedHashMap[(String, Int), util.ArrayList[org.apache.paimon.io.DataFileMeta]]()
-    val partitionValuesByKey = new util.HashMap[String, util.List[String]]()
+    val partitionByKey = new util.HashMap[String, BinaryRow]()
 
     fileInfoJsonArray.foreach { json =>
       val info = mapper.readValue(json, classOf[PaimonFileInfoJson])
-      val partitionKey = Option(info.getPartitionValues).map(_.asScala.mkString("\u0001")).getOrElse("")
-      partitionValuesByKey.put(partitionKey, safePartitionValues(info))
+      val values = safePartitionValues(info)
+      val partition = partitionRow(table, values)
+      val partitionKey = values.asScala.mkString("\u0001")
+      partitionByKey.put(partitionKey, partition)
       val key = (partitionKey, info.getBucket)
       val metas = messagesByPartitionBucket.computeIfAbsent(
         key,
         _ => new util.ArrayList[org.apache.paimon.io.DataFileMeta]())
-      metas.add(constructDataFileMeta(info, table, format))
+      metas.add(constructDataFileMeta(info, table, format, partition))
     }
 
     val partitionValues = mutable.ArrayBuffer[Seq[String]]()
     val commitMessages = messagesByPartitionBucket.asScala.toSeq.map {
       case ((partitionKey, bucket), metas) =>
-        val values = partitionValuesByKey.get(partitionKey)
-        partitionValues += values.asScala.toSeq
-        val partition = partitionRow(table, values)
+        val partition = partitionByKey.get(partitionKey)
+        partitionValues += partitionSpecValues(table, partition)
         new CommitMessageImpl(
           partition,
           bucket,
@@ -131,10 +151,12 @@ object PaimonCommitMessageBuilder {
   private def constructDataFileMeta(
       info: PaimonFileInfoJson,
       table: FileStoreTable,
-      format: String): org.apache.paimon.io.DataFileMeta = {
+      format: String,
+      partition: BinaryRow): org.apache.paimon.io.DataFileMeta = {
     val fileIO = table.fileIO()
     val origin = new Path(info.getPath)
-    val finalDir = bucketDirectory(table, info)
+    // Same as native Spark-Paimon: FileStorePathFactory formats + escapes partition segments.
+    val finalDir = table.store().pathFactory().bucketPath(partition, info.getBucket)
     fileIO.mkdirs(finalDir)
     val rollback = new util.HashMap[Path, Path]()
     FileMetaUtils.constructFileMeta(
@@ -147,41 +169,113 @@ object PaimonCommitMessageBuilder {
       table.schema().id())
   }
 
-  private def bucketDirectory(table: FileStoreTable, info: PaimonFileInfoJson): Path = {
-    val base = table.location().toString
-    val partitionSegment = table
-      .partitionKeys()
-      .asScala
-      .zip(safePartitionValues(info).asScala)
-      .map { case (name, value) => s"$name=$value" }
-      .mkString("/")
-    val dir =
-      if (partitionSegment.isEmpty) s"$base/bucket-${info.getBucket}"
-      else s"$base/$partitionSegment/bucket-${info.getBucket}"
-    new Path(dir)
-  }
-
+  /**
+   * Build a typed partition BinaryRow the same way native Spark-Paimon does (Spark InternalRow
+   * micros/days -> Paimon Timestamp/Date). Do not use convertSpecToInternalRow: Omni writer
+   * serializes TIMESTAMP/DATE as epoch numbers, which Paimon string-cast cannot parse.
+   */
   private def partitionRow(table: FileStoreTable, values: util.List[String]): BinaryRow = {
     if (table.partitionKeys().isEmpty) {
       BinaryRow.EMPTY_ROW
     } else {
       val partitionType = partitionRowType(table)
-      val spec = new util.LinkedHashMap[String, String]()
-      table.partitionKeys().asScala.zip(values.asScala).foreach {
-        case (name, value) => spec.put(name, value)
+      val row = new BinaryRow(partitionType.getFieldCount)
+      val writer = new BinaryRowWriter(row)
+      writer.reset()
+      writer.writeRowKind(RowKind.INSERT)
+      partitionType.getFields.asScala.zipWithIndex.foreach {
+        case (field, i) =>
+          val value = if (i < values.size()) values.get(i) else null
+          writePartitionField(writer, i, field.`type`(), value)
       }
-      val genericRow =
-        InternalRowPartitionComputer.convertSpecToInternalRow(
-          spec,
-          partitionType,
-          DefaultPartitionName)
-      new InternalRowSerializer(partitionType).toBinaryRow(genericRow)
+      writer.complete()
+      row
+    }
+  }
+
+  private def writePartitionField(
+      writer: BinaryRowWriter,
+      pos: Int,
+      dataType: org.apache.paimon.types.DataType,
+      value: String): Unit = {
+    if (value == null || value == DefaultPartitionName) {
+      writer.setNullAt(pos)
+      return
+    }
+    dataType match {
+      case _: BooleanType =>
+        writer.writeBoolean(pos, java.lang.Boolean.parseBoolean(value))
+      case _: TinyIntType =>
+        writer.writeByte(pos, java.lang.Byte.parseByte(value))
+      case _: SmallIntType =>
+        writer.writeShort(pos, java.lang.Short.parseShort(value))
+      case _: IntType =>
+        writer.writeInt(pos, java.lang.Integer.parseInt(value))
+      case _: DateType =>
+        writer.writeInt(pos, toDateDays(value))
+      case _: BigIntType =>
+        writer.writeLong(pos, java.lang.Long.parseLong(value))
+      case t: TimestampType =>
+        writer.writeTimestamp(pos, toPaimonTimestamp(value), t.getPrecision)
+      case t: LocalZonedTimestampType =>
+        writer.writeTimestamp(pos, toPaimonTimestamp(value), t.getPrecision)
+      case _: FloatType =>
+        writer.writeFloat(pos, java.lang.Float.parseFloat(value))
+      case _: DoubleType =>
+        writer.writeDouble(pos, java.lang.Double.parseDouble(value))
+      case _: VarCharType | _: CharType =>
+        writer.writeString(pos, BinaryString.fromString(value))
+      case _: BinaryType | _: VarBinaryType =>
+        val bytes = value.getBytes(StandardCharsets.ISO_8859_1)
+        writer.writeBinary(pos, bytes, 0, bytes.length)
+      case d: DecimalType =>
+        writer.writeDecimal(
+          pos,
+          Decimal.fromBigDecimal(new java.math.BigDecimal(value), d.getPrecision, d.getScale),
+          d.getPrecision)
+      case other =>
+        throw new UnsupportedOperationException("Unsupported Paimon partition column type: " + other)
+    }
+  }
+
+  private def toPaimonTimestamp(value: String): Timestamp = {
+    try {
+      Timestamp.fromMicros(java.lang.Long.parseLong(value))
+    } catch {
+      case _: NumberFormatException =>
+        TypeUtils.castFromString(value, org.apache.paimon.types.DataTypes.TIMESTAMP(6))
+          .asInstanceOf[Timestamp]
+    }
+  }
+
+  private def toDateDays(value: String): Int = {
+    try {
+      java.lang.Integer.parseInt(value)
+    } catch {
+      case _: NumberFormatException =>
+        LocalDate.parse(value).toEpochDay.toInt
+    }
+  }
+
+  /** Paimon-canonical unescaped spec strings (for withOverwrite), from typed BinaryRow. */
+  private def partitionSpecValues(table: FileStoreTable, partition: BinaryRow): Seq[String] = {
+    if (table.partitionKeys().isEmpty) {
+      Seq.empty
+    } else {
+      val partitionType = partitionRowType(table)
+      val computer = new InternalRowPartitionComputer(
+        DefaultPartitionName,
+        partitionType,
+        partitionType.getFieldNames.toArray(Array.empty[String]),
+        table.coreOptions().legacyPartitionName())
+      val spec = computer.generatePartValues(partition)
+      table.partitionKeys().asScala.map(name => spec.get(name)).toSeq
     }
   }
 
   private def partitionRowType(table: FileStoreTable): RowType = {
-    val fieldNames = table.partitionKeys().asScala.toSet
-    new RowType(table.rowType().getFields.asScala.filter(f => fieldNames.contains(f.name())).asJava)
+    val byName = table.rowType().getFields.asScala.map(field => field.name() -> field).toMap
+    new RowType(table.partitionKeys().asScala.map(byName).asJava)
   }
 
   private def safePartitionValues(info: PaimonFileInfoJson): util.List[String] = {
