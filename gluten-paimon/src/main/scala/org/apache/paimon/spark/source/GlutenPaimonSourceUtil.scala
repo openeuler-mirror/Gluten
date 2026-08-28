@@ -24,7 +24,6 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types.{DataType, StructType, TimestampNTZType, TimestampType}
 
-import java.net.URI
 import java.util.{Collections, Optional}
 
 import scala.collection.JavaConverters._
@@ -341,29 +340,28 @@ object GlutenPaimonSourceUtil extends Logging {
       bucket.map(value => "__paimon_bucket" -> value.toString)
   }
 
+  /**
+   * Native Omni Hive reader requires scheme://authority/path (stringToUriInfo
+   * looks for "://"). Paimon/Hadoop often emit hdfs:/path (no authority).
+   * Do not use java.net.URI: CHAR(n) partition dirs contain trailing spaces and
+   * URI parse fails, which previously skipped authority injection and caused
+   * native "invalid scheme".
+   */
   private def normalizeNativePath(path: String): String = {
-    val normalized = Try {
-      val uri = new URI(path)
-      val scheme = Option(uri.getScheme).map(_.toLowerCase)
-      val defaultFs = defaultFsFromSpark()
-      if (scheme.exists(s => s == "hdfs" || s == "viewfs") && uri.getAuthority == null) {
-        defaultFs
-          .map(new URI(_))
-          .filter(defaultUri =>
-            Option(defaultUri.getScheme).map(_.toLowerCase) == scheme &&
-              defaultUri.getAuthority != null)
-          .map { defaultUri =>
-            new URI(
-              uri.getScheme,
-              defaultUri.getAuthority,
-              uri.getPath,
-              uri.getQuery,
-              uri.getFragment).toString
-          }
-          .getOrElse(path)
-      } else if (scheme.isEmpty && path.startsWith("/")) {
-        // Paimon may return warehouse-relative paths; native HDFS reader needs hdfs://authority/path.
-        defaultFs
+    escapeHdfsPathColons(ensureHdfsAuthority(path))
+  }
+
+  private def ensureHdfsAuthority(path: String): String = {
+    if (path.contains("://")) {
+      path
+    } else {
+      val schemeEnd = path.indexOf(":/")
+      if (schemeEnd > 0 && !path.substring(0, schemeEnd).contains("/")) {
+        val scheme = path.substring(0, schemeEnd)
+        val rest = path.substring(schemeEnd + 1)
+        prependDefaultFs(scheme, rest).getOrElse(path)
+      } else if (path.startsWith("/")) {
+        defaultFsFromSpark()
           .map { fs =>
             val base = if (fs.endsWith("/")) fs.substring(0, fs.length - 1) else fs
             base + path
@@ -372,10 +370,17 @@ object GlutenPaimonSourceUtil extends Logging {
       } else {
         path
       }
-    }.getOrElse(path)
-    // Hadoop Path.toString() decodes %3A back to ':'. Native libhdfs / DFS.getPathName
-    // reject ':' in the pathname. Re-escape only the DFS path, not scheme://host:port.
-    escapeHdfsPathColons(normalized)
+    }
+  }
+
+  private def prependDefaultFs(scheme: String, absolutePath: String): Option[String] = {
+    defaultFsFromSpark()
+      .filter(_.toLowerCase.startsWith(scheme.toLowerCase + "://"))
+      .map { fs =>
+        val base = if (fs.endsWith("/")) fs.substring(0, fs.length - 1) else fs
+        val suffix = if (absolutePath.startsWith("/")) absolutePath else "/" + absolutePath
+        base + suffix
+      }
   }
 
   private def dfsPathStart(path: String): Int = {
