@@ -26,6 +26,7 @@ import org.apache.spark.{ShuffleDependency, SparkException}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper, OmniColumnarBatchSerializer, OmniColumnarShuffleWriter, OmniShuffleUtil}
+import org.apache.commons.lang3.ClassUtils
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.{ArrayExists, ArrayFilter, ArrayForAll, ArrayTransform, Attribute, AttributeReference, BloomFilterMightContain, Cast, DateDiff, ElementAt, Expression, FromUnixTime, Generator, GetMapValue, GetStructField, HashExpression, IsNotNull, LambdaFunction, Like, MapFilter, Md5, NamedExpression, PosExplode, PythonUDF, SortOrder, UnixTimestamp, Uuid}
@@ -514,10 +515,22 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       isSort: Boolean): Serializer = {
     val readBatchNumRows = metrics("avgReadBatchNumRows")
     val numOutputRows = metrics("numOutputRows")
-    val columnarConf = GlutenConfig.get
-    val isRowShuffle = columnarConf.enableOmniRowShuffle &&
-      schema.length > columnarConf.omniRowShuffleColumnsThreshold
-    new OmniColumnarBatchSerializer(readBatchNumRows, numOutputRows, isRowShuffle)
+    if (GlutenConfig.get.isUseCelebornShuffleManager) {
+      val columnarConf = GlutenConfig.get
+      val isRowShuffle = columnarConf.enableOmniRowShuffle &&
+        schema.length > columnarConf.omniRowShuffleColumnsThreshold
+      val clazz = ClassUtils.getClass("org.apache.spark.shuffle.OmniCelebornColumnarBatchSerializer")
+      val constructor =
+        clazz.getConstructor(classOf[SQLMetric], classOf[SQLMetric], classOf[Boolean])
+      constructor
+        .newInstance(readBatchNumRows, numOutputRows, Boolean.box(isRowShuffle))
+        .asInstanceOf[Serializer]
+    } else {
+      val columnarConf = GlutenConfig.get
+      val isRowShuffle = columnarConf.enableOmniRowShuffle &&
+        schema.length > columnarConf.omniRowShuffleColumnsThreshold
+      new OmniColumnarBatchSerializer(readBatchNumRows, numOutputRows, isRowShuffle)
+    }
   }
 
   /** Create broadcast relation for BroadcastExchangeExec */

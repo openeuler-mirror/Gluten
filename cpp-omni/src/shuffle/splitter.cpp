@@ -29,6 +29,7 @@
 #include "io/ArrowOutputStream.h"
 #include "io/SparkFile.hh"
 #include "io/MemoryPool.hh"
+#include "shuffle/omni_rss_push_client.h"
 #include <arrow/io/file.h>
 
 using namespace omniruntime::vec;
@@ -1687,14 +1688,22 @@ int Splitter::DoSplit(VectorBatch& vb) {
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
     uint64_t usedMemorySize = omniruntime::mem::MemoryManager::GetGlobalAccountedMemory();
     if (usedMemorySize > options_.executor_spill_mem_threshold) {
-        TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
-        isSpill = true;
+        if (rss_mode_) {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToRss());
+        } else {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
+            isSpill = true;
+        }
     }
 
     // task level: Arrow pool 统一记账（覆盖定宽+变长+复杂+行式全部 Arrow buffer）
     if (arrow_pool_->bytes_allocated() >= options_.task_spill_mem_threshold) {
-        TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
-        isSpill = true;
+        if (rss_mode_) {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToRss());
+        } else {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFile());
+            isSpill = true;
+        }
     }
     return 0;
 }
@@ -1810,7 +1819,7 @@ int Splitter::Split_Init(){
     // Both data_file and shuffle_index_file should be set through jni.
     // For test purpose, Create a temporary subdirectory in the system temporary
     // dir with prefix "columnar-shuffle"
-    if (options_.data_file.length() == 0) {
+    if (options_.data_file.length() == 0 && !options_.rss_mode) {
         options_.data_file = CreateTempShuffleFile(configured_dirs_[0]);
     }
 
@@ -1976,16 +1985,24 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
     uint64_t usedMemorySize = omniruntime::mem::MemoryManager::GetGlobalAccountedMemory();
     if (usedMemorySize > options_.executor_spill_mem_threshold) {
-        TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFileByRow());
+        if (rss_mode_) {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToRssByRow());
+        } else {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFileByRow());
+            isSpill = true;
+        }
         total_input_size = 0;
-        isSpill = true;
     }
 
     // task level: Arrow pool 统一记账（覆盖定宽+变长+复杂+行式全部 Arrow buffer）
     if (arrow_pool_->bytes_allocated() > options_.task_spill_mem_threshold) {
-        TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFileByRow());
+        if (rss_mode_) {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToRssByRow());
+        } else {
+            TIME_NANO_OR_RAISE(total_spill_time_, SpillToTmpFileByRow());
+            isSpill = true;
+        }
         total_input_size = 0;
-        isSpill = true;
     }
     return 0;
 }
@@ -2411,7 +2428,8 @@ int Splitter::SpillToTmpFileByRow() {
 }
 
 Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_partitions, SplitOptions options, bool flag)
-        : singlePartitionFlag(flag),
+        : rss_mode_(options.rss_mode),
+          singlePartitionFlag(flag),
           num_partitions_(num_partitions),
           options_(std::move(options)),
           num_fields_(num_cols),
@@ -2459,7 +2477,179 @@ std::string Splitter::NextSpilledFileDir() {
     return spilled_file_dir;
 }
 
+void Splitter::SetRssPushClient(std::shared_ptr<OmniRssPushClient> client)
+{
+    rss_push_client_ = std::move(client);
+}
+
+ArrowFileHeader Splitter::BuildColumnarHeader()
+{
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::COLUMNAR;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+    return header;
+}
+
+ArrowFileHeader Splitter::BuildRowHeader()
+{
+    ArrowFileHeader header;
+    header.version = kArrowShuffleVersion;
+    header.layout = ShuffleLayout::ROW;
+    if (inputDataTypes_.size() != static_cast<size_t>(num_fields_)) {
+        LogsError("Splitter header build: inputDataTypes_ size mismatch: types=%zu num_fields=%d",
+                  inputDataTypes_.size(), num_fields_);
+        throw std::runtime_error("Splitter: inputDataTypes_ not set before building Arrow header");
+    }
+    for (int i = 0; i < num_fields_; ++i) {
+        header.schema.push_back(DataTypeToDescriptor(inputDataTypes_[i]));
+    }
+    return header;
+}
+
+int32_t Splitter::PushColumnarPartitionToRss(int32_t pid)
+{
+    if (partition_arrow_batch_[pid].empty()) {
+        return 0;
+    }
+    if (!rss_push_client_) {
+        throw std::runtime_error("RSS push client is not set");
+    }
+
+    spark::MemoryOutputStream memOut;
+    auto arrowOut = ArrowOutputStream::Make(
+        &memOut,
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    auto header = BuildColumnarHeader();
+    auto pushStart = std::chrono::steady_clock::now();
+    auto written = ArrowWriteColumnarPartition(
+        pid, *arrowOut, header, partition_arrow_batch_, false);
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("PushColumnarPartitionToRss Close failed: pid=%d msg=%s", pid, closeSt.ToString().c_str());
+    }
+
+    const auto& data = memOut.data();
+    if (static_cast<int64_t>(data.size()) < written) {
+        throw std::runtime_error("PushColumnarPartitionToRss: memory buffer size mismatch");
+    }
+    rss_push_client_->pushPartitionData(
+        pid, reinterpret_cast<const char*>(data.data()), written);
+    auto pushEnd = std::chrono::steady_clock::now();
+    total_push_time_ += std::chrono::duration_cast<std::chrono::nanoseconds>(pushEnd - pushStart).count();
+
+    total_bytes_written_ += written;
+    partition_lengths_[pid] += written;
+    partition_arrow_batch_[pid].clear();
+    return written;
+}
+
+int32_t Splitter::PushRowPartitionToRss(int32_t pid)
+{
+    if (partition_rows[pid].empty()) {
+        return 0;
+    }
+    if (!rss_push_client_) {
+        throw std::runtime_error("RSS push client is not set");
+    }
+
+    spark::MemoryOutputStream memOut;
+    auto arrowOut = ArrowOutputStream::Make(
+        &memOut,
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    auto header = BuildRowHeader();
+    auto pushStart = std::chrono::steady_clock::now();
+    auto written = ArrowWriteRowPartition(
+        pid, *arrowOut, header, partition_rows,
+        options_.spill_batch_row_num, *arrow_pool_, false);
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("PushRowPartitionToRss Close failed: pid=%d msg=%s", pid, closeSt.ToString().c_str());
+    }
+
+    const auto& data = memOut.data();
+    if (static_cast<int64_t>(data.size()) < written) {
+        throw std::runtime_error("PushRowPartitionToRss: memory buffer size mismatch");
+    }
+    rss_push_client_->pushPartitionData(
+        pid, reinterpret_cast<const char*>(data.data()), written);
+    auto pushEnd = std::chrono::steady_clock::now();
+    total_push_time_ += std::chrono::duration_cast<std::chrono::nanoseconds>(pushEnd - pushStart).count();
+
+    total_bytes_written_ += written;
+    partition_lengths_[pid] += written;
+    partition_arena_[pid].Reset();
+    partition_rows[pid].clear();
+    return written;
+}
+
+int Splitter::SpillToRss()
+{
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        CacheVectorBatch(pid, true);
+        partition_buffer_size_[pid] = 0;
+    }
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        PushColumnarPartitionToRss(pid);
+    }
+    ReleaseVarcharVector();
+    num_row_splited_ = 0;
+    cached_vectorbatch_size_ = 0;
+    return 0;
+}
+
+void Splitter::WriteSplitRss()
+{
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        CacheVectorBatch(pid, true);
+        partition_buffer_size_[pid] = 0;
+    }
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        PushColumnarPartitionToRss(pid);
+    }
+    memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
+    ReleaseVarcharVector();
+    num_row_splited_ = 0;
+    cached_vectorbatch_size_ = 0;
+}
+
+int Splitter::SpillToRssByRow()
+{
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        PushRowPartitionToRss(pid);
+    }
+    return 0;
+}
+
+void Splitter::WriteSplitRssByRow()
+{
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        PushRowPartitionToRss(pid);
+    }
+}
+
 int Splitter::Stop() {
+    if (rss_mode_) {
+        TIME_NANO_OR_RAISE(total_write_time_, WriteSplitRss());
+        return 0;
+    }
     if (isSpill) {
         TIME_NANO_OR_RAISE(total_write_time_, MergeSpilled());
         TIME_NANO_OR_RAISE(total_write_time_, DeleteSpilledTmpFile());
@@ -2471,6 +2661,10 @@ int Splitter::Stop() {
 }
 
 int Splitter::StopByRow() {
+    if (rss_mode_) {
+        TIME_NANO_OR_RAISE(total_write_time_, WriteSplitRssByRow());
+        return 0;
+    }
     if (isSpill) {
         TIME_NANO_OR_RAISE(total_write_time_, MergeSpilledByRow());
         TIME_NANO_OR_RAISE(total_write_time_, DeleteSpilledTmpFile());

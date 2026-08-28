@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include "type.h"
+#include "shuffle/arrow_frame.h"
 #include "../io/ColumnWriter.hh"
 #include "../common/common.h"
 #include "vector/omni_row.h"
@@ -39,6 +40,7 @@
 
 // Forward declaration for TransferSpilledSegments
 class ArrowOutputStream;
+class OmniRssPushClient;
 
 using namespace std;
 using namespace spark;
@@ -157,8 +159,27 @@ class Splitter {
 
     void WriteSplitByRow();
 
+    void WriteSplitRss();
+
+    int SpillToRss();
+
+    int32_t PushColumnarPartitionToRss(int32_t pid);
+
+    void WriteSplitRssByRow();
+
+    int SpillToRssByRow();
+
+    int32_t PushRowPartitionToRss(int32_t pid);
+
+    ArrowFileHeader BuildColumnarHeader();
+
+    ArrowFileHeader BuildRowHeader();
+
     // Common structures for row formats and col formats
     bool isSpill = false;
+    bool rss_mode_ = false;
+    std::shared_ptr<OmniRssPushClient> rss_push_client_;
+    int64_t total_push_time_ = 0;
     int64_t total_bytes_written_ = 0;
     int64_t total_bytes_spilled_ = 0;
     int64_t total_write_time_ = 0;
@@ -312,6 +333,12 @@ public:
     void TestForceSpill();
 
     int64_t TotalWriteTime() const { return total_write_time_; }
+
+    int64_t TotalPushTime() const { return total_push_time_; }
+
+    bool IsRssMode() const { return rss_mode_; }
+
+    void SetRssPushClient(std::shared_ptr<OmniRssPushClient> client);
 
     int64_t TotalSpillTime() const { return total_spill_time_; }
 

@@ -110,6 +110,42 @@ public class SparkJniWrapper {
    */
   public native void close(long splitterId);
 
+  public long makeForRSS(
+      NativePartitioning part,
+      int bufferSize,
+      String codec,
+      long shuffleCompressBlockSize,
+      int shuffleSpillBatchRowNum,
+      long shuffleTaskSpillMemoryThreshold,
+      long shuffleExecutorSpillMemoryThreshold,
+      Object partitionPusher) {
+    return nativeMakeForRSS(
+        part.getShortName(),
+        part.getNumPartitions(),
+        new String(part.getRequiredFields()),
+        part.getSchema().length,
+        bufferSize,
+        codec,
+        shuffleCompressBlockSize,
+        shuffleSpillBatchRowNum,
+        shuffleTaskSpillMemoryThreshold,
+        shuffleExecutorSpillMemoryThreshold,
+        partitionPusher);
+  }
+
+  public native long nativeMakeForRSS(
+      String shortName,
+      int numPartitions,
+      String inputTypes,
+      int numCols,
+      int bufferSize,
+      String codec,
+      long shuffleCompressBlockSize,
+      int shuffleSpillBatchRowNum,
+      long shuffleTaskSpillMemoryThreshold,
+      long shuffleExecutorSpillMemoryThreshold,
+      Object partitionPusher);
+
     /**
      * make shuffle deserializer hold by native
      *
