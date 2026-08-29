@@ -33,6 +33,7 @@
 #include "type.h"
 #include "../io/ColumnWriter.hh"
 #include "../common/common.h"
+#include "omni_rss_push_client.h"
 #include "vec_data.pb.h"
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "vector/omni_row.h"
@@ -250,8 +251,10 @@ private:
 public:
     // Common structures for row formats and col formats
     bool singlePartitionFlag = false;
+    bool rss_mode_ = false;
     int32_t num_partitions_;
     SplitOptions options_;
+    std::shared_ptr<OmniRssPushClient> rss_push_client_;
     // 分区数
     int32_t num_fields_;
     InputDataTypes input_col_types;
@@ -289,6 +292,18 @@ public:
     std::string NextSpilledFileDir();
 
     int DeleteSpilledTmpFile();
+
+    int32_t PushProtoPartitionToRss(int32_t pid);
+
+    int32_t PushProtoPartitionByRowToRss(int32_t pid);
+
+    int SpillToRss();
+
+    void WriteSplitRss();
+
+    int SpillToRssByRow();
+
+    void WriteSplitRssByRow();
 
     int64_t TotalBytesWritten() const { return total_bytes_written_; }
 
@@ -333,6 +348,11 @@ public:
     void SetInputDataTypes(std::vector<DataTypePtr>& inputDataTypes)
     {
         inputDataTypes_ = inputDataTypes;
+    }
+
+    void SetRssPushClient(std::shared_ptr<OmniRssPushClient> client)
+    {
+        rss_push_client_ = std::move(client);
     }
 
     // no need to clear memory when exception, so we have to reset

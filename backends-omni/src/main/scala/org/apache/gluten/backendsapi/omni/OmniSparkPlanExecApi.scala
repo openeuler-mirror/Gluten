@@ -17,6 +17,7 @@
 package org.apache.gluten.backendsapi.omni
 
 import org.apache.gluten.backendsapi.SparkPlanExecApi
+import org.apache.commons.lang3.ClassUtils
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution._
 import org.apache.gluten.expression.{ExpressionConverter, ExpressionMappings, ExpressionNames, ExpressionTransformer, GenericExpressionTransformer, LiteralTransformer, OmniAliasTransformer, OmniFromUnixTimeTransformer, OmniGetStructFieldTransformer, OmniHashExpressionTransformer, OmniUnixTimestampTransformer, Sig}
@@ -505,10 +506,22 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       isSort: Boolean): Serializer = {
     val readBatchNumRows = metrics("avgReadBatchNumRows")
     val numOutputRows = metrics("numOutputRows")
-    val columnarConf = GlutenConfig.get
-    val isRowShuffle = columnarConf.enableOmniRowShuffle &&
-      schema.length > columnarConf.omniRowShuffleColumnsThreshold
-    new OmniColumnarBatchSerializer(readBatchNumRows, numOutputRows, isRowShuffle)
+    if (GlutenConfig.get.isUseCelebornShuffleManager) {
+      val columnarConf = GlutenConfig.get
+      val isRowShuffle = columnarConf.enableOmniRowShuffle &&
+        schema.length > columnarConf.omniRowShuffleColumnsThreshold
+      val clazz = ClassUtils.getClass("org.apache.spark.shuffle.OmniCelebornColumnarBatchSerializer")
+      val constructor =
+        clazz.getConstructor(classOf[SQLMetric], classOf[SQLMetric], classOf[Boolean])
+      constructor
+        .newInstance(readBatchNumRows, numOutputRows, Boolean.box(isRowShuffle))
+        .asInstanceOf[Serializer]
+    } else {
+      val columnarConf = GlutenConfig.get
+      val isRowShuffle = columnarConf.enableOmniRowShuffle &&
+        schema.length > columnarConf.omniRowShuffleColumnsThreshold
+      new OmniColumnarBatchSerializer(readBatchNumRows, numOutputRows, isRowShuffle)
+    }
   }
 
   /** Create broadcast relation for BroadcastExchangeExec */

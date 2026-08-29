@@ -38,6 +38,18 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
     jlong executor_spill_memory_threshold);
 
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_JniByteInputStreams_newDirectByteBuffer(
+    JNIEnv *env, jclass, jlong address, jint capacity);
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OnHeapJniByteInputStream_memCopyFromHeap(
+    JNIEnv *env, jobject, jbyteArray source, jlong destAddress, jint size);
+
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMakeForRSS(
+    JNIEnv *env, jobject,
+    jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
+    jstring compression_type_jstr, jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
+    jlong executor_spill_memory_threshold, jobject partitionPusher);
+
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(JNIEnv *env, jobject jObj,
     jlong splitter_id, jlong jVecBatchAddress);
 

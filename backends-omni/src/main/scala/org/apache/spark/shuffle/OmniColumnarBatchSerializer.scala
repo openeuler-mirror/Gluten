@@ -131,14 +131,14 @@ private class ColumnarBatchSerializerInstance(
       }
 
       override def close(): Unit = {
+        if (!closeCalled.compareAndSet(false, true)) {
+          return
+        }
         if (numBatchesTotal > 0) {
           readBatchNumRows.set(numRowsTotal.toDouble / numBatchesTotal)
         }
         numOutputRows += numRowsTotal
         dIn.close()
-        if (!closeCalled.compareAndSet(false, true)) {
-          return
-        }
         jniWrapper.closeDeserializer(shuffleReaderHandle)
       }
     }
