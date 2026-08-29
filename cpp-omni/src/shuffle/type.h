@@ -49,6 +49,8 @@ struct SplitOptions {
     uint64_t executor_spill_mem_threshold = spillThreshold * offHeapSize; // default value
     uint64_t compress_block_size = 64 * 1024; // default value
 
+    bool rss_mode = false;
+
     static SplitOptions Defaults();
 };
 

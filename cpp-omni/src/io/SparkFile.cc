@@ -178,6 +178,36 @@ namespace spark {
     return std::unique_ptr<OutputStream>(new FileOutputStream(path));
   }
 
+  MemoryOutputStream::MemoryOutputStream() : name_("memory"), closed_(false) {}
+
+  uint64_t MemoryOutputStream::getLength() const {
+    return buffer_.size();
+  }
+
+  uint64_t MemoryOutputStream::getNaturalWriteSize() const {
+    return 128 * 1024;
+  }
+
+  void MemoryOutputStream::write(const void* buf, size_t length) {
+    if (closed_) {
+      throw std::logic_error("Cannot write to closed stream.");
+    }
+    const auto* bytes = static_cast<const uint8_t*>(buf);
+    buffer_.insert(buffer_.end(), bytes, bytes + length);
+  }
+
+  const std::string& MemoryOutputStream::getName() const {
+    return name_;
+  }
+
+  void MemoryOutputStream::close() {
+    closed_ = true;
+  }
+
+  std::unique_ptr<OutputStream> writeMemoryBuffer() {
+    return std::unique_ptr<OutputStream>(new MemoryOutputStream());
+  }
+
   InputStream::~InputStream() {
     // PASS
   };
