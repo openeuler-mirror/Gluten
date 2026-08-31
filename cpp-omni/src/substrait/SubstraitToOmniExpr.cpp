@@ -301,8 +301,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             }
             size_t len = sp->length();
 
-            // here got the data is like: "version(int32)numHashFunctions(int32)numWords(int32)bit[](long[])".
-            // the data is big-endian string from network, we will convert it to little-endian in op::BloomFilter.
+            // Spark BloomFilterImpl layout, big-endian:
+            // version(int32) + numHashFunctions(int32) + numWords(int32) + bit[](long[]).
+            // op::BloomFilter converts BE to native on deserialize.
             if (len <= 0) {
                 OMNI_THROW("OMNI_ERROR:", "bloom string is invaild when process might_contain func in SubstraitToOmniExpr.");
             }
