@@ -9,6 +9,7 @@ import com.huawei.boostkit.spark.jni.ParquetColumnarBatchWriter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.apache.gluten.backendsapi.omni.PaimonBinaryRowCompat;
 import org.apache.gluten.connector.write.PaimonFileInfoJson;
 import org.apache.gluten.metrics.BatchWriteMetrics;
 import org.apache.gluten.runtime.OmniRuntime;
@@ -590,8 +591,7 @@ public class PaimonWriteJniWrapper implements RuntimeAware {
                 return;
             }
             if (dataType instanceof BinaryType) {
-                byte[] bytes = col.getBinary(row);
-                writer.writeBinary(pos, bytes, 0, bytes.length);
+                PaimonBinaryRowCompat.writeBinary(writer, pos, col.getBinary(row));
                 return;
             }
             if (dataType instanceof DecimalType) {

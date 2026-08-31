@@ -27,6 +27,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types._
 
+import java.nio.charset.StandardCharsets
 import java.util.{Collections, Optional}
 
 import scala.collection.JavaConverters._
@@ -338,6 +339,10 @@ object GlutenPaimonSourceUtil extends Logging {
         case d: DecimalType =>
           val dec = row.getDecimal(index, d.precision, d.scale)
           if (dec == null) PaimonNullPartition else dec.toBigDecimal.toPlainString
+        case _: BinaryType =>
+          val bytes = row.getBinary(index)
+          if (bytes == null) PaimonNullPartition
+          else new String(bytes, StandardCharsets.ISO_8859_1)
         case _ =>
           Try(Option(row.getString(index)).map(_.toString)).toOption.flatten
             .getOrElse(PaimonNullPartition)

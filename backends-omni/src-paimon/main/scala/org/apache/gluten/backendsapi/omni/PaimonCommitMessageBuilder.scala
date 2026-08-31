@@ -220,8 +220,7 @@ object PaimonCommitMessageBuilder {
       case _: VarCharType | _: CharType =>
         writer.writeString(pos, BinaryString.fromString(value))
       case _: BinaryType | _: VarBinaryType =>
-        val bytes = value.getBytes(StandardCharsets.ISO_8859_1)
-        writer.writeBinary(pos, bytes, 0, bytes.length)
+        PaimonBinaryRowCompat.writeBinary(writer, pos, value.getBytes(StandardCharsets.ISO_8859_1))
       case d: DecimalType =>
         writer.writeDecimal(
           pos,
