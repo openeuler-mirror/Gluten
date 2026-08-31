@@ -254,8 +254,11 @@ public class PaimonWriteJniWrapper implements RuntimeAware {
             }
             fileIndex++;
             String ext = format == FORMAT_PARQUET ? "parquet" : "orc";
-            String fileName = String.format(Locale.ROOT, "data-%d-%s-%d-%05d.%s",
-                    partitionId, operationId, taskId, fileIndex, ext);
+            // Paimon data file names are data-${uuid}-${id}.${format}. Do not embed Spark
+            // partitionId/taskId: those numbers are misread as bucket/level and snapshot
+            // paths then fail to open (e.g. data-3-... vs files named data-6-... / data-9-...).
+            String fileName = String.format(Locale.ROOT, "data-%s-%d.%s",
+                    java.util.UUID.randomUUID().toString(), fileIndex, ext);
             String path = String.format(Locale.ROOT, "%s/%s", stagingDirectory, fileName);
             try {
                 Path output = new Path(path);
@@ -408,7 +411,7 @@ public class PaimonWriteJniWrapper implements RuntimeAware {
         }
 
         private int defaultBucket(BinaryRow bucketKey) {
-            return Math.abs(bucketKey.hashCode() % numBuckets);
+            return Math.floorMod(bucketKey.hashCode(), numBuckets);
         }
 
         private int modBucket(BinaryRow bucketKey, ColumnarBatch batch, int row) {

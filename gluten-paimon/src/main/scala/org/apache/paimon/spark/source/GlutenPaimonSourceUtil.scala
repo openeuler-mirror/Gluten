@@ -19,10 +19,13 @@ package org.apache.paimon.spark.source
 import org.apache.gluten.substrait.rel.{LocalFilesBuilder, LocalFilesNode, SplitInfo}
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 
+import org.apache.paimon.data.InternalRow
+
+import org.apache.spark.sql.catalyst.util.DateFormatter
 import org.apache.spark.sql.connector.read.{InputPartition, Scan}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.{DataType, StructType, TimestampNTZType, TimestampType}
+import org.apache.spark.sql.types._
 
 import java.util.{Collections, Optional}
 
@@ -32,6 +35,8 @@ import scala.util.Try
 object GlutenPaimonSourceUtil extends Logging {
   private val PaimonScanClass = "org.apache.paimon.spark.PaimonScan"
   private val PaimonSplitScanClass = "org.apache.paimon.spark.read.PaimonSplitScan"
+  // Native IsNullPartitionMarker maps this to SQL NULL. Empty / whitespace must not use it.
+  private val PaimonNullPartition = "__DEFAULT_PARTITION__"
 
   def supportsScan(scan: Scan): Boolean = {
     val name = scan.getClass.getName
@@ -111,13 +116,14 @@ object GlutenPaimonSourceUtil extends Logging {
       inputPartition: InputPartition,
       partitionSchema: StructType,
       scanFileFormat: ReadFileFormat): Seq[PaimonFile] = {
+    val splitPartition = partitionValuesFromRow(invokeAny(split, Seq("partition")), partitionSchema)
     val rawFiles = invokeAny(split, Seq("convertToRawFiles"))
       .flatMap(optionalValue)
       .flatMap(asSeq)
       .getOrElse(Seq.empty)
 
     if (rawFiles.nonEmpty) {
-      rawFiles.map(rawFileToPaimonFile(_, partitionSchema, scanFileFormat))
+      rawFiles.map(rawFileToPaimonFile(_, partitionSchema, scanFileFormat, splitPartition))
     } else {
       val bucketPath = invokeAny(split, Seq("bucketPath")).map(_.toString)
       val beforeFiles = invokeAny(split, Seq("beforeFiles"))
@@ -132,14 +138,16 @@ object GlutenPaimonSourceUtil extends Logging {
           s"[Gluten][PaimonRead] No raw/data files extracted from splitClass=" +
             s"${split.getClass.getName}, partitionClass=${inputPartition.getClass.getName}")
       }
-      allFiles.map(dataFileToPaimonFile(_, bucketPath, partitionSchema, scanFileFormat))
+      allFiles.map(
+        dataFileToPaimonFile(_, bucketPath, partitionSchema, scanFileFormat, splitPartition))
     }
   }
 
   private def rawFileToPaimonFile(
       rawFile: Any,
       partitionSchema: StructType,
-      scanFileFormat: ReadFileFormat): PaimonFile = {
+      scanFileFormat: ReadFileFormat,
+      splitPartition: Map[String, String]): PaimonFile = {
     val path = invokeAny(rawFile, Seq("path", "filePath", "getPath"))
       .map(_.toString)
       .getOrElse(throw new UnsupportedOperationException("Cannot extract Paimon raw file path"))
@@ -154,7 +162,7 @@ object GlutenPaimonSourceUtil extends Logging {
       length = length,
       fileSize = length,
       modificationTime = invokeLong(rawFile, Seq("modificationTime", "mtime")).getOrElse(0L),
-      partitionValues = partitionValuesFromPath(nativePath, partitionSchema) ++
+      partitionValues = resolvePartitionValues(splitPartition, nativePath, partitionSchema) ++
         paimonMetadataValues(path, bucketFromPath(path)),
       fileFormat = format)
   }
@@ -163,7 +171,8 @@ object GlutenPaimonSourceUtil extends Logging {
       dataFile: Any,
       bucketPath: Option[String],
       partitionSchema: StructType,
-      scanFileFormat: ReadFileFormat): PaimonFile = {
+      scanFileFormat: ReadFileFormat,
+      splitPartition: Map[String, String]): PaimonFile = {
     val fileName = invokeAny(dataFile, Seq("fileName", "name", "path"))
       .map(_.toString)
       .getOrElse(throw new UnsupportedOperationException("Cannot extract Paimon data file name"))
@@ -177,7 +186,7 @@ object GlutenPaimonSourceUtil extends Logging {
       length = fileSize,
       fileSize = fileSize,
       modificationTime = invokeLong(dataFile, Seq("creationTimeEpochMillis")).getOrElse(0L),
-      partitionValues = partitionValuesFromPath(nativePath, partitionSchema) ++
+      partitionValues = resolvePartitionValues(splitPartition, nativePath, partitionSchema) ++
         paimonMetadataValues(
           path,
           bucketFromPath(path).orElse(invokeLong(dataFile, Seq("bucket")).map(_.toInt))),
@@ -266,6 +275,74 @@ object GlutenPaimonSourceUtil extends Logging {
     case map: Map[_, _] =>
       Some(map.map { case (k, v) => k.toString -> v.toString })
     case _ => None
+  }
+
+  /**
+   * Prefer DataSplit.partition BinaryRow over path segments. Paimon stores null / empty / space
+   * as distinct BinaryRow values but generatePartValues collapses them all to
+   * `__DEFAULT_PARTITION__` on disk. Parsing the path would make Omni SELECT return NULL for
+   * empty-string and whitespace partitions (Spark still distinguishes them).
+   */
+  private def resolvePartitionValues(
+      fromRow: Map[String, String],
+      path: String,
+      partitionSchema: StructType): Map[String, String] = {
+    if (partitionSchema.isEmpty) {
+      Map.empty
+    } else if (partitionSchema.fieldNames.forall(fromRow.contains)) {
+      fromRow
+    } else {
+      partitionValuesFromPath(path, partitionSchema)
+    }
+  }
+
+  private def partitionValuesFromRow(
+      partitionRow: Option[Any],
+      partitionSchema: StructType): Map[String, String] = {
+    if (partitionSchema.isEmpty) {
+      Map.empty
+    } else {
+      partitionRow
+        .collect { case row: InternalRow if row.getFieldCount == partitionSchema.size =>
+          partitionSchema.fields.zipWithIndex.map {
+            case (field, i) => field.name -> paimonFieldToPartitionString(row, i, field.dataType)
+          }.toMap
+        }
+        .getOrElse(Map.empty)
+    }
+  }
+
+  private def paimonFieldToPartitionString(
+      row: InternalRow,
+      index: Int,
+      dataType: DataType): String = {
+    if (row.isNullAt(index)) {
+      PaimonNullPartition
+    } else {
+      dataType match {
+        case _: StringType | _: CharType | _: VarcharType =>
+          val s = row.getString(index)
+          if (s == null) PaimonNullPartition else s.toString
+        case _: BooleanType => String.valueOf(row.getBoolean(index))
+        case _: ByteType => String.valueOf(row.getByte(index))
+        case _: ShortType => String.valueOf(row.getShort(index))
+        case _: IntegerType => String.valueOf(row.getInt(index))
+        case _: LongType => String.valueOf(row.getLong(index))
+        case _: FloatType => String.valueOf(row.getFloat(index))
+        case _: DoubleType => String.valueOf(row.getDouble(index))
+        case _: DateType => DateFormatter.apply().format(row.getInt(index))
+        case TimestampType | TimestampNTZType =>
+          val ts = row.getTimestamp(index, 6)
+          if (ts == null) PaimonNullPartition
+          else toOmniTimestampPartitionValue(ts.toString)
+        case d: DecimalType =>
+          val dec = row.getDecimal(index, d.precision, d.scale)
+          if (dec == null) PaimonNullPartition else dec.toBigDecimal.toPlainString
+        case _ =>
+          Try(Option(row.getString(index)).map(_.toString)).toOption.flatten
+            .getOrElse(PaimonNullPartition)
+      }
+    }
   }
 
   private def partitionValuesFromPath(path: String, partitionSchema: StructType): Map[String, String] = {

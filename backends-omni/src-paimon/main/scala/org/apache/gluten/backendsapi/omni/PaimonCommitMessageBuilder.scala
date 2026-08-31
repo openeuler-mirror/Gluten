@@ -60,7 +60,15 @@ object PaimonCommitMessageBuilder {
       messages: Seq[WriterCommitMessage],
       table: FileStoreTable,
       format: String): util.List[CommitMessage] = {
-    messages.flatMap(taskCommitMessages(_, table, format)).asJava
+    val fileInfoJson = messages.flatMap {
+      case null => Nil
+      case taskMessage: OmniPaimonWriterCommitMessage =>
+        Option(taskMessage.fileInfoJson).map(_.toSeq).getOrElse(Nil)
+      case other =>
+        throw new IllegalStateException(
+          "Unsupported Paimon writer commit message: " + other.getClass.getName)
+    }.toArray
+    buildCommitMessage(fileInfoJson, table, format).commitMessages.asJava
   }
 
   def groupCommitMessagesByPartition(
@@ -84,20 +92,6 @@ object PaimonCommitMessageBuilder {
     }
     groups.asScala.toSeq.map { case (partitionValues, commitMessages) =>
       partitionValues -> commitMessages.asInstanceOf[util.List[CommitMessage]]
-    }
-  }
-
-  private def taskCommitMessages(
-      message: WriterCommitMessage,
-      table: FileStoreTable,
-      format: String): Seq[CommitMessage] = {
-    message match {
-      case null => Nil
-      case taskMessage: OmniPaimonWriterCommitMessage =>
-        buildCommitMessage(taskMessage.fileInfoJson, table, format).commitMessages
-      case other =>
-        throw new IllegalStateException(
-          "Unsupported Paimon writer commit message: " + other.getClass.getName)
     }
   }
 
