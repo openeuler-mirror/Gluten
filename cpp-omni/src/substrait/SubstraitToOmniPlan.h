@@ -70,6 +70,9 @@ struct SplitInfo {
     /// The file format of the files to be scanned.
     FileFormat format;
 
+    /// Backend-normalized split properties, for example Text source and codec options.
+    std::unordered_map<std::string, std::string> customSplitInfo;
+
     /// The file sizes and modification times of the files to be scanned.
     std::vector<std::optional<FileProperties>> properties;
 

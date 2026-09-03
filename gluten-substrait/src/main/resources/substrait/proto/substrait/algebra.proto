@@ -136,6 +136,18 @@ message ReadRel {
       message OrcReadOptions {}
       message DwrfReadOptions {}
       message TextReadOptions {
+        enum TextSourceKind {
+          TEXT_SOURCE_UNSPECIFIED = 0;
+          SPARK_TEXT = 1;
+          HIVE_TEXT = 2;
+          SPARK_CSV = 3;
+        }
+        enum TextCodecKind {
+          TEXT_CODEC_UNSPECIFIED = 0;
+          RAW_LINE = 1;
+          LAZY_SIMPLE = 2;
+          CSV = 3;
+        }
         string field_delimiter = 1;
         uint64 max_block_size = 2;
         NamedStruct schema = 3 [deprecated=true];
@@ -144,6 +156,12 @@ message ReadRel {
         string escape = 6;
         string null_value = 7;
         bool empty_as_default = 8;
+        TextSourceKind source_kind = 9;
+        TextCodecKind codec_kind = 10;
+        string charset = 11;
+        string line_separator = 12;
+        string compression_codec = 13;
+        bool whole_text = 14;
       }
       message JsonReadOptions {
         uint64 max_block_size = 1;

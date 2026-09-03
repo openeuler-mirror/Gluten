@@ -1157,7 +1157,7 @@ void SubstraitToOmniPlanConverter::ConstructFunctionMap(const ::substrait::Plan 
         auto name = sFmap.name();
         functionMap[id] = name;
     }
-    exprConverter = std::make_unique<SubstraitOmniExprConverter>(functionMap);
+    exprConverter = std::make_unique<SubstraitOmniExprConverter>(functionMap, confMap);
 }
 
 std::string SubstraitToOmniPlanConverter::NextPlanNodeId()

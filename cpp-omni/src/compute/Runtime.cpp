@@ -23,7 +23,11 @@ std::unique_ptr<ResultIterator> Runtime::CreateResultIterator(const std::string 
     const std::vector<std::shared_ptr<ResultIterator>> &inputs,
     const std::unordered_map<std::string, std::string> &sessionConf)
 {
-    OmniPlanConverter omniPlanConverter(inputs, GetMemoryPool(), sessionConf);
+    auto effectiveConf = confMap_;
+    for (const auto &entry : sessionConf) {
+        effectiveConf[entry.first] = entry.second;
+    }
+    OmniPlanConverter omniPlanConverter(inputs, GetMemoryPool(), effectiveConf);
     omniPlan_ = omniPlanConverter.ToOmniPlan(substraitPlan_, std::move(localFiles_));
 
     // Scan node can be required.
@@ -48,7 +52,7 @@ std::unique_ptr<ResultIterator> Runtime::CreateResultIterator(const std::string 
     }
 
     auto wholeStageIter = std::make_unique<WholeStageResultIterator>(MemoryManager::GetGlobalMemoryManager(), omniPlan_,
-        scanIds, streamIds, spillDir, confMap_, scanInfos);
+        scanIds, streamIds, spillDir, effectiveConf, scanInfos);
     return std::move(std::make_unique<ResultIterator>(std::move(wholeStageIter)));
 }
 }

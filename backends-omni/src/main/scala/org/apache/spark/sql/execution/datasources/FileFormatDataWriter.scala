@@ -18,6 +18,7 @@ package org.apache.spark.sql.execution.datasources
 
 import org.apache.gluten.datasources.orc.OmniOrcOutputWriter
 import org.apache.gluten.datasources.parquet.OmniParquetOutputWriter
+import org.apache.gluten.datasources.text.OmniTextOutputWriter
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 import org.apache.spark.internal.Logging
@@ -168,6 +169,9 @@ class SingleDirectoryDataWriter(
       case _: OmniOrcOutputWriter =>
         currentWriter.asInstanceOf[OmniOrcOutputWriter]
           .initialize(description.allColumns, description.dataColumns, description.timeZoneId)
+      case _: OmniTextOutputWriter =>
+        currentWriter.asInstanceOf[OmniTextOutputWriter]
+          .initialize(description.allColumns, description.dataColumns)
       case _ =>
     }
 
@@ -326,6 +330,9 @@ abstract class BaseDynamicPartitionDataWriter(
       case _: OmniOrcOutputWriter =>
         currentWriter.asInstanceOf[OmniOrcOutputWriter]
           .initialize(description.allColumns, description.dataColumns, description.timeZoneId)
+      case _: OmniTextOutputWriter =>
+        currentWriter.asInstanceOf[OmniTextOutputWriter]
+          .initialize(description.allColumns, description.dataColumns)
       case _ =>
     }
 
@@ -373,6 +380,8 @@ abstract class BaseDynamicPartitionDataWriter(
         currentWriter.asInstanceOf[OmniParquetOutputWriter].spiltWrite(record, startPos, endPos)
       case _: OmniOrcOutputWriter =>
         currentWriter.asInstanceOf[OmniOrcOutputWriter].spiltWrite(record, startPos, endPos)
+      case _: OmniTextOutputWriter =>
+        currentWriter.asInstanceOf[OmniTextOutputWriter].splitWrite(record, startPos, endPos)
       case _ =>
         assert(assertion = false, s"Unsupported output writer: ${currentWriter.getClass.getName}")
     }

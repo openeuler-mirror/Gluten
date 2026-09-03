@@ -213,23 +213,36 @@ public class LocalFilesNode implements SplitInfo {
           fileBuilder.setDwrf(dwrfReadOptions);
           break;
         case TextReadFormat:
-          String field_delimiter = fileReadProperties.getOrDefault("field_delimiter", ",");
-          String quote = fileReadProperties.getOrDefault("quote", "");
-          String header = fileReadProperties.getOrDefault("header", "0");
-          String escape = fileReadProperties.getOrDefault("escape", "");
-          String nullValue = fileReadProperties.getOrDefault("nullValue", "");
-          ReadRel.LocalFiles.FileOrFiles.TextReadOptions textReadOptions =
-              ReadRel.LocalFiles.FileOrFiles.TextReadOptions.newBuilder()
-                  .setFieldDelimiter(field_delimiter)
-                  .setQuote(quote)
-                  .setHeader(Long.parseLong(header))
-                  .setEscape(escape)
-                  .setNullValue(nullValue)
-                  .setMaxBlockSize(GlutenConfig.get().textInputMaxBlockSize())
-                  .setEmptyAsDefault(GlutenConfig.get().textIputEmptyAsDefault())
-                  .build();
-          fileBuilder.setText(textReadOptions);
-          break;
+            String fieldDelimiter = fileReadProperties.getOrDefault("field_delimiter", ",");
+            String quote = fileReadProperties.getOrDefault("quote", "");
+            String header = fileReadProperties.getOrDefault("header", "0");
+            String escape = fileReadProperties.getOrDefault("escape", "");
+            String nullValue = fileReadProperties.getOrDefault("nullValue", "");
+            String sourceKind = fileReadProperties.getOrDefault(
+                    "text_source_kind", "TEXT_SOURCE_UNSPECIFIED");
+            String codecKind = fileReadProperties.getOrDefault(
+                    "text_codec_kind", "TEXT_CODEC_UNSPECIFIED");
+            ReadRel.LocalFiles.FileOrFiles.TextReadOptions textReadOptions =
+                    ReadRel.LocalFiles.FileOrFiles.TextReadOptions.newBuilder()
+                            .setFieldDelimiter(fieldDelimiter)
+                            .setQuote(quote)
+                            .setHeader(Long.parseLong(header))
+                            .setEscape(escape)
+                            .setNullValue(nullValue)
+                            .setMaxBlockSize(GlutenConfig.get().textInputMaxBlockSize())
+                            .setEmptyAsDefault(GlutenConfig.get().textIputEmptyAsDefault())
+                            .setSourceKind(parseTextSourceKind(sourceKind))
+                            .setCodecKind(parseTextCodecKind(codecKind))
+                            .setCharset(fileReadProperties.getOrDefault("text_charset", ""))
+                            .setLineSeparator(
+                                    fileReadProperties.getOrDefault("text_line_separator", ""))
+                            .setCompressionCodec(
+                                    fileReadProperties.getOrDefault("text_compression_codec", ""))
+                            .setWholeText(Boolean.parseBoolean(
+                                    fileReadProperties.getOrDefault("text_whole_text", "false")))
+                            .build();
+            fileBuilder.setText(textReadOptions);
+            break;
         case JsonReadFormat:
           ReadRel.LocalFiles.FileOrFiles.JsonReadOptions jsonReadOptions =
               ReadRel.LocalFiles.FileOrFiles.JsonReadOptions.newBuilder()
@@ -245,4 +258,24 @@ public class LocalFilesNode implements SplitInfo {
     }
     return localFilesBuilder.build();
   }
+
+    private static ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextSourceKind
+            parseTextSourceKind(String value) {
+        try {
+            return ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextSourceKind.valueOf(value);
+        } catch (IllegalArgumentException exception) {
+            return ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextSourceKind
+                    .TEXT_SOURCE_UNSPECIFIED;
+        }
+    }
+
+    private static ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextCodecKind
+            parseTextCodecKind(String value) {
+        try {
+            return ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextCodecKind.valueOf(value);
+        } catch (IllegalArgumentException exception) {
+            return ReadRel.LocalFiles.FileOrFiles.TextReadOptions.TextCodecKind
+                    .TEXT_CODEC_UNSPECIFIED;
+        }
+    }
 }

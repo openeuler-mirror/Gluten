@@ -23,9 +23,11 @@ import org.apache.gluten.execution.{
   OmniGlutenLabeledOverwriteByExpressionExecV1
 }
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
@@ -33,6 +35,8 @@ import org.apache.spark.sql.execution.command.{CreateDataSourceTableAsSelectComm
 import org.apache.spark.sql.execution.datasources.v2.{AppendDataExec, AppendDataExecV1, OverwriteByExpressionExec, OverwriteByExpressionExecV1}
 import org.apache.spark.sql.hive.execution.{CreateHiveTableAsSelectCommand, InsertIntoHiveDirCommand, InsertIntoHiveTable, OmniInsertIntoHiveTable}
 import org.apache.spark.sql.sources.DataSourceRegister
+import org.apache.spark.sql.execution.datasources.text.TextFileFormat
+import org.apache.spark.sql.types.StringType
 
 object OmniGlutenWriterColumnarRules extends Logging {
   // TODO: support ctas in Spark3.4, see https://github.com/apache/spark/pull/39220
@@ -44,7 +48,46 @@ object OmniGlutenWriterColumnarRules extends Logging {
     "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" -> "orc",
     "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" -> "parquet"
   )
-  private def getNativeFormat(cmd: DataWritingCommand): Option[String] = {
+
+  private def supportsNativeTextWrite(
+      fileFormat: FileFormat,
+      options: Map[String, String],
+      dataColumns: Seq[Attribute]): Boolean = fileFormat match {
+    case _: TextFileFormat =>
+      dataColumns.length == 1 &&
+        dataColumns.head.dataType == StringType &&
+        OmniTextOptionsAdapter.validateWriteOptions(options).ok()
+    case _ => true
+  }
+
+  private def isTextWrite(cmd: DataWritingCommand): Boolean = cmd match {
+    case command: CreateDataSourceTableAsSelectCommand =>
+      command.table.provider.exists(_.equalsIgnoreCase("text"))
+    case command: InsertIntoHadoopFsRelationCommand =>
+      command.fileFormat.isInstanceOf[TextFileFormat]
+    case command: OmniInsertIntoHadoopFsRelationCommand =>
+      command.fileFormat.isInstanceOf[TextFileFormat]
+    case _ => false
+  }
+
+  private[datasources] def resolveWriteValidationOutput(
+      child: SparkPlan,
+      textWrite: Boolean): Seq[Attribute] = {
+    if (!textWrite) {
+      child.output
+    } else {
+      child match {
+        // ColumnarWriteFilesExec deliberately exposes an empty output because it is a terminal
+        // write node. Text's one-String-column gate must inspect the actual input instead.
+        case write: ColumnarWriteFilesExec => write.left.output
+        case _ => child.output
+      }
+    }
+  }
+
+  private def getNativeFormat(
+      cmd: DataWritingCommand,
+      output: Seq[Attribute]): Option[String] = {
     if (!BackendsApiManager.getSettings.enableNativeWriteFiles()) {
       return None
     }
@@ -52,19 +95,37 @@ object OmniGlutenWriterColumnarRules extends Logging {
     cmd match {
       case command: CreateDataSourceTableAsSelectCommand
         if !BackendsApiManager.getSettings.skipNativeCtas(command) =>
-        command.table.provider.filter(GlutenFormatFactory.isRegistered)
+        command.table.provider
+          .filter(GlutenFormatFactory.isRegistered)
+          .filter {
+            case "text" =>
+              val partitionNames = command.table.partitionColumnNames.toSet
+              val dataColumns = output.filterNot(attr => partitionNames.contains(attr.name))
+              dataColumns.length == 1 &&
+                dataColumns.head.dataType == StringType &&
+                OmniTextOptionsAdapter
+                  .validateWriteOptions(command.table.storage.properties)
+                  .ok()
+            case _ => true
+          }
       case command: InsertIntoHadoopFsRelationCommand
         if !BackendsApiManager.getSettings.skipNativeInsertInto(command) =>
+        val partitionIds = command.partitionColumns.map(_.exprId).toSet
+        val dataColumns = output.filterNot(attr => partitionIds.contains(attr.exprId))
         command.fileFormat match {
           case register: DataSourceRegister
-            if GlutenFormatFactory.isRegistered(register.shortName()) =>
+            if GlutenFormatFactory.isRegistered(register.shortName()) &&
+              supportsNativeTextWrite(command.fileFormat, command.options, dataColumns) =>
             Some(register.shortName())
           case _ => None
         }
       case command: OmniInsertIntoHadoopFsRelationCommand =>
+        val partitionIds = command.partitionColumns.map(_.exprId).toSet
+        val dataColumns = output.filterNot(attr => partitionIds.contains(attr.exprId))
         command.fileFormat match {
           case register: DataSourceRegister
-            if GlutenFormatFactory.isRegistered(register.shortName()) =>
+            if GlutenFormatFactory.isRegistered(register.shortName()) &&
+              supportsNativeTextWrite(command.fileFormat, command.options, dataColumns) =>
             Some(register.shortName())
           case _ => None
         }
@@ -163,10 +224,11 @@ object OmniGlutenWriterColumnarRules extends Logging {
         injectFakeRowAdaptor(rc, rc.child)
       case rc @ DataWritingCommandExec(cmd, child) =>
         // The same thread can set these properties in the last query submission.
-        val fields = child.output.toStructType.fields
+        val validationOutput = resolveWriteValidationOutput(child, isTextWrite(cmd))
+        val fields = validationOutput.toStructType.fields
         val format =
           if (BackendsApiManager.getSettings.supportNativeWrite(fields)) {
-            getNativeFormat(cmd)
+            getNativeFormat(cmd, validationOutput)
           } else {
             None
           }

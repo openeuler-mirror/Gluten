@@ -22,6 +22,7 @@ import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE
 import org.apache.gluten.expression.{ConverterUtils, ExpressionConverter}
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.`type`.ColumnTypeNode
@@ -32,6 +33,7 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.execution.datasources.HadoopFsRelation
+import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
 import io.substrait.proto.NamedStruct
@@ -78,6 +80,21 @@ case class OmniFileSourceScanExecTransformer(
       None,
       disableBucketedScan
     )
+  }
+
+  override def getProperties: Map[String, String] = relation.fileFormat match {
+    case _: TextFileFormat =>
+      OmniTextOptionsAdapter
+        .fromSparkText(relation.options, relation.dataSchema, requiredSchema)
+        .toProperties
+    case _ => super.getProperties
+  }
+
+  // Phase-one TextReader does not evaluate predicates while decoding. Keep Text data filters in
+  // the ordinary Filter transformer instead of marking them as consumed by the native scan.
+  override def filterExprs(): Seq[Expression] = relation.fileFormat match {
+    case _: TextFileFormat => Seq.empty
+    case _ => super.filterExprs()
   }
 
   override protected def doTransform(context: SubstraitContext): TransformContext = {

@@ -23,6 +23,7 @@ import org.apache.gluten.component.Component.BuildInfo
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.extension.columnar.transition.Convention
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -36,17 +37,19 @@ import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Average, Count, First, Last, Max, Min, StddevSamp, StddevPop, VarianceSamp, VariancePop, Sum}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, CurrentRow, CumeDist, DenseRank, Lag, Lead, Literal, NamedExpression, NthValue, NTile, Rank, PercentRank, RowNumber, SpecifiedWindowFrame, UnboundedFollowing, UnboundedPreceding, WindowExpression}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
-import org.apache.spark.sql.connector.read.Scan
+import org.apache.spark.sql.connector.read.{InputPartition, Scan}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
+import org.apache.spark.sql.execution.datasources.text.TextFileFormat
+import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.hive.execution.HiveFileFormat
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
 import org.apache.spark.util.SerializableConfiguration
 
-import scala.collection.JavaConverters.asScalaBufferConverter
+import scala.collection.JavaConverters._
 import scala.collection.Seq
 import scala.collection.mutable.ArrayBuffer
 
@@ -141,6 +144,7 @@ object OmniBackendSettings extends BackendSettingsApi {
     format match {
       case ReadFileFormat.ParquetReadFormat => checkUnsupportedDataTypes
       case ReadFileFormat.OrcReadFormat => checkUnsupportedDataTypes
+      case ReadFileFormat.TextReadFormat => OmniTextOptionsAdapter.validateRead(properties)
       case _ => ValidationResult.failed(s"Unsupported file format $format")
     }
   }
@@ -154,6 +158,7 @@ object OmniBackendSettings extends BackendSettingsApi {
       case "ParquetFileFormat" => ReadFileFormat.ParquetReadFormat
       case "OmniOrcFileFormat" => ReadFileFormat.OrcReadFormat
       case "OmniParquetFileFormat" => ReadFileFormat.ParquetReadFormat
+      case "TextFileFormat" => ReadFileFormat.TextReadFormat
       // Delta Lake and other workflows scan JSON (e.g. _delta_log); Omni has no native JSON scan —
       // map to a concrete ReadFileFormat so validation fails cleanly and the scan falls back to JVM.
       case "JsonFileFormat" | "JSONFileFormat" => ReadFileFormat.JsonReadFormat
@@ -167,7 +172,38 @@ object OmniBackendSettings extends BackendSettingsApi {
       case "OrcScan" => ReadFileFormat.OrcReadFormat
       case "ParquetScan" => ReadFileFormat.ParquetReadFormat
       case "DwrfScan" => ReadFileFormat.DwrfReadFormat
+      case "TextScan" => ReadFileFormat.TextReadFormat
       case _ => ReadFileFormat.UnknownFormat
+    }
+  }
+
+  override def getSubstraitReadFilePropertiesV2(scan: Scan): Map[String, String] = scan match {
+    case textScan: TextScan =>
+      val options = textScan.options.asCaseSensitiveMap().asScala.toMap
+      // Spark 3.2/3.3 TextScan does not expose dataSchema; Spark Text's file schema is fixed.
+      val textFileSchema = new StructType().add("value", StringType)
+      OmniTextOptionsAdapter
+        .fromSparkText(options, textFileSchema, textScan.readDataSchema)
+        .toProperties
+    case _ => Map.empty
+  }
+
+  override def supportNativeScanFilter(format: ReadFileFormat): Boolean =
+    format != ReadFileFormat.TextReadFormat
+
+  override def validateScanInputPartitions(
+      format: ReadFileFormat,
+      partitions: Seq[InputPartition],
+      properties: Map[String, String],
+      serializableHadoopConf: Option[SerializableConfiguration]): ValidationResult = {
+    if (format == ReadFileFormat.TextReadFormat &&
+        properties.get(OmniTextOptionsAdapter.SourceKindKey)
+          .contains(OmniTextOptionsAdapter.SparkTextSource) &&
+        properties.get(OmniTextOptionsAdapter.CodecKindKey)
+          .contains(OmniTextOptionsAdapter.RawLineCodec)) {
+      OmniTextOptionsAdapter.validateInputPartitions(partitions, serializableHadoopConf)
+    } else {
+      ValidationResult.succeeded
     }
   }
 
@@ -235,11 +271,16 @@ object OmniBackendSettings extends BackendSettingsApi {
         case _: ParquetFileFormat => None // Parquet is directly supported
         case _: OmniOrcFileFormat => None // Omni native Orc writer
         case _: OmniParquetFileFormat => None // Omni native Parquet writer
+        case _: TextFileFormat =>
+          // WriteFilesExec fields may also contain partition columns. Spark Text validates the
+          // actual data schema in prepareWrite, where partition columns have already been removed.
+          val result = OmniTextOptionsAdapter.validateWriteOptions(options)
+          if (result.ok()) None else Some(result.reason())
         case h: HiveFileFormat if GlutenConfig.get.enableHiveFileFormatWriter =>
           validateHiveFileFormat(h) // Orc via Hive SerDe
         case _ =>
           Some(
-            "Only OrcFileFormat, ParquetFileFormat, OmniOrcFileFormat, " +
+            "Only OrcFileFormat, ParquetFileFormat, TextFileFormat, OmniOrcFileFormat, " +
               "OmniParquetFileFormat and HiveFileFormat are supported."
           ) // Unsupported format
       }

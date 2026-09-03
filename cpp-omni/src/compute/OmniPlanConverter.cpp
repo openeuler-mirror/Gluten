@@ -6,6 +6,39 @@
 
 namespace omniruntime
 {
+namespace
+{
+std::unordered_map<std::string, std::string> ParseTextOptions(
+    const substrait::ReadRel_LocalFiles_FileOrFiles_TextReadOptions& options)
+{
+    auto sourceKind = static_cast<int>(options.source_kind());
+    auto codecKind = static_cast<int>(options.codec_kind());
+    if (sourceKind != 1 || codecKind != 1) {
+        throw std::runtime_error(
+            "Unsupported Text source/codec. Phase one requires SPARK_TEXT with RAW_LINE.");
+    }
+    if (options.whole_text()) {
+        throw std::runtime_error("Unsupported Text option: whole_text must be false.");
+    }
+    if (!options.line_separator().empty()) {
+        throw std::runtime_error("Unsupported Text option: custom line separator.");
+    }
+    if (options.charset() != "UTF-8") {
+        throw std::runtime_error("Unsupported Text option: charset must be UTF-8.");
+    }
+    if (options.compression_codec() != "NONE") {
+        throw std::runtime_error("Unsupported Text option: compression is not available in phase one.");
+    }
+    return {
+        {"text.source_kind", "SPARK_TEXT"},
+        {"text.codec_kind", "RAW_LINE"},
+        {"text.charset", options.charset()},
+        {"text.line_separator", options.line_separator()},
+        {"text.compression_codec", options.compression_codec()},
+        {"text.whole_text", options.whole_text() ? "true" : "false"}};
+}
+}
+
 OmniPlanConverter::OmniPlanConverter(const std::vector<std::shared_ptr<ResultIterator>> &inputIters,
     mem::MemoryPool *OmniPool, const std::unordered_map<std::string, std::string> &confMap,
     const std::optional<std::string> writeFilesTempPath, bool validationMode)
@@ -55,6 +88,16 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
             case SubstraitFileFormatCase::kParquet:
                 splitInfo->format = FileFormat::PARQUET;
                 break;
+            case SubstraitFileFormatCase::kText: {
+                splitInfo->format = FileFormat::TEXT;
+                auto textOptions = ParseTextOptions(file.text());
+                if (!splitInfo->customSplitInfo.empty() &&
+                    splitInfo->customSplitInfo != textOptions) {
+                    throw std::runtime_error("Text options must be identical within one LocalFiles split.");
+                }
+                splitInfo->customSplitInfo = std::move(textOptions);
+                break;
+            }
             default:
                 splitInfo->format = FileFormat::UNKNOWN;
                 break;

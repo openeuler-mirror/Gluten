@@ -27,6 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.{Rank, RowNumber}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.connector.read.Scan
+import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.command.CreateDataSourceTableAsSelectCommand
 import org.apache.spark.sql.execution.datasources.{FileFormat, InsertIntoHadoopFsRelationCommand}
 import org.apache.spark.sql.types.StructField
@@ -48,6 +49,23 @@ trait BackendSettingsApi {
   def getSubstraitReadFileFormatV1(fileFormat: FileFormat): LocalFilesNode.ReadFileFormat
 
   def getSubstraitReadFileFormatV2(scan: Scan): LocalFilesNode.ReadFileFormat
+
+  /** Backend-specific properties for V2 file scans. */
+  def getSubstraitReadFilePropertiesV2(scan: Scan): Map[String, String] = Map.empty
+
+  /** Whether filters attached to this scan format are evaluated inside the native scan. */
+  def supportNativeScanFilter(format: ReadFileFormat): Boolean = true
+
+  /**
+   * Validates the concrete input partitions of a scan. The default implementation is a no-op so
+   * adding a backend-specific file check does not change another backend's behavior.
+   */
+  def validateScanInputPartitions(
+      format: ReadFileFormat,
+      partitions: Seq[InputPartition],
+      properties: Map[String, String],
+      serializableHadoopConf: Option[SerializableConfiguration] = None): ValidationResult =
+    ValidationResult.succeeded
 
   def supportWriteFilesExec(
       format: FileFormat,
