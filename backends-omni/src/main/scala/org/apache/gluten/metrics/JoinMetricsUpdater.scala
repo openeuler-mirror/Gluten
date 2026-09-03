@@ -57,6 +57,13 @@ class HashJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     lookUpJoinOutputRows += hashProbeMetrics.getLookupOutputRows
     lookUpJoinNumInputVecBatches += hashProbeMetrics.getLookupNumInputVecBatches
     lookUpJoinNumOutputVecBatches += hashProbeMetrics.getLookupNumOutputVecBatches
+    numOutputRows += hashProbeMetrics.getNumOutputRows
+    numOutputBytes += hashProbeMetrics.getNumOutputBytes
+    metrics("numOutputVectorBatches") += hashProbeMetrics.getNumOutputVecBatches
+    OmniRowCountPerVecBatchMetrics.update(
+      metrics,
+      hashProbeMetrics.getNumOutputRows,
+      hashProbeMetrics.getNumOutputVecBatches)
     lookUpJoinAddInputTime += hashProbeMetrics.getLookupAddInputTime
     lookUpJoinGetOutputTime += hashProbeMetrics.getLookupGetOutputTime
 
@@ -108,6 +115,10 @@ class SortMergeJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     val operatorMetrics = joinMetrics.get(idx)
     numOutputRows += operatorMetrics.getNumOutputRows
     numOutputVectorBatches += operatorMetrics.getNumOutputVecBatches
+    OmniRowCountPerVecBatchMetrics.update(
+      metrics,
+      operatorMetrics.getNumOutputRows,
+      operatorMetrics.getNumOutputVecBatches)
     numOutputBytes += operatorMetrics.getNumOutputBytes
     getOutputCpuCount += operatorMetrics.getOutputCpuCount
     getOutputTime += operatorMetrics.getGetOutputTime

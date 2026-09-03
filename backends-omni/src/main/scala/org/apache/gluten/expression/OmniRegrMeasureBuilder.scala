@@ -19,7 +19,7 @@ package org.apache.gluten.expression
 import org.apache.gluten.expression.ExpressionNames.REGR_SXX
 import org.apache.gluten.expression.ExpressionNames.REGR_SYY
 
-import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateFunction, RegrReplacement}
+import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateFunction
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Cast, Expression, If, IsNull, Literal, Or}
 import org.apache.spark.sql.types.DoubleType
 
@@ -36,6 +36,12 @@ import org.apache.spark.sql.types.DoubleType
  * [[AttributeReference]]; we then treat (y, x) as (attr, attr) and map to regr_sxx.
  */
 object OmniRegrMeasureBuilder {
+
+  private val REGR_REPLACEMENT_CLASS_NAME =
+    "org.apache.spark.sql.catalyst.expressions.aggregate.RegrReplacement"
+
+  def isRegrReplacement(aggregateFunc: AggregateFunction): Boolean =
+    aggregateFunc.getClass.getName == REGR_REPLACEMENT_CLASS_NAME
 
   /**
    * Spark may wrap the RegrReplacement child `If(Or(IsNull(y), IsNull(x)), null, value)` in one or
@@ -71,7 +77,7 @@ object OmniRegrMeasureBuilder {
    */
   def getRegrReplacementOverride(aggregateFunc: AggregateFunction): Option[(String, Option[Seq[Expression]])] = {
     aggregateFunc match {
-      case _: RegrReplacement =>
+      case agg if isRegrReplacement(agg) =>
         parseRegrReplacementChild(aggregateFunc.children.head, aggregateFunc).map {
           case (name, yx) => (name, Some(yx))
         }

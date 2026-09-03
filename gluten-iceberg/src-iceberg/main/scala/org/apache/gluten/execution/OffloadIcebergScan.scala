@@ -16,6 +16,7 @@
  */
 package org.apache.gluten.execution
 
+import org.apache.gluten.extension.columnar.FallbackTags
 import org.apache.gluten.extension.columnar.enumerated.RasOffload
 import org.apache.gluten.extension.columnar.heuristic.HeuristicTransform
 import org.apache.gluten.extension.columnar.offload.OffloadSingleNode
@@ -27,6 +28,8 @@ import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 
 case class OffloadIcebergScan() extends OffloadSingleNode {
   override def offload(plan: SparkPlan): SparkPlan = plan match {
+    case p if FallbackTags.nonEmpty(p) =>
+      p
     case scan: BatchScanExec if IcebergScanTransformer.supportsBatchScan(scan.scan) =>
       IcebergScanTransformer(scan)
     case other => other

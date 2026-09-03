@@ -74,7 +74,7 @@ case class OmniFromUnixTimeTransformer(
     original: FromUnixTime)
   extends ExpressionTransformer {
 
-  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Beijing", "Asia/Shanghai")
+  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Beijing", "Asia/Shanghai", "UTC")
 
   private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
     if (!GlutenConfig.get.enableOmniUnixTimeFunc) {
@@ -108,7 +108,7 @@ case class OmniUnixTimestampTransformer(
                                         original: UnixTimestamp)
   extends ExpressionTransformer {
 
-  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Shanghai")
+  private val timeZoneSet: Set[String] = Set("GMT+08:00", "Asia/Shanghai", "UTC")
 
   private def unsupportedUnixTimeFunction(timeFormat: String, timeZone: String): Unit = {
     if (!GlutenConfig.get.enableOmniUnixTimeFunc) {

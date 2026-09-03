@@ -51,6 +51,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def enableColumnarHiveTableScanNestedColumnPruning: Boolean =
     conf.getConf(COLUMNAR_HIVETABLESCAN_NESTED_COLUMN_PRUNING_ENABLED)
 
+  def viewScanFallbackEnabled: Boolean = conf.getConf(VIEW_SCAN_FALLBACK_ENABLED)
+
   def enableVanillaVectorizedReaders: Boolean = conf.getConf(VANILLA_VECTORIZED_READERS_ENABLED)
 
   def enableColumnarHashAgg: Boolean = conf.getConf(COLUMNAR_HASHAGG_ENABLED)
@@ -126,6 +128,12 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def scanFileSchemeValidationEnabled: Boolean =
     conf.getConf(VELOX_SCAN_FILE_SCHEME_VALIDATION_ENABLED)
+
+  def scanFallbackTables: Set[String] =
+    GlutenConfig.parseTableList(conf.getConf(COLUMNAR_SCAN_FALLBACK_TABLES))
+
+  def hiveTableScanFallbackTables: Set[String] =
+    GlutenConfig.parseTableList(conf.getConf(COLUMNAR_OMNI_HIVE_TABLE_SCAN_FALLBACK_TABLES))
 
   def enabledVecPredicateFilter: Boolean =
     conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER)
@@ -533,6 +541,8 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarMaxRowCount: Int = conf.getConf(COLUMNAR_OMNI_MAX_ROW_COUNT)
 
+  def omniColumnarMaxBatchRowCount: Int = conf.getConf(COLUMNAR_MAX_BATCH_ROW_COUNT)
+
   def omniColumnarMergedBatchThreshold: Int = conf.getConf(COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD)
 
   def enableColumnarAQEShuffle: Boolean = conf.getConf(COLUMNAR_OMNI_AQE_SHUFFLE_MERGE)
@@ -580,6 +590,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarCatalogCacheExpireTime: Int = conf.getConf(COLUMNAR_OMNI_CATALOG_CACHE_EXPIRE_TIME)
 
   def enableRollupOptimization: Boolean = conf.getConf(ENABLE_ROLLUP_OPTIMIZATION)
+
+  def omniAggregateRepeatedExpressionReuseThreshold: Int =
+    conf.getConf(OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD)
 
   def enableAutoAdjustStageResourceProfile: Boolean =
     conf.getConf(AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED)
@@ -821,6 +834,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD.key,
       COLUMNAR_OMNI_MAX_BATCH_SIZE_IN_BYTES.key,
       COLUMNAR_OMNI_MAX_ROW_COUNT.key,
+      COLUMNAR_MAX_BATCH_ROW_COUNT.key,
       COLUMNAR_MAX_BATCH_SIZE.key,
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
@@ -1043,6 +1057,13 @@ object GlutenConfig {
     buildConf("spark.gluten.sql.columnar.enableNestedColumnPruningInHiveTableScan")
       .internal()
       .doc("Enable or disable nested column pruning in hivetablescan.")
+      .booleanConf
+      .createWithDefault(true)
+
+  val VIEW_SCAN_FALLBACK_ENABLED =
+    buildConf("spark.gluten.sql.columnar.view.scan.fallback.enabled")
+      .internal()
+      .doc("When true, scan operators expanded from Spark SQL views fall back to vanilla Spark.")
       .booleanConf
       .createWithDefault(true)
 
@@ -2572,7 +2593,12 @@ object GlutenConfig {
     .internal()
     .intConf
     .createWithDefault(2097152)
-  
+
+  val COLUMNAR_MAX_BATCH_ROW_COUNT = buildConf("spark.gluten.sql.columnar.maxBatchRowCount")
+    .internal()
+    .intConf
+    .createWithDefault(0)
+
   val COLUMNAR_OMNI_MAX_ROW_COUNT = buildConf("spark.gluten.sql.columnar.backend.omni.maxRowCount")
     .internal()
     .intConf
@@ -2588,6 +2614,16 @@ object GlutenConfig {
     .doc("enable or disable aqe shuffle")
     .booleanConf
     .createWithDefault(true)
+
+  val COLUMNAR_OMNI_AQE_COALESCE_PARTITIONS_RATIO =
+    buildConf("spark.gluten.sql.columnar.backend.omni.aqe.coalescePartitions.ratio")
+      .internal()
+      .doc("AQE coalesce partitions ratio applied in a second coalescing pass")
+      .doubleConf
+      .checkValue(
+        ratio => !ratio.isNaN && !ratio.isInfinity && ratio > 0,
+        "must be a finite positive number")
+      .createWithDefault(5.0)
 
   val COLUMNAR_SPILL_WRITE_BUFFER_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.spill.writeBufferSize")
     .internal()
@@ -2625,6 +2661,23 @@ object GlutenConfig {
     .doc("columnar sort spill threshold")
     .intConf
     .createWithDefault(Integer.MAX_VALUE)
+
+  val COLUMNAR_SCAN_FALLBACK_TABLES =
+    buildConf("spark.gluten.sql.columnar.scan.fallback.tables")
+      .internal()
+      .doc("Comma-separated list of table names (e.g., db.table1,db.table2) whose scan should " +
+        "fallback to vanilla Spark. Leave empty to disable.")
+      .stringConf
+      .createWithDefault("")
+
+  val COLUMNAR_OMNI_HIVE_TABLE_SCAN_FALLBACK_TABLES = buildConf(
+    "spark.gluten.sql.columnar.backend.omni.hiveTableScan.fallback.tables")
+    .internal()
+    .doc("Comma-separated list of fully qualified table names " +
+      "(e.g., db.table1,db.table2) that should fallback to vanilla Spark scan " +
+      "instead of native Omni scan. Leave empty to disable.")
+    .stringConf
+    .createWithDefault("")
 
   val COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER = buildConf("spark.gluten.sql.columnar.backend.omni.vec.predicate.enabled")
     .internal()
@@ -2664,6 +2717,16 @@ object GlutenConfig {
     .booleanConf
     .createWithDefault(true)
 
+  val OMNI_AGGREGATE_REPEATED_EXPRESSION_REUSE_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.aggregateRepeatedExpressionReuseThreshold")
+      .internal()
+      .doc(
+        "Minimum reuse count required before Omni pulls repeated aggregate " +
+          "sub-expressions into a pre-project for reuse.")
+      .intConf
+      .checkValue(_ > 1, "The reuse threshold must be greater than 1.")
+      .createWithDefault(3)
+
   val AUTO_ADJUST_STAGE_RESOURCE_PROFILE_ENABLED =
     buildStaticConf("spark.gluten.auto.adjustStageResource.enabled")
         .internal()
@@ -2693,9 +2756,35 @@ object GlutenConfig {
     .booleanConf
     .createWithDefault(false)
 
+  val ENABLE_DRIVER_TASK_SPLIT_DEBUG =
+    buildConf("spark.gluten.sql.columnar.driverTaskSplitDebug.enabled")
+      .internal()
+      .doc("enable Driver-side logging of task file split paths and ranges")
+      .booleanConf
+      .createWithDefault(false)
+
   val HDFS_READ_MODE =
     buildConf(GLUTEN_HDFS_READ_MODE)
       .internal()
       .intConf
       .createWithDefault(0)
+
+  def parseTableList(tables: String): Set[String] = {
+    tables
+      .split(",")
+      .map(normalizeTableName)
+      .filter(_.nonEmpty)
+      .toSet
+  }
+
+  def normalizeTableName(table: String): String = {
+    table.trim.toLowerCase(Locale.ROOT)
+  }
+
+  def scanFallbackTableMatched(tableNames: Seq[String]): Option[String] = {
+    val fallbackTables = GlutenConfig.get.scanFallbackTables
+    tableNames
+      .map(normalizeTableName)
+      .find(fallbackTables.contains)
+  }
 }

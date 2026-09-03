@@ -22,6 +22,7 @@ import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.{OmniParquetFileFormat, OmniParquetFormatWriterInjects}
 import org.apache.gluten.execution.TransformSupport
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileAlreadyExistsException, Path}
 import org.apache.hadoop.mapreduce._
@@ -39,7 +40,6 @@ import org.apache.spark.sql.catalyst.expressions.BindReferences.bindReferences
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.connector.write.WriterCommitMessage
-import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOutputWriterSpec
@@ -126,8 +126,7 @@ object OmniFileFormatWriter extends Logging {
     val partitionSet = AttributeSet(partitionColumns)
     // cleanup the internal metadata information of
     // the file source metadata attribute if any before write out
-    val finalOutputSpec = outputSpec.copy(outputColumns = outputSpec.outputColumns
-      .map(FileSourceMetadataAttribute.cleanupFileSourceMetadataInformation))
+    val finalOutputSpec = outputSpec
     val dataColumns = finalOutputSpec.outputColumns.filterNot(partitionSet.contains)
 
     val writerBucketSpec = V1WritesUtils.getWriterBucketSpec(bucketSpec, dataColumns, options)
@@ -179,7 +178,7 @@ object OmniFileFormatWriter extends Logging {
     // its final plan's ordering, so we have to materialize that plan first
     // it is fine to use plan further down as the final plan is cached in that plan
     def materializeAdaptiveSparkPlan(plan: SparkPlan): SparkPlan = plan match {
-      case a: AdaptiveSparkPlanExec => a.finalPhysicalPlan
+      case a: AdaptiveSparkPlanExec => a
       case p: SparkPlan => p.withNewChildren(p.children.map(materializeAdaptiveSparkPlan))
     }
 
@@ -292,14 +291,14 @@ object OmniFileFormatWriter extends Logging {
         rdd
       }
 
-      val jobTrackerID = SparkHadoopWriterUtils.createJobTrackerID(new Date())
+      val jobIdInstant = new Date().getTime
       val ret = new Array[WriteTaskResult](rddWithNonEmptyPartitions.partitions.length)
       sparkSession.sparkContext.runJob(
         rddWithNonEmptyPartitions,
         (taskContext: TaskContext, iter: Iterator[InternalRow]) => {
           executeTask(
             description = description,
-            jobTrackerID = jobTrackerID,
+            jobIdInstant = jobIdInstant,
             sparkStageId = taskContext.stageId(),
             sparkPartitionId = taskContext.partitionId(),
             sparkAttemptNumber = taskContext.taskAttemptId().toInt & Integer.MAX_VALUE,
@@ -368,7 +367,13 @@ object OmniFileFormatWriter extends Logging {
     }
 
     writeAndCommit(job, description, committer) {
-      val rdd = nPlan.executeWrite(writeFilesSpec)
+      val rdd = nPlan match {
+        case writeFilesExec: WriteFilesExec =>
+          SparkShimLoader.getSparkShims.executeWriteFiles(writeFilesExec, writeFilesSpec)
+        case other =>
+          throw new UnsupportedOperationException(
+            s"${other.nodeName} does not support write files execution")
+      }
       val ret = new Array[WriteTaskResult](rdd.partitions.length)
       session.sparkContext.runJob(
         rdd,
@@ -420,7 +425,7 @@ object OmniFileFormatWriter extends Logging {
   /** Writes data out in a single Spark task. */
   private[spark] def executeTask(
                                   description: WriteJobDescription,
-                                  jobTrackerID: String,
+                                  jobIdInstant: Long,
                                   sparkStageId: Int,
                                   sparkPartitionId: Int,
                                   sparkAttemptNumber: Int,
@@ -428,7 +433,7 @@ object OmniFileFormatWriter extends Logging {
                                   iterator: Iterator[InternalRow],
                                   concurrentOutputWriterSpec: Option[ConcurrentOutputWriterSpec]): WriteTaskResult = {
 
-    val jobId = SparkHadoopWriterUtils.createJobID(jobTrackerID, sparkStageId)
+    val jobId = SparkHadoopWriterUtils.createJobID(new Date(jobIdInstant), sparkStageId)
     val taskId = new TaskID(jobId, TaskType.MAP, sparkPartitionId)
     val taskAttemptId = new TaskAttemptID(taskId, sparkAttemptNumber)
 
@@ -483,7 +488,7 @@ object OmniFileFormatWriter extends Logging {
         // We throw the exception and let Executor throw ExceptionFailure to abort the job.
         throw new TaskOutputFileAlreadyExistException(f)
       case t: Throwable =>
-        throw QueryExecutionErrors.taskFailedWhileWritingRowsError(description.path, t)
+        throw SparkShimLoader.getSparkShims.taskFailedWhileWritingRowsError(description.path, t)
     }
   }
 

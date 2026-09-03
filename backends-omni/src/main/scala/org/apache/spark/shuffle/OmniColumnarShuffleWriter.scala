@@ -55,7 +55,7 @@ class OmniColumnarShuffleWriter[K, V](
   val shuffleSpillBatchRowNum = columnarConf.omniColumnarShuffleSpillBatchRowNum
   val shuffleTaskSpillMemoryThreshold = columnarConf.omniColumnarShuffleTaskSpillMemoryThreshold
   val shuffleExecutorSpillMemoryThreshold = columnarConf.omniColumnarSpillMemPctThreshold *
-    conf.getSizeAsBytes("spark.memory.offHeap.size", "1g")
+    conf.getSizeAsBytes("spark.memory.offHeap.size", "1g") / 100L
   val shuffleCompressBlockSize = columnarConf.omniColumnarShuffleCompressBlockSize
 
   val shuffleNativeBufferSize = {

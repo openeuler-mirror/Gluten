@@ -17,11 +17,12 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.gluten.sql.shims.SparkShimLoader
+
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LeafNode, Statistics}
 import org.apache.spark.sql.execution.SparkPlan
-import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.types._
 
 object ExtendedAggUtils {
@@ -63,23 +64,23 @@ object ExtendedAggUtils {
   def supportsFilterPropagation(a: Aggregate): Boolean = {
     a.groupingExpressions.isEmpty &&
       a.aggregateExpressions.forall(
-        !_.exists {
+        _.find {
           case ae: AggregateExpression =>
             ae.aggregateFunction match {
               case _: Count | _: Sum | _: Average | _: Max | _: Min => false
               case _ => true
             }
           case _ => false
-        }
+        }.isEmpty
       )
   }
 
   def supportsHashAggregate(aggregateBufferAttributes: Seq[Attribute]): Boolean = {
-    Aggregate.supportsHashAggregate(aggregateBufferAttributes)
+    aggregateBufferAttributes.forall(attr => !containsUnsupportedDedupType(attr.dataType))
   }
 
   def supportsObjectHashAggregate(aggregateExpressions: Seq[AggregateExpression]): Boolean = {
-    Aggregate.supportsObjectHashAggregate(aggregateExpressions)
+    aggregateExpressions.exists(_.aggregateFunction.isInstanceOf[TypedImperativeAggregate[_]])
   }
 
   def planPartialAggregateWithoutDistinct(
@@ -110,12 +111,12 @@ object ExtendedAggUtils {
       child: SparkPlan): SparkPlan = {
     val useHash = supportsHashAggregate(
       aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes))
+    val shims = SparkShimLoader.getSparkShims
 
     if (useHash) {
-      HashAggregateExec(
+      shims.createHashAggregateExec(
         requiredChildDistributionExpressions = requiredChildDistributionExpressions,
         isStreaming = isStreaming,
-        numShufflePartitions = None,
         groupingExpressions = groupingExpressions,
         aggregateExpressions = mayRemoveAggFilters(aggregateExpressions),
         aggregateAttributes = aggregateAttributes,
@@ -128,10 +129,9 @@ object ExtendedAggUtils {
       val useObjectHash = supportsObjectHashAggregate(aggregateExpressions)
 
       if (objectHashEnabled && useObjectHash) {
-        ObjectHashAggregateExec(
+        shims.createObjectHashAggregateExec(
           requiredChildDistributionExpressions = requiredChildDistributionExpressions,
           isStreaming = isStreaming,
-          numShufflePartitions = None,
           groupingExpressions = groupingExpressions,
           aggregateExpressions = mayRemoveAggFilters(aggregateExpressions),
           aggregateAttributes = aggregateAttributes,
@@ -140,10 +140,9 @@ object ExtendedAggUtils {
           child = child
         )
       } else {
-        SortAggregateExec(
+        shims.createSortAggregateExec(
           requiredChildDistributionExpressions = requiredChildDistributionExpressions,
           isStreaming = isStreaming,
-          numShufflePartitions = None,
           groupingExpressions = groupingExpressions,
           aggregateExpressions = mayRemoveAggFilters(aggregateExpressions),
           aggregateAttributes = aggregateAttributes,

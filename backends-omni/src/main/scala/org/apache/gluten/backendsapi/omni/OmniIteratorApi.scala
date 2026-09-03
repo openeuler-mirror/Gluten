@@ -17,7 +17,7 @@
 package org.apache.gluten.backendsapi.omni
 
 import org.apache.gluten.backendsapi.{BackendsApiManager, IteratorApi}
-import org.apache.gluten.config.GlutenNumaBindingInfo
+import org.apache.gluten.config.{GlutenConfig, GlutenNumaBindingInfo}
 import org.apache.gluten.execution._
 import org.apache.gluten.iterator.Iterators
 import org.apache.gluten.metrics.{IMetrics, OmniIteratorMetricsJniWrapper}
@@ -27,8 +27,10 @@ import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.gluten.substrait.rel.{LocalFilesBuilder, LocalFilesNode, SplitInfo}
 import org.apache.gluten.utils._
 import org.apache.gluten.vectorized.{ColumnarBatchInIterator, OmniColumnarBatchInIterator, OmniColumnarBatchOutIterator, OmniNativePlanEvaluator, VectorTransferUtils}
+import org.apache.hadoop.conf.Configuration
 import org.apache.spark.internal.Logging
 import org.apache.spark.softaffinity.SoftAffinity
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.ExternalCatalogUtils
 import org.apache.spark.sql.catalyst.util.{DateFormatter, TimestampFormatter}
 import org.apache.spark.sql.connector.read.InputPartition
@@ -56,6 +58,27 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
       properties: Map[String, String]): SplitInfo = {
     partition match {
       case f: FilePartition =>
+        if (SparkSession.active.sessionState.conf.getConf(GlutenConfig.ENABLE_DRIVER_TASK_SPLIT_DEBUG)) {
+          val hadoopConf = SparkSession.active.sessionState.newHadoopConf()
+          f.files.zipWithIndex.foreach {
+            case (file, splitIndex) =>
+              val path = file.filePath.toString
+              val (authority, nameService, namenodeAddresses) =
+                getNameServiceInfo(path, hadoopConf)
+              val end = file.start + file.length
+              logWarning(
+                s"GLUTEN_DRIVER_TASK_SPLIT " +
+                  s"taskPartitionIndex=${f.index} " +
+                  s"splitIndex=$splitIndex " +
+                  s"path=$path " +
+                  s"authority=$authority " +
+                  s"nameService=$nameService " +
+                  s"configuredNameNodes=${namenodeAddresses.mkString("[", ",", "]")} " +
+                  s"start=${file.start} " +
+                  s"end=$end " +
+                  s"length=${file.length}")
+          }
+        }
         val (
           paths,
           starts,
@@ -82,6 +105,30 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
         )
       case _ =>
         throw new UnsupportedOperationException(s"Unsupported input partition.")
+    }
+  }
+
+  private def getNameServiceInfo(
+      path: String,
+      hadoopConf: Configuration): (String, String, Seq[String]) = {
+    try {
+      val uri = new java.net.URI(path)
+      val authority = Option(uri.getAuthority).getOrElse("<no-authority>")
+      val nameService = Option(uri.getHost).getOrElse(authority)
+      val namenodeIds =
+        Option(hadoopConf.get(s"dfs.ha.namenodes.$nameService"))
+          .toSeq
+          .flatMap(_.split(","))
+          .map(_.trim)
+          .filter(_.nonEmpty)
+      val namenodeAddresses = namenodeIds.flatMap { nnId =>
+        val key = s"dfs.namenode.rpc-address.$nameService.$nnId"
+        Option(hadoopConf.get(key)).map(value => s"$nnId=$value")
+      }
+      (authority, nameService, namenodeAddresses)
+    } catch {
+      case _: java.net.URISyntaxException =>
+        ("<invalid-uri>", "<invalid-uri>", Seq.empty)
     }
   }
 

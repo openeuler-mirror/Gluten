@@ -4,6 +4,7 @@
 package org.apache.gluten.extension.columnar.offload
 
 import org.apache.gluten.execution.OmniDeltaScanExecTransformer
+import org.apache.gluten.extension.columnar.FallbackTags
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -17,6 +18,8 @@ import org.apache.spark.sql.execution.{FileSourceScanExec, SparkPlan}
  */
 case class OffloadOmniDeltaScan() extends OffloadSingleNode with Logging {
   override def offload(plan: SparkPlan): SparkPlan = plan match {
+    case p if FallbackTags.nonEmpty(p) =>
+      p
     case scan: FileSourceScanExec if OmniDeltaScanExecTransformer.isDeltaTableScan(scan) =>
       logWarning(
         s"[Gluten][Delta] OffloadOmniDeltaScan: FileSourceScanExec -> " +

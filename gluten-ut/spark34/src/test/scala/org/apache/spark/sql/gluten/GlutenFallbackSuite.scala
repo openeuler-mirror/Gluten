@@ -19,7 +19,7 @@ package org.apache.spark.sql.gluten
 import org.apache.gluten.GlutenBuildInfo
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.events.GlutenPlanFallbackEvent
-import org.apache.gluten.execution.FileSourceScanExecTransformer
+import org.apache.gluten.execution.{BasicScanExecTransformer, FileSourceScanExecTransformer}
 import org.apache.gluten.utils.BackendTestUtils
 
 import org.apache.spark.SparkConf
@@ -55,6 +55,20 @@ class GlutenFallbackSuite extends GlutenSQLTestsTrait with AdaptiveSparkPlanHelp
           """ due to: \[FallbackByUserOptions\] Validation failed on node Scan parquet""" +
           """ spark_catalog\.default\.t\.""".stripMargin
       assert(testAppender.loggingEvents.exists(_.getMessage.getFormattedMessage.matches(msgRegex)))
+    }
+  }
+
+  testGluten("fallback scan by table name") {
+    withTable("fallback_scan_table") {
+      spark.range(10).write.format("parquet").saveAsTable("fallback_scan_table")
+      withSQLConf(
+        GlutenConfig.COLUMNAR_SCAN_FALLBACK_TABLES.key -> "default.fallback_scan_table") {
+        val df = sql("SELECT * FROM fallback_scan_table")
+        checkAnswer(df, (0 until 10).map(Row(_)))
+        assert(
+          find(df.queryExecution.executedPlan)(_.isInstanceOf[BasicScanExecTransformer])
+            .isEmpty)
+      }
     }
   }
 

@@ -28,6 +28,10 @@ class OmniFilterMetricsUpdater(
       val operatorMetrics = opMetrics.asInstanceOf[OperatorMetrics]
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputVecBatches") += operatorMetrics.getNumOutputVecBatches
+      OmniRowCountPerVecBatchMetrics.update(
+        metrics,
+        operatorMetrics.getNumOutputRows,
+        operatorMetrics.getNumOutputVecBatches)
       metrics("numOutputBytes") += operatorMetrics.getNumOutputBytes
 
       metrics("numInputRows") += operatorMetrics.getNumInputRows
