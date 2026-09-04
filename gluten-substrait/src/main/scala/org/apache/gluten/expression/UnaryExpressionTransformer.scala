@@ -19,9 +19,8 @@ package org.apache.gluten.expression
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.sql.shims.SparkShimLoader
-import org.apache.gluten.substrait.`type`.ListNode
-import org.apache.gluten.substrait.`type`.MapNode
-import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, StructLiteralNode}
+import org.apache.gluten.substrait.`type`.{ListNode, MapNode, TypeBuilder}
+import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, OmniStringViewLiteralNode, StructLiteralNode}
 
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
@@ -49,6 +48,30 @@ case class CastTransformer(substraitExprName: String, child: ExpressionTransform
       child.doTransform(args),
       SparkShimLoader.getSparkShims.withAnsiEvalMode(original))
   }
+}
+
+case class StringViewToOmniVarcharCastTransformer(
+    substraitExprName: String,
+    child: ExpressionTransformer,
+    original: Expression)
+  extends UnaryExpressionTransformer {
+  override def doTransform(args: java.lang.Object): ExpressionNode = {
+    // Downgrade target is standard VARCHAR (variation 0), not a special variation.
+    val typeNode = TypeBuilder.makeString(original.nullable)
+    ExpressionBuilder.makeCast(typeNode, child.doTransform(args), false)
+  }
+}
+
+// Emits a string literal as an Omni StringView literal (substrait Literal type_variation_reference
+// 21) so it resolves the native {SV,SV} comparison when compared with a StringView column. Built
+// directly because StringLiteralNode.updateLiteralBuilder only sets the string value and drops the
+// type node's variation. The rule only wraps non-null string literals, so `value` is non-null here.
+case class StringViewLiteralTransformer(original: StringViewLiteral) extends LeafExpressionTransformer {
+  override def substraitExprName: String = "literal"
+  // Use the named, serializable OmniStringViewLiteralNode (not an anonymous ExpressionNode, which is
+  // not Serializable and breaks Spark task-closure serialization of the substrait plan tree).
+  override def doTransform(args: java.lang.Object): ExpressionNode =
+    new OmniStringViewLiteralNode(original.literal.value.toString)
 }
 
 case class ExplodeTransformer(

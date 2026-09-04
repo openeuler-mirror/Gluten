@@ -63,10 +63,18 @@ public:
         const std::unordered_map<uint64_t, std::string> &functionMap, uint64_t id);
 
     /// Parse Substrait Type to Omni type.
-    static type::DataTypePtr ParseType(const ::substrait::Type &substraitType, bool asLowerCase = false, bool isNest = false);
+    static type::DataTypePtr ParseType(const ::substrait::Type &substraitType,
+        bool asLowerCase, bool isNest);
+
+    // Self-describing wire contract: a Substrait `string` carrying this type_variation_reference
+    // decodes to OMNI_STRING_VIEW; variation 0 decodes to VARCHAR; any other variation is an error.
+    // The decode is conf-independent. MUST match Scala
+    // OmniStringViewTypeNode.OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE.
+    inline static constexpr uint32_t OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE = 21;
 
     /// Parse Substrait StructType to Omni type.
-    static type::DataTypePtr ParseKStructType(const ::substrait::Type &substraitType, bool asLowerCase = false, bool isNest = false);
+    static type::DataTypePtr ParseKStructType(const ::substrait::Type &substraitType,
+        bool asLowerCase = false, bool isNest = false);
 
     /// Make names in the format of {prefix}_{index}.
     static std::vector<std::string> MakeNames(const std::string &prefix, int size);
@@ -126,7 +134,8 @@ public:
     template <typename T>
     static T GetLiteralValue(const ::substrait::Expression::Literal & /* literal */);
 
-    static type::DataTypesPtr ParseStructType(const ::substrait::Type &substraitType);
+    static type::DataTypesPtr ParseStructType(
+        const ::substrait::Type &substraitType);
 
     static op::FunctionType ParseFunctionType(
         const std::string &funcName, std::vector<substrait::Expression> &expressionNodes, bool isMergeCount);
@@ -134,7 +143,8 @@ public:
     static std::string ResolveUdafName(const std::string &funcName);
 
     static void AddStructDataType(
-        const ::substrait::Type &substraitType, std::vector<omniruntime::type::DataTypePtr> &outputDataTypes);
+        const ::substrait::Type &substraitType,
+        std::vector<omniruntime::type::DataTypePtr> &outputDataTypes);
 
 private:
     /// A map used for mapping Substrait function keywords into Omni functions'
@@ -150,5 +160,6 @@ private:
 
     static const uint32_t MAX_PRECISION_64 = 18;
     static const uint32_t MAX_PRECISION_128 = 38;
+
 };
 } // namespace omniruntime

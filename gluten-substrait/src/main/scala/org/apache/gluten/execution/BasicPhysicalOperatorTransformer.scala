@@ -87,8 +87,11 @@ abstract class FilterExecTransformerBase(val cond: Expression, val input: SparkP
       RelBuilder.makeFilterRel(input, condExprNode, context, operatorId)
     } else {
       // Use a extension node to send the input types through Substrait plan for validation.
+      // attr-aware: honor a physical-StringView-marked column (Omni) so the validation input schema
+      // matches the actual column type; getTypeNode(attr) is type-only (no-op) for unmarked columns,
+      // so other backends are unaffected.
       val inputTypeNodeList = originalInputAttributes
-        .map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
+        .map(attr => ConverterUtils.getTypeNode(attr))
         .asJava
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
         BackendsApiManager.getTransformerApiInstance.packPBMessage(
@@ -236,6 +239,10 @@ abstract class ProjectExecTransformerBase(val list: Seq[NamedExpression], val in
       RelBuilder.makeProjectRel(input, projExprNodeList, context, operatorId, emitStartIndex)
     } else {
       // Use a extension node to send the input types through Substrait plan for validation.
+      // NOTE: type-only here (NOT attr-aware). A cast/downgrade ProjectExec sits directly above R2C
+      // in some plan shapes; declaring its input as StringView made native ProjectRel validation
+      // reject it (supportsColumnar=false), which then crashes as a stage-boundary column-support
+      // mismatch. Filter is where StringView inputs actually need attr-aware type emission (for EQ).
       val inputTypeNodeList = originalInputAttributes
         .map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
         .asJava

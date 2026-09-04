@@ -218,6 +218,7 @@ public class OmniColumnVector extends WritableColumnVector {
     private FloatVec floatDataVec;
     private Decimal128Vec decimal128DataVec;
     private VarcharVec charsTypeDataVec;
+    private StringViewVec stringViewDataVec;
     private DictionaryVec dictionaryData;
     private ArrayVec arrayDataVec;
     private MapVec mapDataVec;
@@ -236,6 +237,20 @@ public class OmniColumnVector extends WritableColumnVector {
             reserveInternal(capacity);
         }
         reset();
+    }
+
+    private Vec getStringDataVec() {
+        if (stringViewDataVec != null) {
+            return stringViewDataVec;
+        }
+        return charsTypeDataVec;
+    }
+
+    private byte[] getStringBytes(int rowId) {
+        if (stringViewDataVec != null) {
+            return stringViewDataVec.get(rowId);
+        }
+        return charsTypeDataVec.get(rowId);
     }
 
     /**
@@ -270,7 +285,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof FloatType) {
             return floatDataVec;
         } else if (type instanceof StringType) {
-            return charsTypeDataVec;
+            return getStringDataVec();
         } else if (type instanceof BinaryType) {
             return charsTypeDataVec;
         } else if (type instanceof DateType) {
@@ -300,43 +315,81 @@ public class OmniColumnVector extends WritableColumnVector {
         }
         if (vec instanceof DictionaryVec) {
             dictionaryData = (DictionaryVec) vec;
-        } else if (type instanceof LongType || type instanceof TimestampType) {
-            this.longDataVec = (LongVec) vec;
+            return;
+        }
+        if (type instanceof ArrayType || type instanceof MapType || type instanceof StructType) {
+            setComplexVec(vec);
+            return;
+        }
+        setScalarVec(vec);
+    }
+
+    private void setScalarVec(Vec vec) {
+        if (type instanceof LongType || type instanceof TimestampType) {
+            this.longDataVec = requireVectorType(vec, LongVec.class, "LongType");
         } else if (type instanceof DecimalType) {
             if (DecimalType.is64BitDecimalType(type)) {
-                this.longDataVec = (LongVec) vec;
+                this.longDataVec = requireVectorType(vec, LongVec.class, "DecimalType");
             } else {
-                this.decimal128DataVec = (Decimal128Vec) vec;
+                this.decimal128DataVec = requireVectorType(vec, Decimal128Vec.class, "DecimalType");
             }
         } else if (type instanceof BooleanType || type instanceof NullType) {
-            this.booleanDataVec = (BooleanVec) vec;
+            this.booleanDataVec = requireVectorType(vec, BooleanVec.class, "BooleanType");
         } else if (type instanceof ShortType) {
-            this.shortDataVec = (ShortVec) vec;
+            this.shortDataVec = requireVectorType(vec, ShortVec.class, "ShortType");
         } else if (type instanceof IntegerType) {
-            this.intDataVec = (IntVec) vec;
+            this.intDataVec = requireVectorType(vec, IntVec.class, "IntegerType");
         } else if (type instanceof DoubleType) {
-            this.doubleDataVec = (DoubleVec) vec;
+            this.doubleDataVec = requireVectorType(vec, DoubleVec.class, "DoubleType");
         } else if (type instanceof FloatType) {
-            this.floatDataVec = (FloatVec) vec;
+            this.floatDataVec = requireVectorType(vec, FloatVec.class, "FloatType");
         } else if (type instanceof StringType) {
-            this.charsTypeDataVec = (VarcharVec) vec;
+            if (vec instanceof StringViewVec) {
+                this.stringViewDataVec = (StringViewVec) vec;
+            } else {
+                this.charsTypeDataVec = requireVectorType(vec, VarcharVec.class, "StringType");
+            }
         } else if (type instanceof BinaryType) {
-            this.charsTypeDataVec = (VarcharVec) vec;
+            this.charsTypeDataVec = requireVectorType(vec, VarcharVec.class, "BinaryType");
         } else if (type instanceof DateType) {
-            this.intDataVec = (IntVec) vec;
+            this.intDataVec = requireVectorType(vec, IntVec.class, "DateType");
         } else if (type instanceof ByteType) {
-            this.byteDataVec = (ByteVec) vec;
-        } else if (type instanceof ArrayType) {
-            this.arrayDataVec = (ArrayVec) vec;
-            ((OmniColumnVector)(getChild(0))).setVec(arrayDataVec.getElementVec());
+            this.byteDataVec = requireVectorType(vec, ByteVec.class, "ByteType");
+        } else {
+            return;
+        }
+    }
+
+    private <T extends Vec> T requireVectorType(Vec vec, Class<T> expectedType, String typeName) {
+        if (expectedType.isInstance(vec)) {
+            return expectedType.cast(vec);
+        }
+        throw new IllegalArgumentException(
+                "Expected " + expectedType.getSimpleName() + " for " + typeName + ", got "
+                        + vec.getClass().getName());
+    }
+
+    private OmniColumnVector getOmniChild(int index) {
+        WritableColumnVector child = getChild(index);
+        if (child instanceof OmniColumnVector) {
+            return (OmniColumnVector) child;
+        }
+        throw new IllegalStateException(
+                "Expected OmniColumnVector child, got " + child.getClass().getName());
+    }
+
+    private void setComplexVec(Vec vec) {
+        if (type instanceof ArrayType) {
+            this.arrayDataVec = requireVectorType(vec, ArrayVec.class, "ArrayType");
+            getOmniChild(0).setVec(arrayDataVec.getElementVec());
         } else if (type instanceof MapType) {
-            this.mapDataVec = (MapVec) vec;
-            ((OmniColumnVector)(getChild(0))).setVec(mapDataVec.getKeyVec());
-            ((OmniColumnVector)(getChild(1))).setVec(mapDataVec.getValueVec());
+            this.mapDataVec = requireVectorType(vec, MapVec.class, "MapType");
+            getOmniChild(0).setVec(mapDataVec.getKeyVec());
+            getOmniChild(1).setVec(mapDataVec.getValueVec());
         } else if (type instanceof StructType) {
-            this.structVec = (StructVec) vec;
+            this.structVec = requireVectorType(vec, StructVec.class, "StructType");
             for (int i = 0; i < ((StructType) type).fields().length; i++) {
-                ((OmniColumnVector)(getChild(i))).setVec(structVec.getChild(i));
+                getOmniChild(i).setVec(structVec.getChild(i));
             }
         } else {
             return;
@@ -386,6 +439,10 @@ public class OmniColumnVector extends WritableColumnVector {
         if (charsTypeDataVec != null) {
             charsTypeDataVec.close();
             charsTypeDataVec = null;
+        }
+        if (stringViewDataVec != null) {
+            stringViewDataVec.close();
+            stringViewDataVec = null;
         }
         if (dictionaryData != null) {
             dictionaryData.close();
@@ -440,7 +497,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof DoubleType) {
             return doubleDataVec.hasNull();
         } else if (type instanceof StringType) {
-            return charsTypeDataVec.hasNull();
+            return getStringDataVec().hasNull();
         } else if (type instanceof BinaryType) {
             return charsTypeDataVec.hasNull();
         } else if (type instanceof DateType) {
@@ -492,7 +549,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof DoubleType) {
             doubleDataVec.setNull(rowId);
         } else if (type instanceof StringType) {
-            charsTypeDataVec.setNull(rowId);
+            getStringDataVec().setNull(rowId);
         } else if (type instanceof BinaryType) {
             charsTypeDataVec.setNull(rowId);
         } else if (type instanceof DateType) {
@@ -537,7 +594,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof DoubleType) {
             doubleDataVec.setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof StringType) {
-            charsTypeDataVec.setNulls(rowId, nullValue, 0, count);
+            getStringDataVec().setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof BinaryType) {
             charsTypeDataVec.setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof DateType) {
@@ -577,7 +634,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof DoubleType) {
             doubleDataVec.setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof StringType) {
-            charsTypeDataVec.setNulls(rowId, nullValue, 0, count);
+            getStringDataVec().setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof BinaryType) {
             charsTypeDataVec.setNulls(rowId, nullValue, 0, count);
         } else if (type instanceof DateType) {
@@ -624,7 +681,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof DoubleType) {
             return doubleDataVec.isNull(rowId);
         } else if (type instanceof StringType) {
-            return charsTypeDataVec.isNull(rowId);
+            return getStringDataVec().isNull(rowId);
         } else if (type instanceof BinaryType) {
             return charsTypeDataVec.isNull(rowId);
         } else if (type instanceof DateType) {
@@ -751,7 +808,7 @@ public class OmniColumnVector extends WritableColumnVector {
         } else if (type instanceof ByteType) {
             return byteDataVec.get(rowId);
         } else {
-            return charsTypeDataVec.get(rowId)[0];
+            return getStringBytes(rowId)[0];
         }
     }
 
@@ -779,7 +836,7 @@ public class OmniColumnVector extends WritableColumnVector {
         if (dictionaryData != null) {
             return UTF8String.fromBytes(dictionaryData.getBytes(rowId));
         } else {
-            return UTF8String.fromBytes(charsTypeDataVec.get(rowId));
+            return UTF8String.fromBytes(getStringBytes(rowId));
         }
     }
 
@@ -801,7 +858,7 @@ public class OmniColumnVector extends WritableColumnVector {
         if (dictionaryData != null) {
             return dictionaryData.getBytes(rowId);
         } else {
-            return charsTypeDataVec.get(rowId);
+            return getStringBytes(rowId);
         }
     }
 

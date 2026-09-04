@@ -131,7 +131,7 @@ object OmniExpressionAdaptor extends Logging {
   private def rewriteToOmniJsonExpressionLiteralJsonObject(
       expr: Expression,
       exprsIndexMap: Map[ExprId, Int]): JsonObject = {
-    rewriteToOmniJsonExpressionLiteralJsonObject(expr, exprsIndexMap, expr.dataType)
+    rewriteToOmniJsonExpressionLiteralJsonObject(expr, exprsIndexMap, expr.dataType, Metadata.empty)
   }
 
   private def GenGetStructField(expr: Expression, exprsIndexMap: Map[ExprId, Int])
@@ -153,7 +153,8 @@ object OmniExpressionAdaptor extends Logging {
   private def rewriteToOmniJsonExpressionLiteralJsonObject(
       expr: Expression,
       exprsIndexMap: Map[ExprId, Int],
-      returnDatatype: DataType): JsonObject = {
+      returnDatatype: DataType,
+      metadata: Metadata = Metadata.empty): JsonObject = {
     expr match {
       case subquery: execution.ScalarSubquery =>
         var result: Any = null
@@ -315,7 +316,12 @@ object OmniExpressionAdaptor extends Logging {
           .put("left", rewriteToOmniJsonExpressionLiteralJsonObject(and.left, exprsIndexMap))
           .put("right", rewriteToOmniJsonExpressionLiteralJsonObject(and.right, exprsIndexMap))
 
-      case alias: Alias => rewriteToOmniJsonExpressionLiteralJsonObject(alias.child, exprsIndexMap)
+      case alias: Alias =>
+        rewriteToOmniJsonExpressionLiteralJsonObject(
+          alias.child,
+          exprsIndexMap,
+          alias.dataType,
+          alias.metadata)
       case literal: Literal => toOmniJsonLiteral(literal)
 
       case not: Not =>
@@ -374,7 +380,7 @@ object OmniExpressionAdaptor extends Logging {
       case subString: Substring =>
         new JsonObject()
           .put("exprType", "FUNCTION")
-          .addOmniExpJsonType("returnType", subString.dataType)
+          .addOmniExpJsonType("returnType", subString.dataType, metadata)
           .put("function_name", "substr")
           .put(
             "arguments",
@@ -444,6 +450,36 @@ object OmniExpressionAdaptor extends Logging {
             "arguments",
             new JsonArray().put(
               rewriteToOmniJsonExpressionLiteralJsonObject(upper.child, exprsIndexMap)))
+
+      case trim: StringTrim if trim.trimStr.isEmpty =>
+        new JsonObject()
+          .put("exprType", "FUNCTION")
+          .addOmniExpJsonType("returnType", trim.dataType, metadata)
+          .put("function_name", "Trim")
+          .put(
+            "arguments",
+            new JsonArray().put(
+              rewriteToOmniJsonExpressionLiteralJsonObject(trim.srcStr, exprsIndexMap)))
+
+      case trim: StringTrimLeft if trim.trimStr.isEmpty =>
+        new JsonObject()
+          .put("exprType", "FUNCTION")
+          .addOmniExpJsonType("returnType", trim.dataType, metadata)
+          .put("function_name", "LTrim")
+          .put(
+            "arguments",
+            new JsonArray().put(
+              rewriteToOmniJsonExpressionLiteralJsonObject(trim.srcStr, exprsIndexMap)))
+
+      case trim: StringTrimRight if trim.trimStr.isEmpty =>
+        new JsonObject()
+          .put("exprType", "FUNCTION")
+          .addOmniExpJsonType("returnType", trim.dataType, metadata)
+          .put("function_name", "RTrim")
+          .put(
+            "arguments",
+            new JsonArray().put(
+              rewriteToOmniJsonExpressionLiteralJsonObject(trim.srcStr, exprsIndexMap)))
 
       case length: Length =>
         new JsonObject()
@@ -528,7 +564,7 @@ object OmniExpressionAdaptor extends Logging {
         buildNestedCoalesce(coalesce.children.toList)
 
       case concat: Concat =>
-        getConcatJsonStr(concat, exprsIndexMap)
+        getConcatJsonStr(concat, exprsIndexMap, metadata)
       case greatest: Greatest =>
         getGreatestJsonStr(greatest, exprsIndexMap)
 
@@ -796,7 +832,10 @@ object OmniExpressionAdaptor extends Logging {
     }
   }
 
-  private def getConcatJsonStr(concat: Concat, exprsIndexMap: Map[ExprId, Int]): JsonObject = {
+  private def getConcatJsonStr(
+      concat: Concat,
+      exprsIndexMap: Map[ExprId, Int],
+      metadata: Metadata): JsonObject = {
     val children: Seq[Expression] = concat.children
     checkInputDataTypes(children)
 
@@ -805,7 +844,7 @@ object OmniExpressionAdaptor extends Logging {
     }
     val res = new JsonObject()
       .put("exprType", "FUNCTION")
-      .addOmniExpJsonType("returnType", concat.dataType)
+      .addOmniExpJsonType("returnType", concat.dataType, metadata)
       .put("function_name", "concat")
       .put(
         "arguments",
@@ -1217,7 +1256,11 @@ object OmniExpressionAdaptor extends Logging {
       case DoubleType => OMNI_DOUBLE_TYPE
       case FloatType => OMNI_FLOAT_TYPE
       case BooleanType => OMNI_BOOLEAN_TYPE
-      case StringType => OMNI_VARCHAR_TYPE
+      case StringType =>
+        // Expression-JSON leaf/return types are VARCHAR by default (closed default). Per-column
+        // StringView for leaf references is threaded via metadata in a later step; this bare-type
+        // form has no metadata, so it must not emit StringView here.
+        OMNI_VARCHAR_TYPE
       case BinaryType => OMNI_BINARY_TYPE
       case DateType => OMNI_DATE_TYPE
       case TimestampType => OMNI_TIMESTAMP_TYPE
@@ -1237,8 +1280,15 @@ object OmniExpressionAdaptor extends Logging {
   }
 
   implicit class JsonObjectExtension(val jsonObject: JsonObject) {
-    def addOmniExpJsonType(jsonAttributeKey: String, datatype: DataType): JsonObject = {
-      val omniTypeIdStr = sparkTypeToOmniExpType(datatype)
+    def addOmniExpJsonType(
+        jsonAttributeKey: String,
+        datatype: DataType,
+        metadata: Metadata = Metadata.empty): JsonObject = {
+      val omniTypeIdStr = datatype match {
+        case StringType if StringViewToOmniVarcharCast.isPhysicalStringView(metadata) =>
+          OMNI_STRING_VIEW_TYPE
+        case other => sparkTypeToOmniExpType(other)
+      }
       datatype match {
         case StringType =>
           jsonObject
@@ -1331,7 +1381,10 @@ object OmniExpressionAdaptor extends Logging {
       case BooleanType =>
         BooleanDataType.BOOLEAN
       case StringType =>
-        new VarcharDataType(getStringLength(metadata))
+        // Closed default: StringView only when the column's metadata explicitly marks it (set by a
+        // data source under the switch, or a whitelisted expression). Unmarked StringType -> VARCHAR.
+        if (StringViewToOmniVarcharCast.isPhysicalStringView(metadata)) new StringViewDataType()
+        else new VarcharDataType(getStringLength(metadata))
       case BinaryType =>
         new VarBinaryDataType(getStringLength(metadata))
       case DateType =>
@@ -1375,7 +1428,10 @@ object OmniExpressionAdaptor extends Logging {
       case BooleanType =>
         BooleanDataType.BOOLEAN
       case StringType =>
-        new VarcharDataType(getStringLength(metadata))
+        // Closed default: StringView only when the column's metadata explicitly marks it (set by a
+        // data source under the switch, or a whitelisted expression). Unmarked StringType -> VARCHAR.
+        if (StringViewToOmniVarcharCast.isPhysicalStringView(metadata)) new StringViewDataType()
+        else new VarcharDataType(getStringLength(metadata))
       case BinaryType =>
         new VarBinaryDataType(getStringLength(metadata))
       case DateType =>

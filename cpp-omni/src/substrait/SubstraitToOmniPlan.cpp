@@ -288,7 +288,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::WindowRe
         }
         windowFunctionTypes.push_back(functionType);
         windowFunctionOptions.push_back(options);
-        auto windowFunctionReturnType = SubstraitParser::ParseType(windowFunction.output_type());
+        auto windowFunctionReturnType =
+            SubstraitParser::ParseType(windowFunction.output_type(), false, false);
         windowFunctionReturnTypesVec.push_back(windowFunctionReturnType);
         allTypesVec.push_back(windowFunctionReturnType);
         auto type = windowFunction.window_type();
@@ -683,7 +684,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
                 break;
             }
             case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT: { // Complete
-                auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
+                auto substraitOutType =
+                    SubstraitParser::ParseType(aggFunction.output_type(), false, false);
                 std::vector<DataTypePtr> dataTypes = {substraitOutType};
                 nodeOutputTypes.emplace_back(substraitOutType);
                 auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));
@@ -696,7 +698,8 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
                 break;
             }
             case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT: { // Final
-                auto substraitOutType = SubstraitParser::ParseType(aggFunction.output_type());
+                auto substraitOutType =
+                    SubstraitParser::ParseType(aggFunction.output_type(), false, false);
                 std::vector<DataTypePtr> dataTypes = {substraitOutType};
                 nodeOutputTypes.emplace_back(substraitOutType);
                 auto dataTypesPtr = std::make_shared<DataTypes>(std::move(dataTypes));

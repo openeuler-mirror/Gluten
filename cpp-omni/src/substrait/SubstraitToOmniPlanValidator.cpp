@@ -130,7 +130,7 @@ bool SubstraitToOmniPlanValidator::ParseOmniType(
         return false;
     }
 
-    out = SubstraitParser::ParseType(substraitType);
+    out = SubstraitParser::ParseType(substraitType, false, false);
     return true;
 }
 
@@ -300,7 +300,7 @@ bool SubstraitToOmniPlanValidator::ValidateCast(
         return false;
     }
 
-    const auto &toType = SubstraitParser::ParseType(castExpr.type());
+    const auto &toType = SubstraitParser::ParseType(castExpr.type(), false, false);
     auto input = exprConverter_->ToOmniExpr(castExpr.input(), inputType);
 
     const auto inputTypeId = input->GetReturnTypeId();
@@ -581,7 +581,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::WindowRel &window
             expressionNodes.emplace_back(arg.value());
         }
         auto functionType = SubstraitParser::ParseFunctionType(funcName, expressionNodes, false);
-        SubstraitParser::ParseType(windowFunction.output_type());
+        SubstraitParser::ParseType(windowFunction.output_type(), false, false);
         for (const auto &arg : windowFunction.arguments()) {
             auto typeCase = arg.value().rex_type_case();
             switch (typeCase) {
@@ -1199,7 +1199,7 @@ bool SubstraitToOmniPlanValidator::Validate(const ::substrait::ReadRel &readRel)
         std::vector<DataTypePtr> omniTypeList;
         if (readRel.has_base_schema()) {
             const auto& baseSchema = readRel.base_schema();
-            omniTypeList = SubstraitParser::ParseNamedStruct(baseSchema);
+            omniTypeList = SubstraitParser::ParseNamedStruct(baseSchema, false);
         }
 
         auto rowType = std::make_shared<DataTypes>(std::move(omniTypeList));

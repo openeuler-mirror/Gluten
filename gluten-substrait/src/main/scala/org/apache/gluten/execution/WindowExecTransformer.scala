@@ -150,7 +150,7 @@ case class WindowExecTransformer(
     } else {
       // Use a extension node to send the input types through Substrait plan for validation.
       val inputTypeNodeList = originalInputAttributes
-        .map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
+        .map(attr => ConverterUtils.getTypeNode(attr))
         .asJava
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
         BackendsApiManager.getTransformerApiInstance.packPBMessage(

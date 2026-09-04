@@ -30,7 +30,7 @@ import org.apache.gluten.extension.columnar.validator.{Validator, Validators}
 import org.apache.gluten.extension.injector.{Injector, SparkInjector}
 import org.apache.gluten.extension.injector.GlutenInjector.{LegacyInjector, RasInjector}
 import org.apache.gluten.extension.{OmniHLLRewriteRule, OmniPartialProjectRule, RewriteAQEShuffleRead}
-import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast, CombineProject}
+import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLeftSemiJoin, MergeSubqueryFilters, PushOrderedLimitThroughAgg, ReorderJoinEnhances, RewriteSelfJoinInInPredicate, RollupOptimization, ShuffleJoinStrategy, RewriteTopNSort, CombineWindowSort, OmniRewriteSubqueryBroadcast, CombineProject, StringViewFallbackRule}
 import org.apache.gluten.extension.{FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, PushDownFilterToOmniScan, OmniRewriteCollectFuncRule, RewriteAQEShuffleRead, OmniRewriteJoin, AdaptiveHashAggregateRule}
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.internal.Logging
@@ -74,6 +74,7 @@ object OmniRuleApi {
     injector.injectPreTransform(_ => PushDownInputFileExpression.PreOffload)
     injector.injectPreTransform(c => FallbackOnANSIMode.apply(c.session))
     injector.injectPreTransform(_ => OmniRewriteJoin())
+    injector.injectPreTransform(_ => StringViewFallbackRule())
     injector.injectPreTransform(c => FallbackMultiCodegens.apply(c.session))
     injector.injectPreTransform(c => MergeTwoPhasesHashBaseAggregate(c.session))
     injector.injectPreTransform(c => PushOrderedLimitThroughAgg(c.session))
