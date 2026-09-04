@@ -68,6 +68,11 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
   /** Force this sorter to spill when there are this many elements in memory. */
   private final int numElementsForSpillThreshold;
 
+    /**
+     * Force this sorter to spill when the size in memory is beyond this threshold.
+     */
+    private final long maxRecordsSizeForSpillThreshold;
+
   /**
    * Memory pages that hold the records being sorted. The pages in this list are freed when
    * spilling, although in principle we could recycle these pages across spills (on the other hand,
@@ -80,6 +85,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
 
   // These variables are reset after spilling:
   @Nullable private volatile UnsafeInMemorySorter inMemSorter;
+    private long inMemRecordsSize = 0L;
 
   private MemoryBlock currentPage = null;
   private long pageCursor = -1;
@@ -98,6 +104,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
       int initialSize,
       long pageSizeBytes,
       int numElementsForSpillThreshold,
+      long maxRecordsSizeForSpillThreshold,
       UnsafeInMemorySorter inMemorySorter,
       long existingMemoryConsumption)
       throws IOException {
@@ -112,6 +119,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
             initialSize,
             pageSizeBytes,
             numElementsForSpillThreshold,
+            maxRecordsSizeForSpillThreshold,
             inMemorySorter,
             false /* ignored */);
     sorter.spill(Long.MAX_VALUE, sorter);
@@ -132,6 +140,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
       int initialSize,
       long pageSizeBytes,
       int numElementsForSpillThreshold,
+      long maxRecordsSizeForSpillThreshold,
       boolean canUseRadixSort) {
     return new UnsafeExternalSorter(
         taskMemoryManager,
@@ -143,6 +152,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
         initialSize,
         pageSizeBytes,
         numElementsForSpillThreshold,
+        maxRecordsSizeForSpillThreshold,
         null,
         canUseRadixSort);
   }
@@ -157,6 +167,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
       int initialSize,
       long pageSizeBytes,
       int numElementsForSpillThreshold,
+      long maxRecordsSizeForSpillThreshold,
       @Nullable UnsafeInMemorySorter existingInMemorySorter,
       boolean canUseRadixSort) {
     super(taskMemoryManager, pageSizeBytes, taskMemoryManager.getTungstenMemoryMode());
@@ -183,6 +194,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
     }
     this.peakMemoryUsedBytes = getMemoryUsage();
     this.numElementsForSpillThreshold = numElementsForSpillThreshold;
+    this.maxRecordsSizeForSpillThreshold = maxRecordsSizeForSpillThreshold;
 
     // Register a cleanup task with TaskContext to ensure that memory is guaranteed to be freed at
     // the end of the task. This is necessary to avoid memory leaks in when the downstream operator
@@ -244,7 +256,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
     // Reset the in-memory sorter's pointer array only after freeing up the memory pages holding the
     // records. Otherwise, if the task is over allocated memory, then without freeing the memory
     // pages, we might not be able to get memory for the pointer array.
-
+    inMemRecordsSize = 0;
     taskContext.taskMetrics().incMemoryBytesSpilled(spillSize);
     taskContext.taskMetrics().incDiskBytesSpilled(writeMetrics.bytesWritten());
     totalSpillBytes += spillSize;
@@ -515,13 +527,20 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
   public void insertRecord(
       Object recordBase, long recordOffset, int length, long prefix, boolean prefixIsNull)
       throws IOException {
-
     assert (inMemSorter != null);
-    if (inMemSorter.numRecords() >= numElementsForSpillThreshold) {
-      logger.info(
-          "Spilling data because number of spilledRecords crossed the threshold "
-              + numElementsForSpillThreshold);
-      spill();
+    final boolean isRecordCountThresholdReached =
+        inMemSorter.numRecords() >= numElementsForSpillThreshold;
+    final boolean isRecordSizeThresholdReached =
+        inMemRecordsSize >= maxRecordsSizeForSpillThreshold;
+    if (isRecordCountThresholdReached || isRecordSizeThresholdReached) {
+        final String thresholdType = isRecordCountThresholdReached ? "number" : "size";
+        final long spillThreshold =
+        isRecordCountThresholdReached ? (long) numElementsForSpillThreshold : maxRecordsSizeForSpillThreshold;
+        logger.info(
+        "Spilling data because {} of spilledRecords crossed the threshold {}",
+        thresholdType,
+        spillThreshold);
+        spill();
     }
 
     final int uaoSize = UnsafeAlignedOffset.getUaoSize();
@@ -536,6 +555,7 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
     Platform.copyMemory(recordBase, recordOffset, base, pageCursor, length);
     pageCursor += length;
     inMemSorter.insertRecord(recordAddress, prefix, prefixIsNull);
+    inMemRecordsSize += length;
   }
 
   /**

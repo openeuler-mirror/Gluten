@@ -20,7 +20,6 @@ import org.apache.gluten.exception.GlutenException;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufInputStream;
-import io.netty.util.internal.PlatformDependent;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -68,7 +67,7 @@ public class LowCopyNettyJniByteInputStream implements JniByteInputStream {
     if (bytesToRead32 == 0) {
       return 0;
     }
-    ByteBuffer direct = PlatformDependent.directBuffer(destAddress, bytesToRead32);
+    ByteBuffer direct = JniByteInputStreams.newDirectByteBuffer(destAddress, bytesToRead32);
     // read data directly from ByteBuf to native address
     this.byteBuf.readBytes(direct);
     readBytesCount += direct.position();

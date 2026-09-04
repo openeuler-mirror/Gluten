@@ -21,7 +21,6 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.ErrorMsg
-import org.apache.hadoop.hive.ql.plan.FileSinkDesc
 import org.apache.hadoop.hive.ql.plan.TableDesc
 
 import org.apache.spark.SparkException
@@ -312,8 +311,18 @@ object OmniInsertIntoHiveTable extends V1WritesHiveUtils {
     val hadoopConf = sparkSession.sessionState.newHadoopConf()
     val tableLocation = hiveQlTable.getDataLocation
     val hiveTempPath = new HiveTempPath(sparkSession, hadoopConf, tableLocation)
-    val fileSinkConf = new FileSinkDesc(hiveTempPath.externalTempPath, tableDesc, false)
-    setupHadoopConfForCompression(fileSinkConf, hadoopConf, sparkSession)
+    val rawFileSinkConf = new org.apache.hadoop.hive.ql.plan.FileSinkDesc(
+      hiveTempPath.externalTempPath,
+      tableDesc,
+      false)
+    setupHadoopConfForCompression(rawFileSinkConf, hadoopConf, sparkSession)
+    val fileSinkConf = OmniFileSinkDesc(
+      rawFileSinkConf.getDirName.toString,
+      rawFileSinkConf.getTableInfo,
+      rawFileSinkConf.getCompressed,
+      rawFileSinkConf.getCompressCodec,
+      rawFileSinkConf.getCompressType,
+      rawFileSinkConf.getDestTableId)
     val fileFormat: FileFormat = new OmniHiveFileFormat(fileSinkConf)
 
     val partitionColumns = getDynamicPartitionColumns(table, partition, query)

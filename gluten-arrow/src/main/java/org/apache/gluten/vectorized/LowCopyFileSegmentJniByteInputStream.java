@@ -17,8 +17,6 @@
 package org.apache.gluten.vectorized;
 
 import org.apache.gluten.exception.GlutenException;
-
-import io.netty.util.internal.PlatformDependent;
 import org.apache.spark.network.util.LimitedInputStream;
 
 import java.io.FileInputStream;
@@ -97,8 +95,8 @@ public class LowCopyFileSegmentJniByteInputStream implements JniByteInputStream 
     if (bytesToRead32 == 0) {
       return 0;
     }
-    ByteBuffer direct = PlatformDependent.directBuffer(destAddress, bytesToRead32);
     try {
+        ByteBuffer direct = JniByteInputStreams.newDirectByteBuffer(destAddress, bytesToRead32);
       int bytes = channel.read(direct);
       if (bytes == -1) {
         return 0;

@@ -110,28 +110,63 @@ trait PullOutProjectHelper {
       newResultExpressions: Seq[NamedExpression] = agg.resultExpressions
   ): BaseAggregateExec = agg match {
     case hash: HashAggregateExec =>
-      hash.copy(
-        groupingExpressions = newGroupingExpressions,
-        aggregateExpressions = newAggregateExpressions,
-        aggregateAttributes = newAggregateAttributes,
-        resultExpressions = newResultExpressions
-      )
+      copyAggregateExec(
+        hash,
+        newGroupingExpressions,
+        newAggregateExpressions,
+        newAggregateAttributes,
+        newResultExpressions)
     case sort: SortAggregateExec =>
-      sort.copy(
-        groupingExpressions = newGroupingExpressions,
-        aggregateExpressions = newAggregateExpressions,
-        aggregateAttributes = newAggregateAttributes,
-        resultExpressions = newResultExpressions
-      )
+      copyAggregateExec(
+        sort,
+        newGroupingExpressions,
+        newAggregateExpressions,
+        newAggregateAttributes,
+        newResultExpressions)
     case objectHash: ObjectHashAggregateExec =>
-      objectHash.copy(
-        groupingExpressions = newGroupingExpressions,
-        aggregateExpressions = newAggregateExpressions,
-        aggregateAttributes = newAggregateAttributes,
-        resultExpressions = newResultExpressions
-      )
+      copyAggregateExec(
+        objectHash,
+        newGroupingExpressions,
+        newAggregateExpressions,
+        newAggregateAttributes,
+        newResultExpressions)
     case _ =>
       throw new GlutenNotSupportException(s"Unsupported agg $agg")
+  }
+
+  /**
+   * Spark 3.2.4 inserts `isStreaming` and `numShufflePartitions` into aggregate exec case
+   * classes, while the Spark 3.2.0 build baseline uses the old seven-argument layout. Calling
+   * `copy` with named arguments therefore produces an incompatible static method descriptor.
+   */
+  private def copyAggregateExec(
+      agg: BaseAggregateExec,
+      groupingExpressions: Seq[NamedExpression],
+      aggregateExpressions: Seq[AggregateExpression],
+      aggregateAttributes: Seq[Attribute],
+      resultExpressions: Seq[NamedExpression]): BaseAggregateExec = {
+    val copiedArgs = agg.productIterator.toArray
+    val (groupingIndex, aggregateIndex, attributesIndex, resultIndex) = agg.productArity match {
+      case 7 => (1, 2, 3, 5)
+      case 9 => (3, 4, 5, 7)
+      case arity =>
+        throw new GlutenNotSupportException(
+          s"Unsupported aggregate exec constructor arity $arity for ${agg.getClass.getName}")
+    }
+    copiedArgs(groupingIndex) = groupingExpressions
+    copiedArgs(aggregateIndex) = aggregateExpressions
+    copiedArgs(attributesIndex) = aggregateAttributes
+    copiedArgs(resultIndex) = resultExpressions
+
+    val copyMethod = agg.getClass.getMethods.find { method =>
+      method.getName == "copy" && method.getParameterCount == copiedArgs.length
+    }.getOrElse {
+      throw new GlutenNotSupportException(
+        s"Unable to find copy method for ${agg.getClass.getName}")
+    }
+    copyMethod
+      .invoke(agg, copiedArgs.map(_.asInstanceOf[AnyRef]): _*)
+      .asInstanceOf[BaseAggregateExec]
   }
 
   protected def rewriteAggregateExpression(

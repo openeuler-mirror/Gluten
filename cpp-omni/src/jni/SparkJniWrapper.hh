@@ -99,6 +99,9 @@ JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_closeD
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_JniByteInputStreams_newDirectByteBuffer(
+    JNIEnv *env, jclass, jlong address, jint capacity);
+
 JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatchOutIterator_nativeMetaInfo(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 #ifdef __cplusplus

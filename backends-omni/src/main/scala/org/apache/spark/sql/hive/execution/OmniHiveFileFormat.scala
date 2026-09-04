@@ -23,7 +23,7 @@ import scala.collection.JavaConverters._
 import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.hadoop.hive.ql.exec.Utilities
 import org.apache.hadoop.hive.ql.io.{HiveFileFormatUtils, HiveOutputFormat}
-import org.apache.hadoop.hive.ql.plan.FileSinkDesc
+import org.apache.hadoop.hive.ql.plan.{FileSinkDesc, TableDesc}
 import org.apache.hadoop.hive.serde2.Serializer
 import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspectorUtils, StructObjectInspector}
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption
@@ -49,7 +49,7 @@ import org.apache.spark.util.SerializableJobConf
  *
  * TODO: implement the read logic.
  */
-class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
+class OmniHiveFileFormat(fileSinkConf: OmniFileSinkDesc)
   extends FileFormat with DataSourceRegister with Logging {
 
   def this() = this(null)
@@ -69,7 +69,7 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
                              options: Map[String, String],
                              dataSchema: StructType): OutputWriterFactory = {
     val conf = job.getConfiguration
-    val tableDesc = fileSinkConf.getTableInfo
+    val tableDesc = fileSinkConf.tableInfo
     conf.set("mapred.output.format.class", tableDesc.getOutputFileFormatClassName)
 
     // When speculation is on and output committer class name contains "Direct", we should warn
@@ -92,14 +92,14 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
 
     // Avoid referencing the outer object.
     val fileSinkConfSer = fileSinkConf
-    val outputFormat = fileSinkConf.getTableInfo.getOutputFileFormatClassName
+    val outputFormat = fileSinkConf.tableInfo.getOutputFileFormatClassName
     if ("true" == sparkSession.sparkContext.getLocalProperty("isNativeApplicable")) {
       val nativeFormat = sparkSession.sparkContext.getLocalProperty("nativeFormat")
       val tableOptions = tableDesc.getProperties.asScala.toMap
       val isParquetFormat = nativeFormat == "parquet"
-      val compressionCodec = if (fileSinkConf.getCompressed) {
+      val compressionCodec = if (fileSinkConf.compressed) {
         // hive related configurations
-        fileSinkConf.getCompressCodec
+        fileSinkConf.compressCodec
       } else if (isParquetFormat) {
         val parquetOptions =
           new ParquetOptions(tableOptions, sparkSession.sessionState.conf)
@@ -118,7 +118,7 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
           jobConf.value.getOutputFormat.asInstanceOf[HiveOutputFormat[AnyRef, Writable]]
 
         override def getFileExtension(context: TaskAttemptContext): String = {
-          Utilities.getFileExtension(jobConf.value, fileSinkConfSer.getCompressed, outputFormat)
+          Utilities.getFileExtension(jobConf.value, fileSinkConfSer.compressed, outputFormat)
         }
 
         override def newInstance(
@@ -136,7 +136,7 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
           jobConf.value.getOutputFormat.asInstanceOf[HiveOutputFormat[AnyRef, Writable]]
 
         override def getFileExtension(context: TaskAttemptContext): String = {
-          Utilities.getFileExtension(jobConf.value, fileSinkConfSer.getCompressed, outputFormat)
+          Utilities.getFileExtension(jobConf.value, fileSinkConfSer.compressed, outputFormat)
         }
 
         override def newInstance(
@@ -150,7 +150,7 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
   }
 
   override def supportFieldName(name: String): Boolean = {
-    fileSinkConf.getTableInfo.getOutputFileFormatClassName match {
+    fileSinkConf.tableInfo.getOutputFileFormatClassName match {
       case "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" =>
         !name.matches(".*[ ,;{}()\n\t=].*")
       case "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" =>
@@ -167,11 +167,11 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
 
 class HiveOutputWriter(
                         val path: String,
-                        fileSinkConf: FileSinkDesc,
+                        fileSinkConf: OmniFileSinkDesc,
                         jobConf: JobConf,
                         dataSchema: StructType) extends OutputWriter with HiveInspectors {
 
-  private def tableDesc = fileSinkConf.getTableInfo
+  private def tableDesc = fileSinkConf.tableInfo
 
   private val serializer = {
     val serializer = tableDesc.getDeserializerClass.getConstructor().
@@ -184,7 +184,7 @@ class HiveOutputWriter(
     jobConf,
     tableDesc,
     serializer.getSerializedClass,
-    fileSinkConf,
+    fileSinkConf.toFileSinkDesc,
     new Path(path),
     Reporter.NULL)
 
@@ -217,5 +217,28 @@ class HiveOutputWriter(
   override def close(): Unit = {
     // Seems the boolean value passed into close does not matter.
     hiveWriter.close(false)
+  }
+}
+
+/**
+ * Serializable snapshot of Hive's file-sink configuration.
+ *
+ * Spark 3.2-3.4 wrapped `FileSinkDesc` through `HiveShim` because its path is not safely
+ * serializable. Spark 3.5 removed that wrapper, so keep the stable fields here and reconstruct
+ * the Hive object in the executor instead.
+ */
+case class OmniFileSinkDesc(
+    dir: String,
+    tableInfo: TableDesc,
+    compressed: Boolean,
+    compressCodec: String,
+    compressType: String,
+    destTableId: Int) extends Serializable {
+  def toFileSinkDesc: FileSinkDesc = {
+    val fileSinkDesc = new FileSinkDesc(new Path(dir), tableInfo, compressed)
+    fileSinkDesc.setCompressCodec(compressCodec)
+    fileSinkDesc.setCompressType(compressType)
+    fileSinkDesc.setDestTableId(destTableId)
+    fileSinkDesc
   }
 }

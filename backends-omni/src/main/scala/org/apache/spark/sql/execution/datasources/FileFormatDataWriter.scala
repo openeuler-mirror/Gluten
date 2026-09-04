@@ -16,6 +16,8 @@
  */
 package org.apache.spark.sql.execution.datasources
 
+import java.lang.reflect.{InvocationTargetException, Method}
+
 import org.apache.gluten.datasources.orc.OmniOrcOutputWriter
 import org.apache.gluten.datasources.parquet.OmniParquetOutputWriter
 import org.apache.hadoop.fs.Path
@@ -34,7 +36,68 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.{SerializableConfiguration, Utils}
 
+import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
+
+/**
+ * Spark vendor distributions use different WriteTaskStatsTracker method signatures for partition
+ * and file notifications. Resolve those two low-frequency callbacks at runtime while keeping the
+ * per-row callback on the direct API path.
+ */
+private[datasources] object WriteTaskStatsTrackerCompat {
+  private case class TrackerMethods(newPartition: Method, newFile: Method)
+
+  private val methodsByClass = TrieMap.empty[Class[_], TrackerMethods]
+  private val noExtraValue = Option.empty[String]
+
+  def newPartition(tracker: WriteTaskStatsTracker, partitionValues: InternalRow): Unit = {
+    invoke(methodsFor(tracker).newPartition, tracker, partitionValues)
+  }
+
+  def newFile(tracker: WriteTaskStatsTracker, path: String): Unit = {
+    invoke(methodsFor(tracker).newFile, tracker, path)
+  }
+
+  private def methodsFor(tracker: WriteTaskStatsTracker): TrackerMethods = {
+    methodsByClass.getOrElseUpdate(tracker.getClass, {
+      val trackerClass = tracker.getClass
+      TrackerMethods(
+        findMethod(trackerClass, "newPartition", classOf[InternalRow]),
+        findMethod(trackerClass, "newFile", classOf[String]))
+    })
+  }
+
+  private def findMethod(
+                          trackerClass: Class[_],
+                          methodName: String,
+                          firstParameter: Class[_]): Method = {
+    trackerClass.getMethods.find { method =>
+      method.getName == methodName &&
+        (method.getParameterCount == 1 ||
+          (method.getParameterCount == 2 &&
+            method.getParameterTypes()(1).isAssignableFrom(noExtraValue.getClass))) &&
+        method.getParameterTypes.head == firstParameter
+    }.getOrElse {
+      throw new NoSuchMethodException(
+        s"${trackerClass.getName} does not provide a compatible $methodName callback")
+    }
+  }
+
+  private def invoke(
+                      method: Method,
+                      tracker: WriteTaskStatsTracker,
+                      firstArgument: AnyRef): Unit = {
+    try {
+      if (method.getParameterCount == 1) {
+        method.invoke(tracker, firstArgument)
+      } else {
+        method.invoke(tracker, firstArgument, noExtraValue)
+      }
+    } catch {
+      case e: InvocationTargetException => throw e.getCause
+    }
+  }
+}
 
 /**
  * Abstract class for writing out data in a single Spark task.
@@ -171,7 +234,7 @@ class SingleDirectoryDataWriter(
       case _ =>
     }
 
-    statsTrackers.foreach(_.newFile(currentPath))
+    statsTrackers.foreach(tracker => WriteTaskStatsTrackerCompat.newFile(tracker, currentPath))
   }
 
   override def write(record: InternalRow): Unit = {
@@ -326,7 +389,7 @@ abstract class BaseDynamicPartitionDataWriter(
       case _ =>
     }
 
-    statsTrackers.foreach(_.newFile(currentPath))
+    statsTrackers.foreach(tracker => WriteTaskStatsTrackerCompat.newFile(tracker, currentPath))
   }
 
   /**
@@ -406,7 +469,8 @@ class DynamicPartitionDataSingleWriter(
         // See a new partition or bucket - write to a new partition dir (or a new bucket file).
         if (isPartitioned && currentPartitionValues != nextPartitionValues) {
           currentPartitionValues = Some(nextPartitionValues.get.copy())
-          statsTrackers.foreach(_.newPartition(currentPartitionValues.get))
+          statsTrackers.foreach(tracker =>
+            WriteTaskStatsTrackerCompat.newPartition(tracker, currentPartitionValues.get))
         }
         if (isBucketed) {
           currentBucketId = nextBucketId
@@ -436,7 +500,8 @@ class DynamicPartitionDataSingleWriter(
           // See a new partition or bucket - write to a new partition dir (or a new bucket file).
           if (isPartitioned && currentPartitionValues != nextPartitionValues) {
             currentPartitionValues = Some(nextPartitionValues.get.copy())
-            statsTrackers.foreach(_.newPartition(currentPartitionValues.get))
+            statsTrackers.foreach(tracker =>
+              WriteTaskStatsTrackerCompat.newPartition(tracker, currentPartitionValues.get))
           }
           if (isBucketed) {
             currentBucketId = nextBucketId
@@ -561,7 +626,8 @@ class DynamicPartitionDataConcurrentWriter(
       if (isPartitioned && currentWriterId.partitionValues != nextPartitionValues) {
         currentWriterId.partitionValues = Some(nextPartitionValues.get.copy())
         if (!concurrentWriters.contains(currentWriterId)) {
-          statsTrackers.foreach(_.newPartition(currentWriterId.partitionValues.get))
+          statsTrackers.foreach(tracker =>
+            WriteTaskStatsTrackerCompat.newPartition(tracker, currentWriterId.partitionValues.get))
         }
       }
       setupCurrentWriterUsingMap()

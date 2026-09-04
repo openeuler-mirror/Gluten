@@ -40,6 +40,19 @@ using namespace spark;
 using namespace google::protobuf::io;
 using namespace omniruntime::vec;
 
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_JniByteInputStreams_newDirectByteBuffer(
+    JNIEnv *env, jclass, jlong address, jint capacity)
+{
+    JNI_FUNC_START
+        jobject buffer = env->NewDirectByteBuffer(reinterpret_cast<void *>(address), capacity);
+        if (buffer == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "Unable to create a direct ByteBuffer for the shuffle input");
+            return nullptr;
+        }
+        return buffer;
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMake(JNIEnv *env, jobject,
     jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
     jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs, jstring local_dirs_jstr,
