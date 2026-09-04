@@ -81,6 +81,7 @@ type::DataTypePtr SubstraitParser::ParseType(
         case ::substrait::Type::KindCase::kFp32:
             return type::FloatType();
         case ::substrait::Type::KindCase::kString: {
+#ifdef STRINGVIEW_ENABLE
             // Self-describing wire: the type_variation_reference alone decides the physical type,
             // independent of any session conf. 0 -> VARCHAR, 21 -> StringView, else -> error.
             const auto variation = substraitType.string().type_variation_reference();
@@ -91,6 +92,16 @@ type::DataTypePtr SubstraitParser::ParseType(
                 return type::VarcharType();
             }
             OMNI_THROW("Substrait Error:", "Unknown string type_variation_reference: {}", variation);
+#else
+            const auto variation = substraitType.string().type_variation_reference();
+            if (variation == OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                OMNI_THROW("StringView disabled", "StringView type was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
+            }
+            if (variation != 0) {
+                OMNI_THROW("Substrait Error:", "Unknown string type_variation_reference: {}", variation);
+            }
+            return type::VarcharType();
+#endif
         }
         case ::substrait::Type::KindCase::kDate:
             return type::Date32Type();

@@ -29,8 +29,10 @@
 #include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
 #include "compute/Runtime.h"
+#ifdef STRINGVIEW_ENABLE
 #include "compute/OmniRowToColumnarConverter.h"
 #include "memory/allocator.h"
+#endif
 #include "config/OmniConfig.h"
 #include "compute/ProtobufUtils.h"
 #include "substrait/SubstraitToOmniPlan.h"
@@ -433,6 +435,7 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
+#ifdef STRINGVIEW_ENABLE
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env,
     jobject wrapper, jstring schemaJson)
 {
@@ -506,6 +509,41 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWra
         omniruntime::mem::Allocator::GetAllocator()->Free(reinterpret_cast<void *>(address), size);
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
+#else
+namespace {
+void ThrowStringViewDisabled(JNIEnv *env)
+{
+    env->ThrowNew(runtimeExceptionClass,
+        "StringView row-to-columnar was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
+}
+} // namespace
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env, jobject, jstring)
+{
+    ThrowStringViewDisabled(env);
+    return 0;
+}
+
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_nativeConvertRowToColumnar(
+    JNIEnv *env, jobject, jlong, jlongArray, jlong)
+{
+    ThrowStringViewDisabled(env);
+    return nullptr;
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_close(JNIEnv *, jobject, jlong)
+{}
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env, jobject, jlong)
+{
+    ThrowStringViewDisabled(env);
+    return 0;
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(
+    JNIEnv *, jobject, jlong, jlong)
+{}
+#endif
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle)

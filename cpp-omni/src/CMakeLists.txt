@@ -3,6 +3,9 @@ include_directories(SYSTEM "/user/local/include")
 set (PROJ_TARGET spark_columnar_plugin)
 
 file(GLOB_RECURSE SOURCE_FILES "*.cpp" "*.cc")
+if (NOT STRINGVIEW_ENABLE)
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/compute/OmniRowToColumnarConverter\\.cpp$")
+endif ()
 # UDF/UDAF examples are separate shared libs (see udf/examples/CMakeLists.txt).
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*udf/examples/.*")
 

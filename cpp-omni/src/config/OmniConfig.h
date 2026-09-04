@@ -33,6 +33,7 @@ const std::string kCaseSensitive = "spark.sql.caseSensitive";
 
 const std::string kSessionTimezone = "spark.sql.session.timeZone";
 
+#ifdef STRINGVIEW_ENABLE
 // NOTE: as of the self-describing wire change, this conf no longer affects native type decoding —
 // substrait string types/literals carry their own type_variation_reference (0=VARCHAR, 21=StringView)
 // and SubstraitParser decodes that literally. The conf now only drives data-source initial type
@@ -40,6 +41,7 @@ const std::string kSessionTimezone = "spark.sql.session.timeZone";
 // conf-driven decode.
 const std::string kOmniStringViewRuntimeValidationEnabled =
     "spark.omni.stringview.runtimeValidation.enabled";
+#endif
 
 const std::string kAllowPrecisionLoss = "spark.sql.decimalOperations.allowPrecisionLoss";
 

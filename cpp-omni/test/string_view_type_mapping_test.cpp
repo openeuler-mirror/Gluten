@@ -51,10 +51,14 @@ TEST(StringViewTypeMappingTest, TypeVariationIsSelfDescribing)
     EXPECT_EQ(SubstraitParser::ParseType(v0, false, false)->GetId(), type::OMNI_VARCHAR);
     EXPECT_EQ(SubstraitParser::ParseType(StringType(), false, false)->GetId(), type::OMNI_VARCHAR);
 
-    // variation 21 -> StringView, regardless of the flag.
+    // variation 21 is supported only in a native build with StringView enabled.
     const auto v21 = StringTypeWithVariation(SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE);
+#ifdef STRINGVIEW_ENABLE
     EXPECT_EQ(SubstraitParser::ParseType(v21, false, false)->GetId(), type::OMNI_STRING_VIEW);
     EXPECT_EQ(SubstraitParser::ParseType(v21, false, false)->GetId(), type::OMNI_STRING_VIEW);
+#else
+    EXPECT_ANY_THROW(SubstraitParser::ParseType(v21, false, false));
+#endif
 }
 
 TEST(StringViewTypeMappingTest, UnknownVariationIsRejected)
@@ -81,15 +85,19 @@ TEST(StringViewTypeMappingTest, LiteralVariationIsSelfDescribing)
     delete e1;
     delete e2;
 
-    // variation 21 -> StringView, regardless of the converter flag.
+    // variation 21 is rejected by an OFF build rather than silently parsed as VARCHAR.
     const auto svLit =
         StringLiteralWithVariation("tiny", SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE);
+#ifdef STRINGVIEW_ENABLE
     auto *e3 = varcharConverter.ToOmniExpr(svLit);
     auto *e4 = switchOnConverter.ToOmniExpr(svLit);
     EXPECT_EQ(e3->GetReturnTypeId(), type::OMNI_STRING_VIEW);
     EXPECT_EQ(e4->GetReturnTypeId(), type::OMNI_STRING_VIEW);
     delete e3;
     delete e4;
+#else
+    EXPECT_ANY_THROW(varcharConverter.ToOmniExpr(svLit));
+#endif
 }
 
 TEST(StringViewTypeMappingTest, ConcurrentDecodeIsStable)
@@ -105,12 +113,17 @@ TEST(StringViewTypeMappingTest, ConcurrentDecodeIsStable)
     };
 
     for (int i = 0; i < 32; ++i) {
+#ifdef STRINGVIEW_ENABLE
         auto svFuture = std::async(std::launch::async, parseLiteralType,
             SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE);
         auto varcharFuture = std::async(std::launch::async, parseLiteralType, 0u);
 
         EXPECT_EQ(svFuture.get(), type::OMNI_STRING_VIEW);
         EXPECT_EQ(varcharFuture.get(), type::OMNI_VARCHAR);
+#else
+        EXPECT_ANY_THROW(parseLiteralType(SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE));
+        EXPECT_EQ(parseLiteralType(0), type::OMNI_VARCHAR);
+#endif
     }
 }
 } // namespace omniruntime

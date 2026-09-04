@@ -110,12 +110,17 @@ if [ $# != 0 ] ; then
     echo "-- Enable Release"
     options="$options -DCMAKE_BUILD_TYPE=Release"
   fi
-  cmake .. $options -DBUILD_CPP_TESTS=ON
+  cmake .. $options \
+    -DBUILD_CPP_TESTS=ON \
+    -DSTRINGVIEW_ENABLE=${STRINGVIEW_ENABLE:-OFF}
 else
   echo "-- Enable Release"
   install_fmt
   install_folly
-  cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CPP_TESTS=OFF
+  cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_CPP_TESTS=OFF \
+    -DSTRINGVIEW_ENABLE=${STRINGVIEW_ENABLE:-OFF}
 fi
 
 make -j$(nproc)

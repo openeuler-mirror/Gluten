@@ -417,11 +417,17 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             return new LiteralExpr(substraitLit.timestamp(), TimestampType());
         case ::substrait::Expression_Literal::LiteralTypeCase::kString: {
             auto *stringVal = new std::string(substraitLit.string());
+#ifdef STRINGVIEW_ENABLE
             // Self-describing: the literal's own type_variation_reference decides SV vs VARCHAR,
             // independent of conf. 21 -> StringView, else -> VARCHAR (closed default).
             if (substraitLit.type_variation_reference() ==
                 SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
                 return new LiteralExpr(stringVal, StringViewType());
+            }
+#endif
+            if (substraitLit.type_variation_reference() ==
+                SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                OMNI_THROW("StringView disabled", "StringView literal was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
             }
             return new LiteralExpr(stringVal, VarcharType(stringVal->length()));
         }
