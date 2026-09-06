@@ -16,6 +16,9 @@
  */
 package org.apache.gluten.datasources.text
 
+import java.util.Properties
+
+import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 
 import org.scalatest.funsuite.AnyFunSuite
@@ -69,7 +72,26 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
   test("TextReadFormat without explicit source and codec is rejected") {
     val result = OmniTextOptionsAdapter.validateRead(Map.empty)
     assert(!result.ok())
-    assert(result.reason().contains("source kind"))
+    assert(result.reason().contains("source/codec combination"))
+  }
+
+  test("LazySimple descriptor preserves composed delimiter and null options") {
+    val properties = new Properties()
+    properties.setProperty("columns", "name,age")
+    properties.setProperty("columns.types", "string:int")
+    properties.setProperty("field.delim", "|")
+    properties.setProperty("serialization.null.format", "NULL")
+    val schema = new StructType().add("name", StringType).add("age", IntegerType)
+
+    val descriptor = OmniTextOptionsAdapter
+      .fromHiveLazySimple(new Configuration(), properties, schema, schema)
+      .fold(reason => fail(reason), identity)
+
+    assert(descriptor.toProperties(OmniTextOptionsAdapter.SourceKindKey) == "HIVE_TEXT")
+    assert(descriptor.toProperties(OmniTextOptionsAdapter.CodecKindKey) == "LAZY_SIMPLE")
+    assert(descriptor.toProperties("field_delimiter") == "|")
+    assert(descriptor.toProperties("nullValue") == "NULL")
+    assert(OmniTextOptionsAdapter.validateRead(descriptor.toProperties).ok())
   }
 
   test("read schema must be zero or one String column") {

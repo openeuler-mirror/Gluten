@@ -17,7 +17,11 @@
 
 package org.apache.spark.sql.hive.execution
 
+import java.util.TimeZone
+
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.extension.ValidationResult
 
 import scala.collection.JavaConverters._
 import org.apache.hadoop.fs.{FileStatus, Path}
@@ -55,6 +59,23 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
   def this() = this(null)
 
   override def shortName(): String = "hive"
+
+  def validateNativeLazySimpleText(dataSchema: StructType): ValidationResult = {
+    val tableDesc = fileSinkConf.getTableInfo
+    if (fileSinkConf.getCompressed) {
+      return ValidationResult.failed("Native Hive LazySimple Text writer does not support compression")
+    }
+    if (tableDesc.getOutputFileFormatClassName !=
+        "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat" ||
+        tableDesc.getDeserializerClass.getName != OmniTextOptionsAdapter.LazySimpleSerdeClass) {
+      return ValidationResult.failed(
+        "Native Hive Text writer requires TextOutputFormat with LazySimpleSerDe")
+    }
+    OmniTextOptionsAdapter
+      .fromHiveLazySimple(new JobConf(), tableDesc.getProperties, dataSchema, dataSchema)
+      .fold(reason => ValidationResult.failed(reason), descriptor =>
+        OmniTextOptionsAdapter.validateHiveWrite(descriptor.toProperties))
+  }
 
   override def inferSchema(
                             sparkSession: SparkSession,
@@ -97,20 +118,33 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
       val nativeFormat = sparkSession.sparkContext.getLocalProperty("nativeFormat")
       val tableOptions = tableDesc.getProperties.asScala.toMap
       val isParquetFormat = nativeFormat == "parquet"
-      val compressionCodec = if (fileSinkConf.getCompressed) {
+      val isTextFormat = nativeFormat == "text"
+      val (nativeOptions, compressionCodec) = if (isTextFormat) {
+        require(!fileSinkConf.getCompressed, "Native Hive LazySimple Text writer does not support compression")
+        require(
+          tableDesc.getDeserializerClass.getName == OmniTextOptionsAdapter.LazySimpleSerdeClass,
+          "Native Hive Text writer supports LazySimpleSerDe only")
+        val descriptor = OmniTextOptionsAdapter
+          .fromHiveLazySimple(conf, tableDesc.getProperties, dataSchema, dataSchema)
+          .fold(reason => throw new IllegalArgumentException(reason), identity)
+        (descriptor.toProperties +
+          (OmniTextOptionsAdapter.SessionTimezoneKey ->
+            TimeZone.getDefault.getID),
+          OmniTextOptionsAdapter.NoCompression)
+      } else if (fileSinkConf.getCompressed) {
         // hive related configurations
-        fileSinkConf.getCompressCodec
+        (tableOptions, fileSinkConf.getCompressCodec)
       } else if (isParquetFormat) {
         val parquetOptions =
           new ParquetOptions(tableOptions, sparkSession.sessionState.conf)
-        parquetOptions.compressionCodecClassName
+        (tableOptions, parquetOptions.compressionCodecClassName)
       } else {
         val orcOptions = new OrcOptions(tableOptions, sparkSession.sessionState.conf)
-        orcOptions.compressionCodec
+        (tableOptions, orcOptions.compressionCodec)
       }
 
       val nativeConf =
-        GlutenFormatFactory(nativeFormat).nativeConf(tableOptions, compressionCodec)
+        GlutenFormatFactory(nativeFormat).nativeConf(nativeOptions, compressionCodec)
 
       new OutputWriterFactory {
         private val jobConf = new SerializableJobConf(new JobConf(conf))

@@ -28,7 +28,7 @@ Java_com_huawei_boostkit_write_jni_TextColumnarBatchJniWriter_initializeWriter(
 
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_write_jni_TextColumnarBatchJniWriter_write(
-    JNIEnv* env, jobject object, jlong writer, jlong vectorNativeId, jlong startPos, jlong endPos);
+    JNIEnv* env, jobject object, jlong writer, jlongArray vectorNativeIds, jlong startPos, jlong endPos);
 
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_write_jni_TextColumnarBatchJniWriter_close(

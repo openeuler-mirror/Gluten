@@ -73,6 +73,10 @@ struct SplitInfo {
     /// Backend-normalized split properties, for example Text source and codec options.
     std::unordered_map<std::string, std::string> customSplitInfo;
 
+    /// Full non-partition file schema. LazySimple text needs this to preserve field ordinals
+    /// when the Spark plan projects only a subset of columns.
+    type::RowTypePtr fileSchema;
+
     /// The file sizes and modification times of the files to be scanned.
     std::vector<std::optional<FileProperties>> properties;
 

@@ -36,7 +36,22 @@ import java.{util => ju}
 class OmniTextFormatWriterInjects extends GlutenFormatWriterInjectsBase {
   override def nativeConf(
       options: Map[String, String],
-      compressionCodec: String): ju.Map[String, String] = ju.Collections.emptyMap()
+      compressionCodec: String): ju.Map[String, String] = {
+    val normalized =
+      if (options.contains(OmniTextOptionsAdapter.SourceKindKey)) {
+        options
+      } else {
+        OmniTextOptionsAdapter
+          .fromSparkText(
+            options,
+            new StructType().add("value", StringType),
+            new StructType().add("value", StringType))
+          .toProperties
+      }
+    val result = new ju.HashMap[String, String]()
+    normalized.foreach { case (key, value) => result.put(key, value) }
+    result
+  }
 
   override def formatName: String = "text"
 
@@ -45,7 +60,7 @@ class OmniTextFormatWriterInjects extends GlutenFormatWriterInjectsBase {
       dataSchema: StructType,
       context: TaskAttemptContext,
       nativeConf: ju.Map[String, String]): OutputWriter =
-    new OmniTextOutputWriter(outputPath, dataSchema, context)
+    new OmniTextOutputWriter(outputPath, dataSchema, context, nativeConf)
 
   override def inferSchema(
       sparkSession: SparkSession,

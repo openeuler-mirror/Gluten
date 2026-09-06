@@ -13,9 +13,11 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
 {
     auto sourceKind = static_cast<int>(options.source_kind());
     auto codecKind = static_cast<int>(options.codec_kind());
-    if (sourceKind != 1 || codecKind != 1) {
+    const bool rawLine = sourceKind == 1 && codecKind == 1;
+    const bool lazySimple = sourceKind == 2 && codecKind == 2;
+    if (!rawLine && !lazySimple) {
         throw std::runtime_error(
-            "Unsupported Text source/codec. Phase one requires SPARK_TEXT with RAW_LINE.");
+            "Unsupported Text source/codec combination.");
     }
     if (options.whole_text()) {
         throw std::runtime_error("Unsupported Text option: whole_text must be false.");
@@ -27,15 +29,35 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         throw std::runtime_error("Unsupported Text option: charset must be UTF-8.");
     }
     if (options.compression_codec() != "NONE") {
-        throw std::runtime_error("Unsupported Text option: compression is not available in phase one.");
+        throw std::runtime_error("Unsupported Text option: compression is not available.");
     }
-    return {
-        {"text.source_kind", "SPARK_TEXT"},
-        {"text.codec_kind", "RAW_LINE"},
+    std::unordered_map<std::string, std::string> result = {
+        {"text.source_kind", rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
+        {"text.codec_kind", rawLine ? "RAW_LINE" : "LAZY_SIMPLE"},
         {"text.charset", options.charset()},
         {"text.line_separator", options.line_separator()},
         {"text.compression_codec", options.compression_codec()},
+        {"text.session_timezone", options.session_timezone()},
         {"text.whole_text", options.whole_text() ? "true" : "false"}};
+    if (lazySimple) {
+        if (options.field_delimiter().size() != 1) {
+            throw std::runtime_error("LazySimple field delimiter must be exactly one byte.");
+        }
+        if (options.escape().size() > 1) {
+            throw std::runtime_error("LazySimple escape delimiter must be empty or one byte.");
+        }
+        if (options.header() > 1) {
+            throw std::runtime_error("LazySimple skip header count must be 0 or 1.");
+        }
+        result["text.field_delimiter"] = options.field_delimiter();
+        result["text.null_literal"] = options.null_value();
+        result["text.escape_enabled"] = options.escape().empty() ? "false" : "true";
+        result["text.escape_char"] = options.escape();
+        result["text.skip_input_lines"] = std::to_string(options.header());
+        result["text.emit_header"] = "false";
+        result["text.last_column_takes_rest"] = "false";
+    }
+    return result;
 }
 }
 
@@ -59,6 +81,7 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
     splitInfo->lengths.reserve(fileList.size());
     splitInfo->partitionColumns.reserve(fileList.size());
     splitInfo->metadataColumns.reserve(fileList.size());
+    std::string serializedFileSchema;
     for (const auto& file : fileList) {
         // Expect all Partitions share the same index.
         splitInfo->partitionIndex = file.partition_index();
@@ -96,6 +119,25 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
                     throw std::runtime_error("Text options must be identical within one LocalFiles split.");
                 }
                 splitInfo->customSplitInfo = std::move(textOptions);
+                if (splitInfo->customSplitInfo.at("text.codec_kind") == "LAZY_SIMPLE") {
+                    if (!file.has_schema() || file.schema().names_size() == 0) {
+                        throw std::runtime_error("LazySimple Text split requires the full file schema.");
+                    }
+                    const auto currentSchema = file.schema().SerializeAsString();
+                    if (!serializedFileSchema.empty() && serializedFileSchema != currentSchema) {
+                        throw std::runtime_error("Text file schema must be identical within one LocalFiles split.");
+                    }
+                    if (serializedFileSchema.empty()) {
+                        serializedFileSchema = currentSchema;
+                        std::vector<std::string> names;
+                        names.reserve(file.schema().names_size());
+                        for (const auto& name : file.schema().names()) {
+                            names.emplace_back(name);
+                        }
+                        auto types = SubstraitParser::ParseNamedStruct(file.schema());
+                        splitInfo->fileSchema = ROW(std::move(names), std::move(types));
+                    }
+                }
                 break;
             }
             default:

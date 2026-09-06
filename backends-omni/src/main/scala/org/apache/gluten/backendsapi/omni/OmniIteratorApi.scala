@@ -18,6 +18,7 @@ package org.apache.gluten.backendsapi.omni
 
 import org.apache.gluten.backendsapi.{BackendsApiManager, IteratorApi}
 import org.apache.gluten.config.GlutenNumaBindingInfo
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.execution._
 import org.apache.gluten.iterator.Iterators
 import org.apache.gluten.metrics.{IMetrics, OmniIteratorMetricsJniWrapper}
@@ -47,6 +48,19 @@ import java.util.{UUID, ArrayList => JArrayList, HashMap => JHashMap, Map => JMa
 import scala.collection.JavaConverters._
 
 class OmniIteratorApiImpl extends IteratorApi with Logging {
+
+  private def setLazySimpleFileSchema(
+      localFilesNode: LocalFilesNode,
+      scan: BasicScanExecTransformer): Unit = {
+    val properties = scan.getProperties
+    if (scan.fileFormat == ReadFileFormat.TextReadFormat &&
+        properties.get(OmniTextOptionsAdapter.SourceKindKey)
+          .contains(OmniTextOptionsAdapter.HiveTextSource) &&
+        properties.get(OmniTextOptionsAdapter.CodecKindKey)
+          .contains(OmniTextOptionsAdapter.LazySimpleCodec)) {
+      localFilesNode.setFileSchema(scan.getDataSchema)
+    }
+  }
 
   override def genSplitInfo(
       partition: InputPartition,
@@ -95,10 +109,16 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
 
     splitInfos.zipWithIndex.map {
       case (splitInfos, index) =>
+        val serializedSplits = splitInfos.zipWithIndex.map {
+          case (split, scanIndex) =>
+            val localFilesNode = split.asInstanceOf[LocalFilesNode]
+            scans.lift(scanIndex).foreach(scan => setLazySimpleFileSchema(localFilesNode, scan))
+            localFilesNode.toProtobuf.toByteArray
+        }.toArray
         GlutenPartition(
           index,
           planByteArray,
-          splitInfos.map(_.asInstanceOf[LocalFilesNode].toProtobuf.toByteArray).toArray,
+          serializedSplits,
           splitInfos.flatMap(_.preferredLocations().asScala).toArray
         )
     }

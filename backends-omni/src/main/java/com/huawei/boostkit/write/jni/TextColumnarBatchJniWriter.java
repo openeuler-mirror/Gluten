@@ -35,14 +35,14 @@ public class TextColumnarBatchJniWriter {
     public native long initializeWriter(JSONObject options);
 
     /**
-     * Writes a row range from a native vector.
+     * Writes a row range from native vectors.
      *
      * @param writer native writer handle
-     * @param vectorNativeId native vector handle
+     * @param vectorNativeIds native vector handles
      * @param startPos inclusive start row index
      * @param endPos exclusive end row index
      */
-    public native void write(long writer, long vectorNativeId, long startPos, long endPos);
+    public native void write(long writer, long[] vectorNativeIds, long startPos, long endPos);
 
     /**
      * Closes a native Text writer.

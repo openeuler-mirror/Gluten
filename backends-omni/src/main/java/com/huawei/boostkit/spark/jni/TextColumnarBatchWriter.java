@@ -24,11 +24,17 @@ import nova.hetu.omniruntime.vector.Vec;
 
 import org.apache.gluten.vectorized.OmniColumnVector;
 import org.apache.hadoop.fs.Path;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 import org.apache.spark.sql.vectorized.ColumnVector;
 import org.json.JSONObject;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.StringJoiner;
 
 /**
  * Writes Spark columnar batches with the native Text writer.
@@ -40,11 +46,14 @@ public class TextColumnarBatchWriter {
     private long writer;
 
     /**
-     * Initializes a native Text writer for the specified output path.
+     * Initializes a native Text writer for the specified output path and schema.
      *
      * @param path output file path
+     * @param dataSchema schema of the data columns to write
+     * @param nativeConf native Text writer options
      */
-    public void initializeWriterJava(Path path) {
+    public void initializeWriterJava(
+            Path path, StructType dataSchema, Map<String, String> nativeConf) {
         URI uri = path.toUri();
         JSONObject options = new JSONObject();
         options.put("uri", path.toString());
@@ -52,15 +61,21 @@ public class TextColumnarBatchWriter {
         options.put("scheme", uri.getScheme() == null ? "" : uri.getScheme());
         options.put("port", uri.getPort());
         options.put("path", uri.getPath() == null ? "" : uri.getPath());
+        nativeConf.forEach((key, value) -> options.put(key, value));
+        StringJoiner types = new StringJoiner("\u001f");
+        for (StructField field : dataSchema.fields()) {
+            types.add(field.dataType().catalogString());
+        }
+        options.put("text_schema_types", types.toString());
         writer = jniWriter.initializeWriter(options);
     }
 
     /**
-     * Writes all rows from the data column of a columnar batch.
+     * Writes all rows from the data columns of a columnar batch.
      *
-     * @param dataColumnIds flags identifying the data column in the batch
+     * @param dataColumnIds flags identifying data columns in the batch
      * @param batch columnar batch to write
-     * @throws IllegalArgumentException if the column mask is invalid or the data column is not an
+     * @throws IllegalArgumentException if the column mask is invalid or a data column is not an
      *         {@link OmniColumnVector}
      */
     public void write(boolean[] dataColumnIds, ColumnarBatch batch) {
@@ -68,45 +83,45 @@ public class TextColumnarBatchWriter {
     }
 
     /**
-     * Writes a row range from the data column of a columnar batch.
+     * Writes a row range from the data columns of a columnar batch.
      *
-     * @param dataColumnIds flags identifying the data column in the batch
+     * @param dataColumnIds flags identifying data columns in the batch
      * @param batch columnar batch to write
      * @param startPos inclusive start row index
      * @param endPos exclusive end row index
-     * @throws IllegalArgumentException if the column mask is invalid or the data column is not an
+     * @throws IllegalArgumentException if the column mask is invalid or a data column is not an
      *         {@link OmniColumnVector}
      */
     public void write(
             boolean[] dataColumnIds, ColumnarBatch batch, long startPos, long endPos) {
-        int dataColumnIndex = findDataColumn(dataColumnIds, batch.numCols());
-        ColumnVector columnVector = batch.column(dataColumnIndex);
-        if (!(columnVector instanceof OmniColumnVector)) {
-            throw new IllegalArgumentException("Text writer requires OmniColumnVector input.");
+        int[] dataColumnIndexes = findDataColumns(dataColumnIds, batch.numCols());
+        long[] nativeVectors = new long[dataColumnIndexes.length];
+        for (int index = 0; index < dataColumnIndexes.length; ++index) {
+            ColumnVector columnVector = batch.column(dataColumnIndexes[index]);
+            if (!(columnVector instanceof OmniColumnVector)) {
+                throw new IllegalArgumentException("Text writer requires OmniColumnVector input.");
+            }
+            OmniColumnVector omniVector = (OmniColumnVector) columnVector;
+            Vec vector = omniVector.getVec();
+            nativeVectors[index] = vector.getNativeVector();
         }
-        OmniColumnVector omniVector = (OmniColumnVector) columnVector;
-        Vec vector = omniVector.getVec();
-        jniWriter.write(writer, vector.getNativeVector(), startPos, endPos);
+        jniWriter.write(writer, nativeVectors, startPos, endPos);
     }
 
-    private int findDataColumn(boolean[] dataColumnIds, int columnCount) {
+    private int[] findDataColumns(boolean[] dataColumnIds, int columnCount) {
         if (dataColumnIds.length != columnCount) {
             throw new IllegalArgumentException("Text writer column mask does not match the batch.");
         }
-        int dataColumnIndex = -1;
+        List<Integer> indexes = new ArrayList<>();
         for (int index = 0; index < dataColumnIds.length; ++index) {
             if (dataColumnIds[index]) {
-                if (dataColumnIndex >= 0) {
-                    throw new IllegalArgumentException(
-                            "Text writer requires exactly one data column.");
-                }
-                dataColumnIndex = index;
+                indexes.add(index);
             }
         }
-        if (dataColumnIndex < 0) {
-            throw new IllegalArgumentException("Text writer requires exactly one data column.");
+        if (indexes.isEmpty()) {
+            throw new IllegalArgumentException("Text writer requires at least one data column.");
         }
-        return dataColumnIndex;
+        return indexes.stream().mapToInt(Integer::intValue).toArray();
     }
 
     /**

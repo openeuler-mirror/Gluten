@@ -868,14 +868,14 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel 
     std::shared_ptr<HiveTableHandle> tableHandle;
     if (!readRel.has_advanced_extension() || !readRel.advanced_extension().has_enhancement()) {
         tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-            kHiveConnectorId(), TABLE_NAME, filterPushdownEnabled, "");
+            kHiveConnectorId(), TABLE_NAME, filterPushdownEnabled, "", splitInfo->fileSchema);
     } else {
         auto names = colNameList;
         auto types = omniTypeList;
         google::protobuf::StringValue msg;
         readRel.advanced_extension().enhancement().UnpackTo(&msg);
         tableHandle = std::make_shared<HiveTableHandle>(
-            kHiveConnectorId(), TABLE_NAME, filterPushdownEnabled, msg.value());
+            kHiveConnectorId(), TABLE_NAME, filterPushdownEnabled, msg.value(), splitInfo->fileSchema);
     }
 
     std::vector<std::string> outNames;

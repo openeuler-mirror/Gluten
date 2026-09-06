@@ -162,6 +162,7 @@ message ReadRel {
         string line_separator = 12;
         string compression_codec = 13;
         bool whole_text = 14;
+        string session_timezone = 15;
       }
       message JsonReadOptions {
         uint64 max_block_size = 1;

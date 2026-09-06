@@ -240,6 +240,8 @@ public class LocalFilesNode implements SplitInfo {
                                     fileReadProperties.getOrDefault("text_compression_codec", ""))
                             .setWholeText(Boolean.parseBoolean(
                                     fileReadProperties.getOrDefault("text_whole_text", "false")))
+                            .setSessionTimezone(
+                                    fileReadProperties.getOrDefault("text_session_timezone", ""))
                             .build();
             fileBuilder.setText(textReadOptions);
             break;

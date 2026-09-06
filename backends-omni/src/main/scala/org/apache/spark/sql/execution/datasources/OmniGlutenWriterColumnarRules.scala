@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution.datasources
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution.{
   ColumnarToRowExecBase,
   OmniGlutenLabeledAppendDataExecV1,
@@ -33,7 +34,13 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.command.{CreateDataSourceTableAsSelectCommand, DataWritingCommand, DataWritingCommandExec}
 import org.apache.spark.sql.execution.datasources.v2.{AppendDataExec, AppendDataExecV1, OverwriteByExpressionExec, OverwriteByExpressionExecV1}
-import org.apache.spark.sql.hive.execution.{CreateHiveTableAsSelectCommand, InsertIntoHiveDirCommand, InsertIntoHiveTable, OmniInsertIntoHiveTable}
+import org.apache.spark.sql.hive.execution.{
+  CreateHiveTableAsSelectCommand,
+  InsertIntoHiveDirCommand,
+  InsertIntoHiveTable,
+  OmniHiveFileFormat,
+  OmniInsertIntoHiveTable
+}
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.types.StringType
@@ -48,6 +55,23 @@ object OmniGlutenWriterColumnarRules extends Logging {
     "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" -> "orc",
     "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" -> "parquet"
   )
+
+  private val hiveTextOutputFormat =
+    "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+  private def nativeHiveTableFormat(
+      outputFormat: Option[String],
+      serde: Option[String]): Option[String] = {
+    outputFormat.flatMap(formatMapping.get).orElse {
+      if (outputFormat.contains(hiveTextOutputFormat) &&
+          serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass) &&
+          GlutenFormatFactory.isRegistered("text")) {
+        Some("text")
+      } else {
+        None
+      }
+    }.filter(GlutenFormatFactory.isRegistered)
+  }
 
   private def supportsNativeTextWrite(
       fileFormat: FileFormat,
@@ -67,6 +91,10 @@ object OmniGlutenWriterColumnarRules extends Logging {
       command.fileFormat.isInstanceOf[TextFileFormat]
     case command: OmniInsertIntoHadoopFsRelationCommand =>
       command.fileFormat.isInstanceOf[TextFileFormat]
+    case command: InsertIntoHiveTable =>
+      command.table.storage.serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass)
+    case command: OmniInsertIntoHiveTable =>
+      command.table.storage.serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass)
     case _ => false
   }
 
@@ -88,7 +116,8 @@ object OmniGlutenWriterColumnarRules extends Logging {
   private def getNativeFormat(
       cmd: DataWritingCommand,
       output: Seq[Attribute]): Option[String] = {
-    if (!BackendsApiManager.getSettings.enableNativeWriteFiles()) {
+    if (!BackendsApiManager.getSettings.enableNativeWriteFiles() ||
+        (isTextWrite(cmd) && !GlutenConfig.get.enableOmniText)) {
       return None
     }
 
@@ -138,9 +167,19 @@ object OmniGlutenWriterColumnarRules extends Logging {
           .flatMap(formatMapping.get)
           .filter(GlutenFormatFactory.isRegistered)
       case command: OmniInsertIntoHiveTable =>
-        command.table.storage.outputFormat
-          .flatMap(formatMapping.get)
-          .filter(GlutenFormatFactory.isRegistered)
+        val candidate = nativeHiveTableFormat(
+          command.table.storage.outputFormat,
+          command.table.storage.serde)
+        candidate.filter {
+          case "text" =>
+            val partitionIds = command.partitionColumns.map(_.exprId).toSet
+            val dataSchema = output.filterNot(attr => partitionIds.contains(attr.exprId)).toStructType
+            command.fileFormat match {
+              case hive: OmniHiveFileFormat => hive.validateNativeLazySimpleText(dataSchema).ok()
+              case _ => false
+            }
+          case _ => true
+        }
       case command: CreateHiveTableAsSelectCommand =>
         command.tableDesc.storage.outputFormat
           .flatMap(formatMapping.get)

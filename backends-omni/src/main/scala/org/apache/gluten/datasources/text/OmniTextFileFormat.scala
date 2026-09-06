@@ -25,6 +25,8 @@ import org.apache.spark.sql.execution.datasources.{FileFormat, OutputWriter, Out
 import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
 import org.apache.spark.sql.types.{StringType, StructType}
 
+import java.{util => ju}
+
 class OmniTextFileFormat extends FileFormat with DataSourceRegister with Serializable {
   override def shortName(): String = "text-native"
 
@@ -41,12 +43,17 @@ class OmniTextFileFormat extends FileFormat with DataSourceRegister with Seriali
       dataSchema: StructType): OutputWriterFactory = {
     val validation = OmniTextOptionsAdapter.validateWrite(dataSchema.fields, options)
     require(validation.ok(), validation.reason())
+    val descriptorProperties = OmniTextOptionsAdapter
+      .fromSparkText(options, dataSchema, dataSchema)
+      .toProperties
+    val nativeConf = new ju.HashMap[String, String]()
+    descriptorProperties.foreach { case (key, value) => nativeConf.put(key, value) }
     new OutputWriterFactory {
       override def newInstance(
           path: String,
           schema: StructType,
           context: TaskAttemptContext): OutputWriter =
-        new OmniTextOutputWriter(path, schema, context)
+        new OmniTextOutputWriter(path, schema, context, nativeConf)
 
       override def getFileExtension(context: TaskAttemptContext): String = ".txt"
     }

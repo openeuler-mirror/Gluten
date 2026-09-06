@@ -24,18 +24,24 @@ import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.execution.datasources.{FakeRow, OutputWriter}
 import org.apache.spark.sql.types.StructType
 
+import java.{util => ju}
+
 class OmniTextOutputWriter(
     outputPath: String,
     dataSchema: StructType,
-    context: TaskAttemptContext)
+    context: TaskAttemptContext,
+    nativeConf: ju.Map[String, String])
   extends OutputWriter {
 
   private val writer = new TextColumnarBatchWriter()
   private var dataColumnIds: Array[Boolean] = new Array[Boolean](0)
 
   def initialize(allColumns: Seq[Attribute], dataColumns: Seq[Attribute]): Unit = {
-    require(dataSchema.length == 1, "Native Text writer requires one data column")
-    writer.initializeWriterJava(new Path(outputPath))
+    require(dataColumns.nonEmpty, "Native Text writer requires at least one data column")
+    require(
+      dataSchema.length == dataColumns.length,
+      "Native Text writer schema does not match its data columns")
+    writer.initializeWriterJava(new Path(outputPath), dataSchema, nativeConf)
     dataColumnIds = allColumns.map(dataColumns.contains).toArray
   }
 

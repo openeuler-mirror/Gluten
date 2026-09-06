@@ -32,6 +32,8 @@ import org.apache.gluten.substrait.rel.LocalFilesNode
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.gluten.validate.NativePlanValidationInfo
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.hive.ql.plan.FileSinkDesc
 import org.apache.spark.shuffle.OmniShuffleUtil
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Average, Count, First, Last, Max, Min, StddevSamp, StddevPop, VarianceSamp, VariancePop, Sum}
@@ -44,7 +46,7 @@ import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
-import org.apache.spark.sql.hive.execution.HiveFileFormat
+import org.apache.spark.sql.hive.execution.{HiveFileFormat, OmniHiveFileFormat}
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
 import org.apache.spark.util.SerializableConfiguration
@@ -144,6 +146,8 @@ object OmniBackendSettings extends BackendSettingsApi {
     format match {
       case ReadFileFormat.ParquetReadFormat => checkUnsupportedDataTypes
       case ReadFileFormat.OrcReadFormat => checkUnsupportedDataTypes
+      case ReadFileFormat.TextReadFormat if !GlutenConfig.get.enableOmniText =>
+        ValidationResult.failed("Native Text datasource support is disabled")
       case ReadFileFormat.TextReadFormat => OmniTextOptionsAdapter.validateRead(properties)
       case _ => ValidationResult.failed(s"Unsupported file format $format")
     }
@@ -196,11 +200,16 @@ object OmniBackendSettings extends BackendSettingsApi {
       partitions: Seq[InputPartition],
       properties: Map[String, String],
       serializableHadoopConf: Option[SerializableConfiguration]): ValidationResult = {
-    if (format == ReadFileFormat.TextReadFormat &&
-        properties.get(OmniTextOptionsAdapter.SourceKindKey)
-          .contains(OmniTextOptionsAdapter.SparkTextSource) &&
-        properties.get(OmniTextOptionsAdapter.CodecKindKey)
-          .contains(OmniTextOptionsAdapter.RawLineCodec)) {
+    val supportedTextCombination =
+      (properties.get(OmniTextOptionsAdapter.SourceKindKey),
+        properties.get(OmniTextOptionsAdapter.CodecKindKey)) match {
+        case (Some(OmniTextOptionsAdapter.SparkTextSource),
+              Some(OmniTextOptionsAdapter.RawLineCodec)) => true
+        case (Some(OmniTextOptionsAdapter.HiveTextSource),
+              Some(OmniTextOptionsAdapter.LazySimpleCodec)) => true
+        case _ => false
+      }
+    if (format == ReadFileFormat.TextReadFormat && supportedTextCombination) {
       OmniTextOptionsAdapter.validateInputPartitions(partitions, serializableHadoopConf)
     } else {
       ValidationResult.succeeded
@@ -224,25 +233,35 @@ object OmniBackendSettings extends BackendSettingsApi {
                                       bucketSpec: Option[BucketSpec],
                                       options: Map[String, String]): ValidationResult = {
 
-    def validateHiveFileFormat(hiveFileFormat: HiveFileFormat): Option[String] = {
-      val fileSinkConfField = format.getClass.getDeclaredField("fileSinkConf")
+    def validateHiveFileFormat(hiveFileFormat: FileFormat): Option[String] = {
+      val fileSinkConfField = hiveFileFormat.getClass.getDeclaredField("fileSinkConf")
       fileSinkConfField.setAccessible(true)
-      val fileSinkConf = fileSinkConfField.get(hiveFileFormat)
-      val tableInfoField = fileSinkConf.getClass.getDeclaredField("tableInfo")
-      tableInfoField.setAccessible(true)
-      val tableInfo = tableInfoField.get(fileSinkConf)
-      val getOutputFileFormatClassNameMethod = tableInfo.getClass
-        .getDeclaredMethod("getOutputFileFormatClassName")
-      val outputFileFormatClassName = getOutputFileFormatClassNameMethod.invoke(tableInfo)
+      val fileSinkConf = fileSinkConfField.get(hiveFileFormat).asInstanceOf[FileSinkDesc]
+      val tableInfo = fileSinkConf.getTableInfo
+      val outputFileFormatClassName = tableInfo.getOutputFileFormatClassName
 
       outputFileFormatClassName match {
         case "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" =>
           None
         case "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" =>
           None
+        case "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+          if tableInfo.getDeserializerClass.getName ==
+            OmniTextOptionsAdapter.LazySimpleSerdeClass && !fileSinkConf.getCompressed =>
+          OmniTextOptionsAdapter
+            .fromHiveLazySimple(
+              new Configuration(),
+              tableInfo.getProperties,
+              StructType(fields),
+              StructType(fields))
+            .fold(Some(_), descriptor => {
+              val result = OmniTextOptionsAdapter.validateHiveWrite(descriptor.toProperties)
+              if (result.ok()) None else Some(result.reason())
+            })
         case _ =>
           Some(
-            "HiveFileFormat is supported only with orc/parquet as the output file type"
+            "HiveFileFormat is supported only with orc/parquet or uncompressed " +
+              "LazySimpleSerDe text as the output file type"
           ) // Unsupported format
       }
     }
@@ -278,6 +297,8 @@ object OmniBackendSettings extends BackendSettingsApi {
           if (result.ok()) None else Some(result.reason())
         case h: HiveFileFormat if GlutenConfig.get.enableHiveFileFormatWriter =>
           validateHiveFileFormat(h) // Orc via Hive SerDe
+        case h: OmniHiveFileFormat if GlutenConfig.get.enableHiveFileFormatWriter =>
+          validateHiveFileFormat(h)
         case _ =>
           Some(
             "Only OrcFileFormat, ParquetFileFormat, TextFileFormat, OmniOrcFileFormat, " +
