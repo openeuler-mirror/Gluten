@@ -30,6 +30,10 @@
 #include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
 #include "compute/Runtime.h"
+#ifdef STRINGVIEW_ENABLE
+#include "compute/OmniRowToColumnarConverter.h"
+#include "memory/allocator.h"
+#endif
 #include "config/OmniConfig.h"
 #include "compute/ProtobufUtils.h"
 #include "substrait/SubstraitToOmniPlan.h"
@@ -527,6 +531,116 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
         return result;
     JNI_FUNC_END(runtimeExceptionClass)
 }
+
+#ifdef STRINGVIEW_ENABLE
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env,
+    jobject wrapper, jstring schemaJson)
+{
+    JNI_FUNC_START
+        if (schemaJson == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "schemaJson is null");
+            return 0;
+        }
+        const char *schemaChars = env->GetStringUTFChars(schemaJson, JNI_FALSE);
+        std::string schema(schemaChars);
+        env->ReleaseStringUTFChars(schemaJson, schemaChars);
+        auto *converter = new gluten::OmniRowToColumnarConverter(schema);
+        return reinterpret_cast<jlong>(converter);
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_nativeConvertRowToColumnar(
+    JNIEnv *env, jobject wrapper, jlong r2cHandle, jlongArray rowLength, jlong memoryAddress)
+{
+    JNI_FUNC_START
+        if (rowLength == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "rowLength is null");
+            return nullptr;
+        }
+        auto *converter = reinterpret_cast<gluten::OmniRowToColumnarConverter *>(r2cHandle);
+        if (converter == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "row-to-columnar converter is null");
+            return nullptr;
+        }
+        auto rowLengthPtr = env->GetLongArrayElements(rowLength, JNI_FALSE);
+        auto *batch = converter->Convert(env->GetArrayLength(rowLength), rowLengthPtr,
+            reinterpret_cast<uint8_t *>(memoryAddress));
+        env->ReleaseLongArrayElements(rowLength, rowLengthPtr, JNI_ABORT);
+        return Transform(env, *batch);
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_close(JNIEnv *env,
+    jobject wrapper, jlong r2cHandle)
+{
+    JNI_FUNC_START
+        auto *converter = reinterpret_cast<gluten::OmniRowToColumnarConverter *>(r2cHandle);
+        delete converter;
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
+}
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env,
+    jobject wrapper, jlong size)
+{
+    JNI_FUNC_START
+        if (size <= 0) {
+            env->ThrowNew(runtimeExceptionClass, "row buffer size must be positive");
+            return 0;
+        }
+        void *buffer = omniruntime::mem::Allocator::GetAllocator()->Alloc(size);
+        if (buffer == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "failed to allocate row buffer");
+            return 0;
+        }
+        return reinterpret_cast<jlong>(buffer);
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(JNIEnv *env,
+    jobject wrapper, jlong address, jlong size)
+{
+    JNI_FUNC_START
+        if (address == 0) {
+            return;
+        }
+        omniruntime::mem::Allocator::GetAllocator()->Free(reinterpret_cast<void *>(address), size);
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
+}
+#else
+namespace {
+void ThrowStringViewDisabled(JNIEnv *env)
+{
+    env->ThrowNew(runtimeExceptionClass,
+        "StringView row-to-columnar was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
+}
+} // namespace
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env, jobject, jstring)
+{
+    ThrowStringViewDisabled(env);
+    return 0;
+}
+
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_nativeConvertRowToColumnar(
+    JNIEnv *env, jobject, jlong, jlongArray, jlong)
+{
+    ThrowStringViewDisabled(env);
+    return nullptr;
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_close(JNIEnv *, jobject, jlong)
+{}
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env, jobject, jlong)
+{
+    ThrowStringViewDisabled(env);
+    return 0;
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(
+    JNIEnv *, jobject, jlong, jlong)
+{}
+#endif
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle)

@@ -18,6 +18,11 @@ package org.apache.gluten.substrait.type;
 
 import java.util.List;
 
+/**
+ * Factory for Substrait type nodes.
+ *
+ * @since 1.3.0
+ */
 public class TypeBuilder {
   private TypeBuilder() {}
 
@@ -36,6 +41,16 @@ public class TypeBuilder {
   public static TypeNode makeString(Boolean nullable) {
     return new StringTypeNode(nullable);
   }
+
+    /**
+     * Creates an Omni StringView type node.
+     *
+     * @param isNullable whether the type accepts null values
+     * @return a StringView type node
+     */
+    public static TypeNode makeOmniStringView(Boolean isNullable) {
+        return new OmniStringViewTypeNode(isNullable);
+    }
 
   public static TypeNode makeFixedChar(Boolean nullable, int length) {
     return new FixedCharTypeNode(nullable, length);

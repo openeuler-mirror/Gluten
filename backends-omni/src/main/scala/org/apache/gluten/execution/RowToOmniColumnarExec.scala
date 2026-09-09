@@ -16,19 +16,25 @@
  */
 package org.apache.gluten.execution
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.iterator.Iterators
 import org.apache.gluten.utils.SparkMemoryUtils
-import org.apache.gluten.vectorized.OmniColumnVector
+import org.apache.gluten.vectorized.{OmniColumnVector, OmniRowToColumnarJniWrapper}
+import nova.hetu.omniruntime.vector.{StringViewVec, VecBatch}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.sql.catalyst.expressions.SpecializedGetters
+import org.apache.spark.sql.catalyst.expressions.StringViewToOmniVarcharCast
 import org.apache.spark.sql.execution.vectorized.WritableColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.catalyst.util.{ArrayData, MapData}
+import org.apache.spark.task.TaskResources
+import org.apache.spark.unsafe.Platform
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
 import scala.collection.mutable.ListBuffer
@@ -44,8 +50,39 @@ case class RowToOmniColumnarExec(child: SparkPlan) extends RowToColumnarExecBase
     // This avoids calling `schema` in the RDD closure, so that we don't need to include the entire
     // plan (this) in the closure.
     val localSchema = schema
+    // Selects the native implementation of the existing RowToColumnar operator; it does not
+    // enable the operator itself or StringView. A StringView row-to-column boundary requires
+    // this native implementation, while each output column's physical type comes from its schema.
+    val nativeRowToColumnarEnabled = SQLConf.get.getConfString(
+      "spark.gluten.sql.columnar.backend.omni.nativeRowToColumnar.enabled", "false").toBoolean
+    // Closed default: R2C emits StringView only for columns the schema explicitly marks (a data
+    // source under the switch, or a whitelisted expression), never blanket by the global switch —
+    // else it would produce SV vectors for columns the plan encodes as VARCHAR (variation 0) and
+    // corrupt the batch. The native converter is all-or-nothing today; per-column StringView is
+    // wired in P2. In P1 no field is marked, so this is false and R2C stays on the VARCHAR path.
+    val stringViewEnabled = localSchema.fields.exists(f =>
+      f.dataType == StringType && StringViewToOmniVarcharCast.isPhysicalStringView(f.metadata))
+    val runtimeValidationEnabled = SQLConf.get.getConfString(
+      "spark.omni.stringview.runtimeValidation.enabled", "false").toBoolean
+    val preferVectorization = SQLConf.get.getConfString(
+      "spark.gluten.sql.columnar.backend.omni.preferVectorizationExpression", "false").toBoolean
+    if (runtimeValidationEnabled &&
+        (!stringViewEnabled || !nativeRowToColumnarEnabled || !preferVectorization)) {
+      throw new IllegalArgumentException(
+        "spark.omni.stringview.runtimeValidation.enabled requires " +
+          "spark.omni.stringview.enabled=true, " +
+          "spark.gluten.sql.columnar.backend.omni.nativeRowToColumnar.enabled=true, and " +
+          "spark.gluten.sql.columnar.backend.omni.preferVectorizationExpression=true")
+    }
     child.execute().mapPartitions { rowIterator =>
-      InternalRowToColumnarBatch.convert(enableOffHeapColumnVector, numInputRows, numOutputBatches, rowToOmniColumnarTime, numRows, localSchema, rowIterator)
+      if (nativeRowToColumnarEnabled) {
+        NativeInternalRowToColumnarBatch.convert(
+          numInputRows, numOutputBatches, rowToOmniColumnarTime, numRows, localSchema,
+          stringViewEnabled, runtimeValidationEnabled, rowIterator)
+      } else {
+        InternalRowToColumnarBatch.convert(enableOffHeapColumnVector, numInputRows, numOutputBatches,
+          rowToOmniColumnarTime, numRows, localSchema, rowIterator)
+      }
     }
   }
 
@@ -92,6 +129,191 @@ object InternalRowToColumnarBatch {
       }
     } else {
       Iterator.empty
+    }
+  }
+}
+
+object NativeInternalRowToColumnarBatch {
+  final val NANOSECONDS = java.util.concurrent.TimeUnit.NANOSECONDS
+
+  def convert(numInputRows: SQLMetric,
+              numOutputBatches: SQLMetric,
+              rowToOmniColumnarTime: SQLMetric,
+              numRows: Int,
+              localSchema: StructType,
+              stringViewEnabled: Boolean,
+              runtimeValidationEnabled: Boolean,
+              rowIterator: Iterator[InternalRow]): Iterator[ColumnarBatch] = {
+    if (!rowIterator.hasNext) {
+      return Iterator.empty
+    }
+
+    val converter = UnsafeProjection.create(localSchema)
+    val jniWrapper = new OmniRowToColumnarJniWrapper()
+    val r2cHandle = jniWrapper.init(nativeSchemaJson(localSchema, stringViewEnabled))
+    val nativeBatchOwners = new java.util.IdentityHashMap[ColumnarBatch, VecBatch]()
+
+    val res = new Iterator[ColumnarBatch] {
+      private var finished = false
+      private var validationLogged = false
+
+      override def hasNext: Boolean = !finished && rowIterator.hasNext
+
+      private def convertToUnsafeRow(row: InternalRow): UnsafeRow = {
+        row match {
+          case unsafeRow: UnsafeRow => unsafeRow
+          case _ => converter.apply(row)
+        }
+      }
+
+      override def next(): ColumnarBatch = {
+        val startTime = System.nanoTime()
+        val firstRow = convertToUnsafeRow(rowIterator.next())
+        // Staging buffer is allocated from the Omni native allocator (accounted in Omni's
+        // ThreadMemoryManager) instead of Arrow, so the omni backend carries no Arrow dependency.
+        var bufAddr: Long = 0L
+        var bufCapacity: Long = 0L
+        def freeStagingBuf(): Unit = {
+          if (bufAddr != 0L) {
+            jniWrapper.freeRowBuffer(bufAddr, bufCapacity)
+            bufAddr = 0L
+          }
+        }
+        TaskResources.addRecycler("OmniRowToColumnar_stagingBuf", 100) {
+          freeStagingBuf()
+        }
+
+        val rowLength = new ListBuffer[Long]()
+        var rowCount = 0
+        var offset = 0L
+
+        def appendUnsafeRow(row: UnsafeRow): Unit = {
+          val sizeInBytes = row.getSizeInBytes
+          if (bufAddr == 0L) {
+            val estimatedBufSize = Math.max(
+              Math.min(sizeInBytes.toDouble * numRows * 1.2, 31760L * numRows),
+              sizeInBytes.toDouble * 10)
+            // Empty-schema rows (count(*), existence-join output) have sizeInBytes==0, so estimatedBufSize
+            // is 0 and allocateRowBuffer throws "row buffer size must be positive". Clamp to a positive
+            // minimum; such rows carry no bytes, so any >0 capacity is safe.
+            bufCapacity = Math.max(estimatedBufSize.toLong, 1L)
+            bufAddr = jniWrapper.allocateRowBuffer(bufCapacity)
+          } else if ((offset + sizeInBytes) > bufCapacity) {
+            val newCapacity = (offset + sizeInBytes) * 2
+            val newAddr = jniWrapper.allocateRowBuffer(newCapacity)
+            Platform.copyMemory(null, bufAddr, null, newAddr, offset)
+            jniWrapper.freeRowBuffer(bufAddr, bufCapacity)
+            bufAddr = newAddr
+            bufCapacity = newCapacity
+          }
+          Platform.copyMemory(
+            row.getBaseObject,
+            row.getBaseOffset,
+            null,
+            bufAddr + offset,
+            sizeInBytes)
+          offset += sizeInBytes
+          rowLength += sizeInBytes.toLong
+          rowCount += 1
+        }
+
+        appendUnsafeRow(firstRow)
+        while (rowCount < numRows && !finished) {
+          if (!rowIterator.hasNext) {
+            finished = true
+          } else {
+            appendUnsafeRow(convertToUnsafeRow(rowIterator.next()))
+          }
+        }
+
+        try {
+          val vecBatch = jniWrapper.nativeConvertRowToColumnar(r2cHandle, rowLength.toArray, bufAddr)
+          val cb = vecBatchToColumnarBatch(vecBatch, localSchema)
+          if (runtimeValidationEnabled) {
+            validateStringViewBatch(cb, localSchema)
+            if (!validationLogged) {
+              println("SV_E2E_R2C output=StringViewVec")
+              validationLogged = true
+            }
+          }
+          nativeBatchOwners.put(cb, vecBatch)
+          numInputRows += rowCount
+          numOutputBatches += 1
+          rowToOmniColumnarTime += NANOSECONDS.toMillis(System.nanoTime() - startTime)
+          cb
+        } finally {
+          freeStagingBuf()
+        }
+      }
+    }
+
+    Iterators
+      .wrap(res)
+      .protectInvocationFlow()
+      .recycleIterator {
+        jniWrapper.close(r2cHandle)
+      }
+      .recyclePayload { batch =>
+        val vecBatch = nativeBatchOwners.remove(batch)
+        if (vecBatch != null) {
+          vecBatch.close()
+        } else {
+          batch.close()
+        }
+      }
+      .create()
+  }
+
+  private def nativeSchemaJson(schema: StructType, useStringView: Boolean): String = {
+    val fieldsJson = schema.fields.map { field =>
+      val sparkType = field.dataType.typeName
+      val omniType = field.dataType match {
+        case StringType if useStringView => "string_view"
+        case StringType => "varchar"
+        case _ => ""
+      }
+      if (omniType.isEmpty) {
+        s"""{"type":"$sparkType"}"""
+      } else {
+        s"""{"type":"$sparkType","omniType":"$omniType"}"""
+      }
+    }.mkString(",")
+    s"""{"fields":[$fieldsJson]}"""
+  }
+
+  private def vecBatchToColumnarBatch(vecBatch: VecBatch, schema: StructType): ColumnarBatch = {
+    val omniColumnVectors = OmniColumnVector.allocateColumns(vecBatch.getRowCount, schema, false)
+    var idx = 0
+    while (idx < omniColumnVectors.length) {
+      omniColumnVectors(idx).setVec(vecBatch.getVector(idx))
+      idx += 1
+    }
+    new ColumnarBatch(
+      omniColumnVectors.asInstanceOf[Array[org.apache.spark.sql.vectorized.ColumnVector]],
+      vecBatch.getRowCount)
+  }
+
+  private def validateStringViewBatch(batch: ColumnarBatch, schema: StructType): Unit = {
+    val stringColumns = schema.fields.zipWithIndex.collect {
+      case (field, index) if field.dataType == StringType => index
+    }
+    if (stringColumns.isEmpty) {
+      throw new IllegalStateException(
+        "StringView runtime validation requires at least one Spark StringType column")
+    }
+    stringColumns.foreach { index =>
+      val vector = batch.column(index) match {
+        case omniVector: OmniColumnVector => omniVector.getVec
+        case other =>
+          throw new IllegalStateException(
+            s"StringView R2C validation expected OmniColumnVector at column $index, " +
+              s"actual=${other.getClass.getName}")
+      }
+      if (!vector.isInstanceOf[StringViewVec]) {
+        throw new IllegalStateException(
+          s"StringView R2C validation expected StringViewVec at column $index, " +
+            s"actual=${vector.getClass.getName}")
+      }
     }
   }
 }

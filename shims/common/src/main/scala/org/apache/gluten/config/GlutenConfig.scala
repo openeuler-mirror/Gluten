@@ -532,6 +532,15 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def enableOmniRowShuffle: Boolean = conf.getConf(ENABLE_OMNI_ROW_SHUFFLE)
 
+  // Read the raw conf string (matching RowToOmniColumnarExec), NOT the typed ConfigEntry:
+  // conf.getConf(ENABLE_OMNI_STRING_VIEW) returns its default (false) even when
+  // spark.omni.stringview.enabled=true is set, while getConfString sees "true". The mismatch
+  // made RowToColumnar emit StringView columns but the expression adaptor tag the same columns
+  // VARCHAR -> the native comparison bound VARCHAR and read the StringView vector via
+  // LargeStringContainer -> SIGSEGV. Both sides must read the flag identically.
+  def enableOmniStringView: Boolean =
+    conf.getConfString("spark.omni.stringview.enabled", "false").toBoolean
+
   def omniRowShuffleColumnsThreshold: Int =
     conf.getConf(COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD)
   
@@ -2580,6 +2589,12 @@ object GlutenConfig {
       .doc("enable or disable row shuffle")
       .booleanConf
       .createWithDefault(true)
+
+  val ENABLE_OMNI_STRING_VIEW =
+    buildConf("spark.omni.stringview.enabled")
+      .doc("When true, StringType columns are mapped to OMNI_STRING_VIEW instead of OMNI_VARCHAR.")
+      .booleanConf
+      .createWithDefault(false)
 
   val COLUMNAR_OMNI_ROW_SHUFFLE_COLUMNS_THRESHOLD =
     buildConf("spark.gluten.sql.columnar.backend.omni.rowShuffle.columnsThreshold")

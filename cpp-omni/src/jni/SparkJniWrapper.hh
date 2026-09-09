@@ -74,6 +74,21 @@ JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOu
 JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeTransform(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env,
+    jobject wrapper, jstring schemaJson);
+
+JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_nativeConvertRowToColumnar(
+    JNIEnv *env, jobject wrapper, jlong r2cHandle, jlongArray rowLength, jlong memoryAddress);
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_close(JNIEnv *env,
+    jobject wrapper, jlong r2cHandle);
+
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env,
+    jobject wrapper, jlong size);
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(JNIEnv *env,
+    jobject wrapper, jlong address, jlong size);
+
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
 

@@ -8,6 +8,14 @@ project(spark-thestral-plugin)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_COMPILER "g++")
 
+# StringView is optional across the Omni and Gluten native stacks.  The same
+# STRINGVIEW_ENABLE value is forwarded by the top-level build entry point.
+option(STRINGVIEW_ENABLE "Build Gluten native StringView support" OFF)
+if (STRINGVIEW_ENABLE)
+    add_compile_definitions(STRINGVIEW_ENABLE)
+endif ()
+message(STATUS "Option STRINGVIEW_ENABLE: ${STRINGVIEW_ENABLE}")
+
 set(root_directory ${PROJECT_BINARY_DIR})
 
 set(CMAKE_CXX_FLAGS_DEBUG "-pipe -g -Wall -fPIC -fno-common -fno-stack-protector -Werror=return-type -fpermissive")

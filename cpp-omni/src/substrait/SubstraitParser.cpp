@@ -34,12 +34,13 @@ std::vector<type::DataTypePtr> SubstraitParser::ParseNamedStruct(
     std::vector<type::DataTypePtr> typeList;
     typeList.reserve(substraitTypes.size());
     for (const auto &type : substraitTypes) {
-        typeList.emplace_back(ParseType(type, asLowerCase));
+        typeList.emplace_back(ParseType(type, asLowerCase, false));
     }
     return typeList;
 }
 
-type::DataTypePtr SubstraitParser::ParseKStructType(const ::substrait::Type &substraitType, bool asLowerCase, bool isNest)
+type::DataTypePtr SubstraitParser::ParseKStructType(
+    const ::substrait::Type &substraitType, bool asLowerCase, bool isNest)
 {
     const auto& substraitStruct = substraitType.struct_();
     const auto& structTypes = substraitStruct.types();
@@ -49,7 +50,7 @@ type::DataTypePtr SubstraitParser::ParseKStructType(const ::substrait::Type &sub
     types.reserve(structTypes.size());
     names.reserve(structTypes.size());
     for (int i = 0; i < structTypes.size(); i++) {
-        types.emplace_back(ParseType(structTypes[i], asLowerCase));
+        types.emplace_back(ParseType(structTypes[i], asLowerCase, isNest));
         // Use field name from Substrait if available, otherwise use auto-generated name
         if (i < structNames.size() && !structNames[i].empty()) {
             names.emplace_back(structNames[i]);
@@ -60,7 +61,8 @@ type::DataTypePtr SubstraitParser::ParseKStructType(const ::substrait::Type &sub
     return std::make_shared<type::RowType>(std::move(types), std::move(names));
 }
 
-type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitType, bool asLowerCase, bool isNest)
+type::DataTypePtr SubstraitParser::ParseType(
+    const ::substrait::Type &substraitType, bool asLowerCase, bool isNest)
 {
     switch (substraitType.kind_case()) {
         case ::substrait::Type::KindCase::kNothing:
@@ -78,8 +80,29 @@ type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitT
             return type::DoubleType();
         case ::substrait::Type::KindCase::kFp32:
             return type::FloatType();
-        case ::substrait::Type::KindCase::kString:
+        case ::substrait::Type::KindCase::kString: {
+#ifdef STRINGVIEW_ENABLE
+            // Self-describing wire: the type_variation_reference alone decides the physical type,
+            // independent of any session conf. 0 -> VARCHAR, 21 -> StringView, else -> error.
+            const auto variation = substraitType.string().type_variation_reference();
+            if (variation == OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                return type::StringViewType();
+            }
+            if (variation == 0) {
+                return type::VarcharType();
+            }
+            OMNI_THROW("Substrait Error:", "Unknown string type_variation_reference: {}", variation);
+#else
+            const auto variation = substraitType.string().type_variation_reference();
+            if (variation == OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                OMNI_THROW("StringView disabled", "StringView type was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
+            }
+            if (variation != 0) {
+                OMNI_THROW("Substrait Error:", "Unknown string type_variation_reference: {}", variation);
+            }
             return type::VarcharType();
+#endif
+        }
         case ::substrait::Type::KindCase::kDate:
             return type::Date32Type();
         case ::substrait::Type::KindCase::kTimestamp:
@@ -99,13 +122,16 @@ type::DataTypePtr SubstraitParser::ParseType(const ::substrait::Type &substraitT
         }
         case ::substrait::Type::KindCase::kList: {
             const auto& fieldType = substraitType.list().type();
-            return std::make_shared<type::ArrayType>(ParseType(fieldType, asLowerCase));
+            return std::make_shared<type::ArrayType>(
+                ParseType(fieldType, asLowerCase, true));
         }
         case ::substrait::Type::KindCase::kMap: {
             const auto& sMap = substraitType.map();
             const auto& keyType = sMap.key();
             const auto& valueType = sMap.value();
-            return std::make_shared<type::MapType>(ParseType(keyType, asLowerCase), ParseType(valueType, asLowerCase));
+            return std::make_shared<type::MapType>(
+                ParseType(keyType, asLowerCase, true),
+                ParseType(valueType, asLowerCase, true));
         }
         default:
             OMNI_THROW("Substrait Error:", "Parsing for Substrait type not supported: {}", substraitType.DebugString());
@@ -360,23 +386,25 @@ std::string SubstraitParser::GetLiteralValue(const ::substrait::Expression::Lite
 }
 
 void SubstraitParser::AddStructDataType(
-    const ::substrait::Type &substraitType, std::vector<omniruntime::type::DataTypePtr> &outputDataTypes)
+    const ::substrait::Type &substraitType,
+    std::vector<omniruntime::type::DataTypePtr> &outputDataTypes)
 {
     const auto &substraitStruct = substraitType.struct_();
     const auto &structTypes = substraitStruct.types();
     std::vector<type::DataTypePtr> types;
     for (int i = 0; i < structTypes.size(); i++) {
-        outputDataTypes.emplace_back(ParseType(structTypes[i]));
+        outputDataTypes.emplace_back(ParseType(structTypes[i], false, false));
     }
 }
 
-type::DataTypesPtr SubstraitParser::ParseStructType(const ::substrait::Type &substraitType)
+type::DataTypesPtr SubstraitParser::ParseStructType(
+    const ::substrait::Type &substraitType)
 {
     const auto &substraitStruct = substraitType.struct_();
     const auto &structTypes = substraitStruct.types();
     std::vector<type::DataTypePtr> types;
     for (int i = 0; i < structTypes.size(); i++) {
-        types.emplace_back(ParseType(structTypes[i]));
+        types.emplace_back(ParseType(structTypes[i], false, false));
     }
     return std::make_shared<type::DataTypes>(std::move(types));
 }

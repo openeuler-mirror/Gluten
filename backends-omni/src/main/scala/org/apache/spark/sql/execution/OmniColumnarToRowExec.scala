@@ -16,7 +16,7 @@
  */
 package org.apache.spark.sql.execution
 
-import nova.hetu.omniruntime.vector.Vec
+import nova.hetu.omniruntime.vector.{StringViewVec, Vec}
 import org.apache.gluten.exception.{GlutenException, GlutenNotSupportException}
 import org.apache.gluten.execution.ColumnarToRowExecBase
 import org.apache.gluten.extension.ValidationResult
@@ -27,6 +27,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, UnsafeProjection}
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -72,8 +73,33 @@ case class OmniColumnarToRowExec(child: SparkPlan) extends ColumnarToRowExecBase
     // This avoids calling `output` in the RDD closure, so that we don't need to include the entire
     // plan (this) in the closure.
     val localOutput = this.output
+    val stringColumnIndexes = child.schema.fields.zipWithIndex.collect {
+      case (field, index) if field.dataType == StringType => index
+    }
+    val runtimeValidationEnabled = SQLConf.get.getConfString(
+      "spark.omni.stringview.runtimeValidation.enabled", "false").toBoolean
     child.executeColumnar().mapPartitionsInternal { batches =>
-      ColumnarBatchToInternalRow.convert(localOutput, batches, numOutputRows, numInputBatches, omniColumnarToRowTime, true)
+      var validationLogged = false
+      val validatedBatches = if (runtimeValidationEnabled) {
+        batches.map { batch =>
+          ColumnarBatchToInternalRow.validateStringViewInput(batch, stringColumnIndexes)
+          if (!validationLogged) {
+            System.err.println(
+              "SV_E2E_C2R inputType=OMNI_STRING_VIEW output=InternalRow")
+            validationLogged = true
+          }
+          batch
+        }
+      } else {
+        batches
+      }
+      ColumnarBatchToInternalRow.convert(
+        localOutput,
+        validatedBatches,
+        numOutputRows,
+        numInputBatches,
+        omniColumnarToRowTime,
+        true)
     }
   }
 
@@ -98,6 +124,27 @@ case class OmniColumnarToRowExec(child: SparkPlan) extends ColumnarToRowExecBase
 
 object ColumnarBatchToInternalRow {
   final val NANOSECONDS = java.util.concurrent.TimeUnit.NANOSECONDS
+
+  private[execution] def validateStringViewInput(
+      batch: ColumnarBatch,
+      stringColumnIndexes: Seq[Int]): Unit = {
+    require(
+      stringColumnIndexes.nonEmpty,
+      "STRING_VIEW_RUNTIME_VALIDATION: C2R requires at least one Spark StringType column")
+    stringColumnIndexes.foreach { index =>
+      val vector = batch.column(index) match {
+        case omniVector: OmniColumnVector => omniVector
+        case other =>
+          throw new IllegalArgumentException(
+            s"STRING_VIEW_RUNTIME_VALIDATION: C2R expected OmniColumnVector at column $index, " +
+              s"got ${other.getClass.getName}")
+      }
+      require(
+        vector.getVec.isInstanceOf[StringViewVec],
+        s"STRING_VIEW_RUNTIME_VALIDATION: C2R expected StringViewVec at column $index, " +
+          s"got ${vector.getVec.getClass.getName}")
+    }
+  }
 
   def convert(output: Seq[Attribute], batches: Iterator[ColumnarBatch],
       numOutputRows: SQLMetric, numInputBatches: SQLMetric,

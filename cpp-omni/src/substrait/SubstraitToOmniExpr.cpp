@@ -168,7 +168,8 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::ScalarFunction &substraitFunc, const DataTypesPtr &inputType)
 {
     const auto &omniFunction = SubstraitParser::FindOmniFunction(functionMap_, substraitFunc.function_reference());
-    const auto &outputType = SubstraitParser::ParseType(substraitFunc.output_type());
+    const auto &outputType =
+        SubstraitParser::ParseType(substraitFunc.output_type(), false, false);
     auto type = omniFunction.first;
     auto funcName = omniFunction.second;
     expressions::Operator op = StringToOperator(funcName);
@@ -361,7 +362,7 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::Cast &castExpr, const DataTypesPtr &inputType)
 {
-    auto retType = SubstraitParser::ParseType(castExpr.type());
+    auto retType = SubstraitParser::ParseType(castExpr.type(), false, false);
     auto expr = ToOmniExpr(castExpr.input(), inputType, retType);
     auto retTypeId = retType->GetId();
     auto argReturnType = expr->GetReturnType();
@@ -416,6 +417,18 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             return new LiteralExpr(substraitLit.timestamp(), TimestampType());
         case ::substrait::Expression_Literal::LiteralTypeCase::kString: {
             auto *stringVal = new std::string(substraitLit.string());
+#ifdef STRINGVIEW_ENABLE
+            // Self-describing: the literal's own type_variation_reference decides SV vs VARCHAR,
+            // independent of conf. 21 -> StringView, else -> VARCHAR (closed default).
+            if (substraitLit.type_variation_reference() ==
+                SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                return new LiteralExpr(stringVal, StringViewType());
+            }
+#endif
+            if (substraitLit.type_variation_reference() ==
+                SubstraitParser::OMNI_STRING_VIEW_TYPE_VARIATION_REFERENCE) {
+                OMNI_THROW("StringView disabled", "StringView literal was requested but this native build was configured with STRINGVIEW_ENABLE=OFF");
+            }
             return new LiteralExpr(stringVal, VarcharType(stringVal->length()));
         }
         case ::substrait::Expression_Literal::LiteralTypeCase::kBinary: {
@@ -440,7 +453,8 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             if (defaultType != nullptr) {
                 dataType = defaultType;
             } else {
-                dataType = SubstraitParser::ParseType(substraitLit.null());
+                dataType = SubstraitParser::ParseType(
+                    substraitLit.null(), false, false);
             }
             LiteralExpr *expr;
             if (TypeUtil::IsDecimalType(dataType->GetId())) {

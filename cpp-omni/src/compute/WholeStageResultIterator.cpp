@@ -219,6 +219,10 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<double>(KAdaptivePartialAggregationRatio, 0.8));
         configs[config::QueryConfig::KPreferVectorizationExpression] = BoolToString(
             omniCfg_->Get<bool>(KPreferVectorizationExpression, false));
+#ifdef STRINGVIEW_ENABLE
+        configs[config::QueryConfig::KStringViewRuntimeValidationEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kOmniStringViewRuntimeValidationEnabled, false));
+#endif
         configs[config::QueryConfig::KMaxBatchSize] = std::to_string(
             omniCfg_->Get<uint64_t>(kSparkBatchSize, 4096));
         if (omniCfg_->Get<bool>(kSparkShuffleSpillCompress, true)) {

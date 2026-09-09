@@ -203,6 +203,17 @@ object ExpressionConverter extends SQLConfHelper with Logging {
       case _ =>
     }
 
+    expr match {
+      case c: StringViewToOmniVarcharCast =>
+        return StringViewToOmniVarcharCastTransformer(
+          "string_view_to_omni_varchar_cast",
+          replaceWithExpressionTransformer0(c.child, attributeSeq, expressionsMap),
+          c)
+      case l: StringViewLiteral =>
+        return StringViewLiteralTransformer(l)
+      case _ =>
+    }
+
     val substraitExprName: String = getAndCheckSubstraitName(expr, expressionsMap)
     expr match {
       case c: CreateArray =>

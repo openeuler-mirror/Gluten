@@ -85,7 +85,7 @@ case class SortExecTransformer(
     } else {
       // Use a extension node to send the input types through Substrait plan for validation.
       val inputTypeNodeList = originalInputAttributes.map(
-        attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
+        attr => ConverterUtils.getTypeNode(attr))
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
         BackendsApiManager.getTransformerApiInstance.packPBMessage(
           TypeBuilder.makeStruct(false, inputTypeNodeList.asJava).toProtobuf))

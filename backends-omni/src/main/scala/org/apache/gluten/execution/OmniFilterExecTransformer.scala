@@ -69,7 +69,9 @@ case class OmniFilterExecTransformer(condition: Expression, child: SparkPlan, pr
     } else {
       // there has be validated before so it will use super RelNode don't need add project
       val inputTypeNodeList = originalInputAttributes
-        .map(attr => ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
+        // attr-aware: a still-StringView input column (physicalStringView metadata) emits variation
+        // 21; downgraded/plain columns emit 0. Filter is StringView-capable, so it may see SV inputs.
+        .map(attr => ConverterUtils.getTypeNode(attr))
         .asJava
       val extensionNode = ExtensionBuilder.makeAdvancedExtension(
         BackendsApiManager.getTransformerApiInstance.packPBMessage(
@@ -79,6 +81,12 @@ case class OmniFilterExecTransformer(condition: Expression, child: SparkPlan, pr
   }
 
   override def output: Seq[Attribute] = {
-    projectList.map(f => f.toAttribute)
+    projectList.map { expr =>
+      val baseAttr = expr.toAttribute
+      child.output.find(_.exprId == baseAttr.exprId) match {
+        case Some(childAttr) => baseAttr.withMetadata(childAttr.metadata)
+        case None => baseAttr
+      }
+    }
   }
 }

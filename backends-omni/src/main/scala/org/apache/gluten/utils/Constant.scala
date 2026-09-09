@@ -25,6 +25,11 @@ object Constant {
   val DEFAULT_STRING_TYPE_LENGTH = 50
   val OMNI_BYTE_TYPE: String = DataTypeId.OMNI_BYTE.ordinal().toString
   val OMNI_VARCHAR_TYPE: String = DataTypeId.OMNI_VARCHAR.ordinal().toString
+  // MUST use toValue (the real enum value 26), NOT ordinal(): the Java DataTypeId enum
+  // skips C++ values 21-25, so OMNI_STRING_VIEW.ordinal()==21 != its value 26. Tagging a
+  // StringView literal/expr with 21 makes omni read it via the wrong (VARCHAR) container
+  // -> SIGSEGV in LargeStringContainer::GetValue. Matches OMNI_ROW/MAP/ARRAY below.
+  val OMNI_STRING_VIEW_TYPE: String = DataTypeId.OMNI_STRING_VIEW.toValue.toString
   val OMNI_BINARY_TYPE: String = DataTypeId.OMNI_VARBINARY.ordinal().toString
   val OMNI_SHOR_TYPE: String = DataTypeId.OMNI_SHORT.ordinal().toString
   val OMNI_INTEGER_TYPE: String = DataTypeId.OMNI_INT.ordinal().toString

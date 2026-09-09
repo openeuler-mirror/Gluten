@@ -84,7 +84,7 @@ object ConverterUtils extends Logging {
   }
 
   def collectAttributeTypeNodes(attributes: Seq[Attribute]): JList[TypeNode] = {
-    attributes.map(attr => getTypeNode(attr.dataType, attr.nullable)).asJava
+    attributes.map(attr => getTypeNode(attr)).asJava
   }
 
   def collectAttributeTypeNodes(structType: StructType): JList[TypeNode] = {
@@ -198,6 +198,18 @@ object ConverterUtils extends Logging {
         (NullType, true)
       case unsupported =>
         throw new GlutenNotSupportException(s"Type $unsupported not supported.")
+    }
+  }
+
+  // Attribute-aware: a StringType column marked physical-StringView emits substrait variation 21
+  // (StringView); every other attribute — including plain StringType — takes the type-only path,
+  // which emits variation 0 (VARCHAR). This is the single point that encodes the per-column physical
+  // type onto the wire; the native parser decodes the variation literally, with no config dependency.
+  def getTypeNode(attr: Attribute): TypeNode = {
+    if (StringViewToOmniVarcharCast.isPhysicalStringView(attr)) {
+      TypeBuilder.makeOmniStringView(attr.nullable)
+    } else {
+      getTypeNode(attr.dataType, attr.nullable)
     }
   }
 
