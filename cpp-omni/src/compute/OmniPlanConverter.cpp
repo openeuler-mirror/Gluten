@@ -15,7 +15,8 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
     auto codecKind = static_cast<int>(options.codec_kind());
     const bool rawLine = sourceKind == 1 && codecKind == 1;
     const bool lazySimple = sourceKind == 2 && codecKind == 2;
-    if (!rawLine && !lazySimple) {
+    const bool csv = (sourceKind == 2 || sourceKind == 3) && codecKind == 3;
+    if (!rawLine && !lazySimple && !csv) {
         throw std::runtime_error(
             "Unsupported Text source/codec combination.");
     }
@@ -32,14 +33,23 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         throw std::runtime_error("Unsupported Text option: compression is not available.");
     }
     std::unordered_map<std::string, std::string> result = {
-        {"text.source_kind", rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
-        {"text.codec_kind", rawLine ? "RAW_LINE" : "LAZY_SIMPLE"},
+        {"text.source_kind", sourceKind == 3 ? "SPARK_CSV" : rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
+        {"text.codec_kind", csv ? "CSV" : rawLine ? "RAW_LINE" : "LAZY_SIMPLE"},
         {"text.charset", options.charset()},
         {"text.line_separator", options.line_separator()},
         {"text.compression_codec", options.compression_codec()},
         {"text.session_timezone", options.session_timezone()},
+        {"text.date_format", options.date_format()},
+        {"text.timestamp_format_count", std::to_string(options.timestamp_formats_size())},
         {"text.whole_text", options.whole_text() ? "true" : "false"}};
-    if (lazySimple) {
+    for (int index = 0; index < options.timestamp_formats_size(); ++index) {
+        result["text.timestamp_format_" + std::to_string(index)] = options.timestamp_formats(index);
+    }
+    if (lazySimple || csv) {
+        if (csv) {
+            result["text.quote"] = options.quote();
+            result["text.parse_mode"] = "PERMISSIVE";
+        }
         if (options.field_delimiter().size() != 1) {
             throw std::runtime_error("LazySimple field delimiter must be exactly one byte.");
         }
@@ -119,7 +129,8 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
                     throw std::runtime_error("Text options must be identical within one LocalFiles split.");
                 }
                 splitInfo->customSplitInfo = std::move(textOptions);
-                if (splitInfo->customSplitInfo.at("text.codec_kind") == "LAZY_SIMPLE") {
+                if (splitInfo->customSplitInfo.at("text.codec_kind") == "LAZY_SIMPLE" ||
+                    splitInfo->customSplitInfo.at("text.codec_kind") == "CSV") {
                     if (!file.has_schema() || file.schema().names_size() == 0) {
                         throw std::runtime_error("LazySimple Text split requires the full file schema.");
                     }

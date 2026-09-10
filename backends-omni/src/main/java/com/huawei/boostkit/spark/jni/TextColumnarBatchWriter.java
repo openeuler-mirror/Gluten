@@ -29,6 +29,7 @@ import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 import org.apache.spark.sql.vectorized.ColumnVector;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -63,10 +64,13 @@ public class TextColumnarBatchWriter {
         options.put("path", uri.getPath() == null ? "" : uri.getPath());
         nativeConf.forEach((key, value) -> options.put(key, value));
         StringJoiner types = new StringJoiner("\u001f");
+        JSONArray names = new JSONArray();
         for (StructField field : dataSchema.fields()) {
             types.add(field.dataType().catalogString());
+            names.put(field.name());
         }
         options.put("text_schema_types", types.toString());
+        options.put("text_schema_names", names.toString());
         writer = jniWriter.initializeWriter(options);
     }
 

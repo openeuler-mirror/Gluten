@@ -116,7 +116,8 @@ class OmniListenerApi extends ListenerApi with Logging {
     GlutenFormatFactory.register(
       new OmniOrcFormatWriterInjects(),
       new OmniParquetFormatWriterInjects(),
-      new OmniTextFormatWriterInjects())
+      new OmniTextFormatWriterInjects(),
+      new org.apache.gluten.datasources.text.OmniCsvFormatWriterInjects())
     GlutenFormatFactory.injectPostRuleFactory(
       session => OmniGlutenWriterColumnarRules.NativeWritePostRule(session))
     OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME).initialize(parsed)

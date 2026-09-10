@@ -83,6 +83,8 @@ case class OmniFileSourceScanExecTransformer(
   }
 
   override def getProperties: Map[String, String] = relation.fileFormat match {
+    case _: org.apache.spark.sql.execution.datasources.csv.CSVFileFormat =>
+      OmniTextOptionsAdapter.fromSparkCsv(relation.options, relation.dataSchema, requiredSchema)
     case _: TextFileFormat =>
       OmniTextOptionsAdapter
         .fromSparkText(relation.options, relation.dataSchema, requiredSchema)
@@ -93,6 +95,7 @@ case class OmniFileSourceScanExecTransformer(
   // Phase-one TextReader does not evaluate predicates while decoding. Keep Text data filters in
   // the ordinary Filter transformer instead of marking them as consumed by the native scan.
   override def filterExprs(): Seq[Expression] = relation.fileFormat match {
+    case _: org.apache.spark.sql.execution.datasources.csv.CSVFileFormat => Seq.empty
     case _: TextFileFormat => Seq.empty
     case _ => super.filterExprs()
   }

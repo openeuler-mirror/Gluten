@@ -26,10 +26,14 @@ import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.serde2.`lazy`.LazySerDeParameters
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.spark.sql.connector.read.InputPartition
+import org.apache.spark.sql.catalyst.csv.CSVOptions
+import org.apache.spark.sql.catalyst.util.PermissiveMode
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.execution.datasources.FilePartition
 import org.apache.spark.sql.types._
 import org.apache.spark.util.SerializableConfiguration
 
+import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
 
 object OmniTextOptionsAdapter {
@@ -47,11 +51,20 @@ object OmniTextOptionsAdapter {
   val ReadSchemaKey = "text_read_schema"
   val ValidationErrorKey = "text_validation_error"
   val SessionTimezoneKey = "text_session_timezone"
+  val DateFormatKey = "text_date_format"
+  val TimestampFormatCountKey = "text_timestamp_format_count"
+  val TimestampFormatPrefix = "text_timestamp_format_"
 
   val SparkTextSource = "SPARK_TEXT"
+  val SparkCsvSource = "SPARK_CSV"
   val HiveTextSource = "HIVE_TEXT"
   val RawLineCodec = "RAW_LINE"
   val LazySimpleCodec = "LAZY_SIMPLE"
+  val CsvCodec = "CSV"
+  val OpenCsvSerdeClass = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+
+  def isSupportedHiveSerde(serde: String): Boolean =
+    serde == LazySimpleSerdeClass || serde == OpenCsvSerdeClass
   val NoCompression = "NONE"
   val LazySimpleSerdeClass = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
 
@@ -69,6 +82,17 @@ object OmniTextOptionsAdapter {
       LineSeparatorKey -> lineSeparator.getOrElse(""),
       CompressionCodecKey -> compressionCodec,
       "text_splitable" -> splitable.toString)
+  }
+
+  final case class TemporalTextOptions(
+      dateFormat: Option[String] = None,
+      timestampFormats: Seq[String] = Seq.empty) {
+    def toProperties: Map[String, String] =
+      dateFormat.map(value => DateFormatKey -> value).toMap ++
+        Map(TimestampFormatCountKey -> timestampFormats.size.toString) ++
+        timestampFormats.zipWithIndex.map { case (format, index) =>
+          s"$TimestampFormatPrefix$index" -> format
+        }
   }
 
   final case class RawLineOptions(wholeText: Boolean) extends TextDialectOptions {
@@ -103,7 +127,6 @@ object OmniTextOptionsAdapter {
       "text_last_column_takes_rest" -> lastColumnTakesRest.toString)
   }
 
-  // Reserved for phase three. CSV remains a distinct dialect and cannot select a codec yet.
   final case class CsvOptions(
       delimited: DelimitedOptions,
       quote: String,
@@ -118,10 +141,12 @@ object OmniTextOptionsAdapter {
       sourceKind: String,
       codecKind: String,
       common: CommonTextOptions,
-      dialect: TextDialectOptions) {
+      dialect: TextDialectOptions,
+      temporal: TemporalTextOptions = TemporalTextOptions()) {
     def toProperties: Map[String, String] = Map(
       SourceKindKey -> sourceKind,
-      CodecKindKey -> codecKind) ++ common.toProperties ++ dialect.toProperties
+      CodecKindKey -> codecKind) ++ common.toProperties ++ dialect.toProperties ++
+      temporal.toProperties
   }
 
   final case class TextSourceDescriptor(
@@ -196,6 +221,12 @@ object OmniTextOptionsAdapter {
     Try(new LazySerDeParameters(conf, tableProperties, LazySimpleSerdeClass)) match {
       case Failure(error) => Left(s"failed to parse LazySimpleSerDe properties: ${error.getMessage}")
       case Success(parameters) =>
+        val timestampFormats = Option(parameters.getTimestampFormats)
+          .map(_.asScala.toSeq)
+          .getOrElse(Seq.empty)
+        if (timestampFormats.exists(_.isEmpty)) {
+          return Left("timestamp.formats must not contain an empty format")
+        }
         val charsetName = normalized.getOrElse("serialization.encoding", StandardCharsets.UTF_8.name())
         val charset = Try(Charset.forName(charsetName)).toOption
         if (!charset.contains(StandardCharsets.UTF_8)) {
@@ -206,9 +237,6 @@ object OmniTextOptionsAdapter {
         }
         if (parameters.isExtendedBooleanLiteral) {
           return Left("hive.lazysimple.extended_boolean_literal=true is not supported")
-        }
-        if (Option(parameters.getTimestampFormats).exists(formats => !formats.isEmpty)) {
-          return Left("custom timestamp.formats is not supported")
         }
         if (normalized.get("serialization.escape.crlf").exists(_.equalsIgnoreCase("true"))) {
           return Left("serialization.escape.crlf=true is not supported")
@@ -257,10 +285,152 @@ object OmniTextOptionsAdapter {
                 emitHeader = false),
               collection,
               mapKey,
-              lastColumnTakesRest = false)),
+              lastColumnTakesRest = false),
+            TemporalTextOptions(timestampFormats = timestampFormats)),
           fileSchema,
           readSchema)
     }
+  }
+
+  def fromHiveText(
+      conf: Configuration,
+      tableProperties: Properties,
+      fileSchema: StructType,
+      readSchema: StructType): Either[String, TextSourceDescriptor] = {
+    if (tableProperties.getProperty("serialization.lib") == OpenCsvSerdeClass) {
+      fromHiveOpenCsv(tableProperties, fileSchema, readSchema)
+    } else {
+      fromHiveLazySimple(conf, tableProperties, fileSchema, readSchema)
+    }
+  }
+
+  private def fromHiveOpenCsv(
+      properties: Properties,
+      fileSchema: StructType,
+      readSchema: StructType): Either[String, TextSourceDescriptor] = {
+    val values = properties.stringPropertyNames().toArray(new Array[String](0))
+      .map(key => key -> properties.getProperty(key)).toMap
+    val unsupported = Seq("skip.header.line.count", "skip.footer.line.count")
+      .find(key => values.get(key).exists(value => Try(value.toInt).toOption != Some(0)))
+    if (unsupported.nonEmpty) {
+      return Left(s"${unsupported.get} is not supported")
+    }
+    def character(key: String, default: String): String =
+      values.getOrElse(key, default).take(1)
+    Right(TextSourceDescriptor(
+      TextFormatOptions(
+        HiveTextSource,
+        CsvCodec,
+        CommonTextOptions("UTF-8", None, NoCompression, splitable = true),
+        CsvOptions(
+          DelimitedOptions(character("separatorChar", ","), "", escapeEnabled = true,
+            Some(character("escapeChar", "\"")), 0, emitHeader = false),
+          character("quoteChar", "\""), "PERMISSIVE")),
+      fileSchema, readSchema))
+  }
+
+  def fromSparkCsv(
+      options: Map[String, String],
+      fileSchema: StructType,
+      readSchema: StructType,
+      writing: Boolean = false): Map[String, String] = {
+    val normalized = normalize(options)
+    val conf = SQLConf.get
+    def failed(reason: String): Map[String, String] = Map(
+      SourceKindKey -> SparkCsvSource, CodecKindKey -> CsvCodec, ValidationErrorKey -> reason)
+    Try(new CSVOptions(options, conf.csvColumnPruning, conf.sessionLocalTimeZone)) match {
+      case Failure(error) => failed(error.getMessage)
+      case Success(csv) =>
+        val dateFormat = if (writing) Some(csv.dateFormatInWrite) else csv.dateFormatInRead
+        val timestampFormat =
+          if (writing) Some(csv.timestampFormatInWrite) else csv.timestampFormatInRead
+        if (dateFormat.exists(_.isEmpty) || timestampFormat.exists(_.isEmpty)) {
+          return failed("dateFormat and timestampFormat must not be empty")
+        }
+        val booleanDefaults = Map(
+          "multiline" -> false, "enforceschema" -> true, "escapequotes" -> true,
+          "quoteall" -> false, "ignoreleadingwhitespace" -> writing,
+          "ignoretrailingwhitespace" -> writing, "columnpruning" -> true)
+        val invalidBoolean = booleanDefaults.find { case (key, expected) =>
+          normalized.get(key).exists(value => Try(value.toBoolean).toOption != Some(expected))
+        }
+        val unsupported = Seq("linesep", "emptyvalue", "timestampntzformat",
+          "enabledatetimeparsingfallback")
+          .find(normalized.contains)
+        if (invalidBoolean.nonEmpty) {
+          return failed(s"non-default ${invalidBoolean.get._1} is not supported")
+        }
+        if (unsupported.nonEmpty) {
+          return failed(s"${unsupported.get} is not supported")
+        }
+        if (csv.multiLine || csv.isCommentSet || !csv.enforceSchema ||
+            csv.parseMode != PermissiveMode) {
+          return failed("only single-line, comment-free PERMISSIVE CSV is supported")
+        }
+        if (csv.charset != "UTF-8" || csv.compressionCodec.exists(_ != null) ||
+            csv.maxColumns != 20480 || csv.maxCharsPerColumn != -1 ||
+            !normalized.getOrElse("unescapedquotehandling", "STOP_AT_DELIMITER")
+              .equalsIgnoreCase("STOP_AT_DELIMITER") ||
+            csv.charToEscapeQuoteEscaping.exists(_ != (if (csv.quote == csv.escape) '\u0000' else csv.escape)) ||
+            csv.nanValue != "NaN" || csv.positiveInf != "Inf" || csv.negativeInf != "-Inf" ||
+            normalized.get("locale").exists(!_.equalsIgnoreCase("en-US")) ||
+            normalized.get("extension").exists(_ != "csv")) {
+          return failed("unsupported CSV encoding, compression or parser/writer option")
+        }
+        if ((!writing && !conf.csvColumnPruning) ||
+            fileSchema.fields.exists(field => field.name == csv.columnNameOfCorruptRecord ||
+              field.metadata.contains("EXISTS_DEFAULT"))) {
+          return failed("CSV without column pruning, corrupt-record/default columns is not supported")
+        }
+        TextSourceDescriptor(
+          TextFormatOptions(SparkCsvSource, CsvCodec,
+            CommonTextOptions(csv.charset, None, NoCompression, splitable = true),
+            CsvOptions(DelimitedOptions(csv.delimiter, csv.nullValue, escapeEnabled = true,
+              Some(csv.escape.toString), if (csv.headerFlag && !writing) 1 else 0,
+              emitHeader = csv.headerFlag && writing), csv.quote.toString, "PERMISSIVE"),
+            TemporalTextOptions(dateFormat, timestampFormat.toSeq)),
+          fileSchema, readSchema).toProperties +
+          (SessionTimezoneKey -> csv.zoneId.getId)
+    }
+  }
+
+  def validateCsv(properties: Map[String, String], writing: Boolean = false): ValidationResult = {
+    def failed(reason: String): ValidationResult =
+      ValidationResult.failed(s"Unsupported CSV: $reason")
+    properties.get(ValidationErrorKey).foreach(reason => return failed(reason))
+    val characters = Seq("field_delimiter", "quote", "escape").map(properties.getOrElse(_, ""))
+    if (characters.exists(value => value.getBytes(StandardCharsets.UTF_8).length != 1 ||
+        value == "\u0000" || value == "\r" || value == "\n") ||
+        characters.head == characters(1) || characters.head == characters(2)) {
+      return failed("delimiter, quote and escape must be supported single-byte characters")
+    }
+    val fileSchema = parseSchema(properties, FileSchemaKey).getOrElse {
+      return failed("full file schema is missing")
+    }
+    val readSchema = parseSchema(properties, ReadSchemaKey).getOrElse {
+      return failed("read schema is missing")
+    }
+    val hive = properties.get(SourceKindKey).contains(HiveTextSource)
+    val effectiveHiveEscape = if (characters(2) == "\"") "\\" else characters(2)
+    if (hive && (characters.head == effectiveHiveEscape || characters(1) == effectiveHiveEscape)) {
+      return failed("OpenCSV reader delimiter, quote and effective escape must be different")
+    }
+    def supported(dataType: DataType): Boolean = dataType match {
+      case StringType => true
+      case BooleanType | ByteType | ShortType | IntegerType | LongType |
+          FloatType | DoubleType => !hive
+      case decimal: DecimalType => !hive && decimal.scale >= 0
+      case DateType | TimestampType => !hive
+      case _ => false
+    }
+    if (fileSchema.isEmpty || fileSchema.fields.exists(field => !supported(field.dataType))) {
+      return failed("schema contains a type outside the CSV conversion whitelist")
+    }
+    if (readSchema.fields.exists(field => !fileSchema.fields.exists(full =>
+        full.name.equalsIgnoreCase(field.name) && full.dataType == field.dataType))) {
+      return failed("projected schema is not present in the full file schema")
+    }
+    ValidationResult.succeeded
   }
 
   def validationFailureProperties(reason: String): Map[String, String] = Map(
@@ -363,6 +533,8 @@ object OmniTextOptionsAdapter {
     (properties.get(SourceKindKey), properties.get(CodecKindKey)) match {
       case (Some(SparkTextSource), Some(RawLineCodec)) => validateRawLineRead(properties)
       case (Some(HiveTextSource), Some(LazySimpleCodec)) => validateLazySimpleRead(properties)
+      case (Some(SparkCsvSource), Some(CsvCodec)) => validateCsv(properties)
+      case (Some(HiveTextSource), Some(CsvCodec)) => validateCsv(properties)
       case (source, codec) =>
         ValidationResult.failed(
           s"Unsupported Text source/codec combination: ${source.getOrElse("UNSPECIFIED")}/" +
@@ -427,5 +599,6 @@ object OmniTextOptionsAdapter {
   }
 
   def validateHiveWrite(properties: Map[String, String]): ValidationResult =
-    validateLazySimpleRead(properties)
+    if (properties.get(CodecKindKey).contains(CsvCodec)) validateCsv(properties, writing = true)
+    else validateLazySimpleRead(properties)
 }

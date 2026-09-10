@@ -67,12 +67,12 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
     }
     if (tableDesc.getOutputFileFormatClassName !=
         "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat" ||
-        tableDesc.getDeserializerClass.getName != OmniTextOptionsAdapter.LazySimpleSerdeClass) {
+        !OmniTextOptionsAdapter.isSupportedHiveSerde(tableDesc.getDeserializerClass.getName)) {
       return ValidationResult.failed(
         "Native Hive Text writer requires TextOutputFormat with LazySimpleSerDe")
     }
     OmniTextOptionsAdapter
-      .fromHiveLazySimple(new JobConf(), tableDesc.getProperties, dataSchema, dataSchema)
+      .fromHiveText(new JobConf(), tableDesc.getProperties, dataSchema, dataSchema)
       .fold(reason => ValidationResult.failed(reason), descriptor =>
         OmniTextOptionsAdapter.validateHiveWrite(descriptor.toProperties))
   }
@@ -122,10 +122,10 @@ class OmniHiveFileFormat(fileSinkConf: FileSinkDesc)
       val (nativeOptions, compressionCodec) = if (isTextFormat) {
         require(!fileSinkConf.getCompressed, "Native Hive LazySimple Text writer does not support compression")
         require(
-          tableDesc.getDeserializerClass.getName == OmniTextOptionsAdapter.LazySimpleSerdeClass,
+          OmniTextOptionsAdapter.isSupportedHiveSerde(tableDesc.getDeserializerClass.getName),
           "Native Hive Text writer supports LazySimpleSerDe only")
         val descriptor = OmniTextOptionsAdapter
-          .fromHiveLazySimple(conf, tableDesc.getProperties, dataSchema, dataSchema)
+          .fromHiveText(conf, tableDesc.getProperties, dataSchema, dataSchema)
           .fold(reason => throw new IllegalArgumentException(reason), identity)
         (descriptor.toProperties +
           (OmniTextOptionsAdapter.SessionTimezoneKey ->

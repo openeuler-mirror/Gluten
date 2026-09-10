@@ -152,12 +152,12 @@ case class OmniHiveTableScanExecTransformer(
 
   override def getProperties: Map[String, String] = {
     if (fileFormat == ReadFileFormat.TextReadFormat &&
-        relation.tableMeta.storage.serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass)) {
+        relation.tableMeta.storage.serde.exists(OmniTextOptionsAdapter.isSupportedHiveSerde)) {
       val partitionNames = getPartitionSchema.fieldNames.toSet
       val readDataSchema = attributesToStructType(
         outputAttributes().filterNot(attribute => partitionNames.contains(attribute.name)))
       return OmniTextOptionsAdapter
-        .fromHiveLazySimple(
+        .fromHiveText(
           session.sessionState.newHadoopConf(),
           tableDesc.getProperties,
           getDataSchema,

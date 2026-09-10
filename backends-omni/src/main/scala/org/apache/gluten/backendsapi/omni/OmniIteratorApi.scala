@@ -46,6 +46,7 @@ import java.nio.charset.StandardCharsets
 import java.time.ZoneOffset
 import java.util.{UUID, ArrayList => JArrayList, HashMap => JHashMap, Map => JMap}
 import scala.collection.JavaConverters._
+import scala.util.Try
 
 class OmniIteratorApiImpl extends IteratorApi with Logging {
 
@@ -54,11 +55,15 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
       scan: BasicScanExecTransformer): Unit = {
     val properties = scan.getProperties
     if (scan.fileFormat == ReadFileFormat.TextReadFormat &&
-        properties.get(OmniTextOptionsAdapter.SourceKindKey)
-          .contains(OmniTextOptionsAdapter.HiveTextSource) &&
         properties.get(OmniTextOptionsAdapter.CodecKindKey)
-          .contains(OmniTextOptionsAdapter.LazySimpleCodec)) {
-      localFilesNode.setFileSchema(scan.getDataSchema)
+          .exists(codec => codec == OmniTextOptionsAdapter.LazySimpleCodec ||
+            codec == OmniTextOptionsAdapter.CsvCodec)) {
+      val fileSchema = properties
+        .get(OmniTextOptionsAdapter.FileSchemaKey)
+        .flatMap(value => Try(DataType.fromJson(value)).toOption)
+        .collect { case schema: StructType => schema }
+        .getOrElse(scan.getDataSchema)
+      localFilesNode.setFileSchema(fileSchema)
     }
   }
 

@@ -16,39 +16,31 @@
  */
 package org.apache.gluten.datasources.text
 
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.FileStatus
 import org.apache.hadoop.mapreduce.{Job, TaskAttemptContext}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.execution.datasources.{FileFormat, OutputWriter, OutputWriterFactory, PartitionedFile}
-import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
-import org.apache.spark.sql.types.{StringType, StructType}
+import org.apache.spark.sql.execution.datasources.{OutputWriter, OutputWriterFactory}
+import org.apache.spark.sql.types.StructType
 
 import java.{util => ju}
 
-class OmniTextFileFormat extends FileFormat with DataSourceRegister with Serializable {
-  override def shortName(): String = "text-native"
-
-  override def toString: String = "TEXT-NATIVE"
-
-  override def hashCode(): Int = getClass.hashCode()
-
-  override def equals(other: Any): Boolean =
-    other != null && other.getClass == getClass
+/** Spark CSV format adapter; all native IO remains in the common Text writer. */
+class OmniCsvFileFormat extends OmniTextFileFormat {
+  override def shortName(): String = "csv-native"
+  override def toString: String = "CSV-NATIVE"
+  override def equals(other: Any): Boolean = other.isInstanceOf[OmniCsvFileFormat]
 
   override def prepareWrite(
       sparkSession: SparkSession,
       job: Job,
       options: Map[String, String],
       dataSchema: StructType): OutputWriterFactory = {
-    val validation = OmniTextOptionsAdapter.validateWrite(dataSchema.fields, options)
+    val properties = OmniTextOptionsAdapter.fromSparkCsv(
+      options, dataSchema, dataSchema, writing = true)
+    val validation = OmniTextOptionsAdapter.validateCsv(properties, writing = true)
     require(validation.ok(), validation.reason())
-    val descriptorProperties = OmniTextOptionsAdapter
-      .fromSparkText(options, dataSchema, dataSchema)
-      .toProperties
     val nativeConf = new ju.HashMap[String, String]()
-    descriptorProperties.foreach { case (key, value) => nativeConf.put(key, value) }
+    properties.foreach { case (key, value) => nativeConf.put(key, value) }
     new OutputWriterFactory {
       override def newInstance(
           path: String,
@@ -56,23 +48,13 @@ class OmniTextFileFormat extends FileFormat with DataSourceRegister with Seriali
           context: TaskAttemptContext): OutputWriter =
         new OmniTextOutputWriter(path, schema, context, nativeConf)
 
-      override def getFileExtension(context: TaskAttemptContext): String = ".txt"
+      override def getFileExtension(context: TaskAttemptContext): String = ".csv"
     }
   }
 
   override def inferSchema(
       sparkSession: SparkSession,
       options: Map[String, String],
-      files: Seq[FileStatus]): Option[StructType] =
-    Some(new StructType().add("value", StringType))
-
-  override def buildReaderWithPartitionValues(
-      sparkSession: SparkSession,
-      dataSchema: StructType,
-      partitionSchema: StructType,
-      requiredSchema: StructType,
-      filters: Seq[Filter],
-      options: Map[String, String],
-      hadoopConf: Configuration): PartitionedFile => Iterator[InternalRow] =
-    throw new UnsupportedOperationException("buildReaderWithPartitionValues should not be called")
+      files: Seq[FileStatus]): Option[StructType] = None
 }
+

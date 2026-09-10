@@ -163,6 +163,8 @@ message ReadRel {
         string compression_codec = 13;
         bool whole_text = 14;
         string session_timezone = 15;
+        string date_format = 16;
+        repeated string timestamp_formats = 17;
       }
       message JsonReadOptions {
         uint64 max_block_size = 1;

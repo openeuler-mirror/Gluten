@@ -45,6 +45,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
 import org.apache.gluten.datasources.text.OmniTextFileFormat
+import org.apache.gluten.datasources.text.OmniCsvFileFormat
+import org.apache.spark.sql.execution.datasources.csv.CSVFileFormat
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
 import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
@@ -576,6 +578,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
         case ("orc", _: OrcFileFormat) => new OmniOrcFileFormat()
         case ("parquet", _: ParquetFileFormat) => new OmniParquetFileFormat()
         case ("text", _: TextFileFormat) => new OmniTextFileFormat()
+        case ("csv", _: CSVFileFormat) => new OmniCsvFileFormat()
         case _ => fileFormat
       }
       OmniColumnarWriteFilesExec(

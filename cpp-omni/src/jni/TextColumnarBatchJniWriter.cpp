@@ -69,7 +69,8 @@ void CopyOption(
         : std::string(defaultValue);
 }
 
-omniruntime::type::RowTypePtr ParseRowType(const std::string& serializedTypes)
+omniruntime::type::RowTypePtr ParseRowType(
+    const std::string& serializedTypes, const std::string& serializedNames)
 {
     std::vector<std::string> names;
     std::vector<omniruntime::type::DataTypePtr> types;
@@ -96,6 +97,12 @@ omniruntime::type::RowTypePtr ParseRowType(const std::string& serializedTypes)
     if (types.empty()) {
         throw std::runtime_error("Text writer schema is empty.");
     }
+    if (!serializedNames.empty()) {
+        names = nlohmann::json::parse(serializedNames).get<std::vector<std::string>>();
+        if (names.size() != types.size()) {
+            throw std::runtime_error("Text writer column names do not match its types.");
+        }
+    }
     return ROW(std::move(names), std::move(types));
 }
 
@@ -108,12 +115,24 @@ std::shared_ptr<nlohmann::json> ParseTextOptions(JNIEnv* env, jobject options)
     CopyOption(env, options, *parsed, "text_line_separator", "text.line_separator");
     CopyOption(env, options, *parsed, "text_compression_codec", "text.compression_codec", "NONE");
     CopyOption(env, options, *parsed, "text_session_timezone", "text.session_timezone");
+    CopyOption(env, options, *parsed, "text_date_format", "text.date_format");
+    CopyOption(env, options, *parsed,
+        "text_timestamp_format_count", "text.timestamp_format_count", "0");
+    const auto timestampFormatCount = std::stoul(
+        parsed->at("text.timestamp_format_count").get<std::string>());
+    for (size_t index = 0; index < timestampFormatCount; ++index) {
+        const auto sourceKey = "text_timestamp_format_" + std::to_string(index);
+        const auto targetKey = "text.timestamp_format_" + std::to_string(index);
+        CopyOption(env, options, *parsed, sourceKey.c_str(), targetKey.c_str());
+    }
     CopyOption(env, options, *parsed, "text_splitable", "text.splitable", "true");
     CopyOption(env, options, *parsed, "text_whole_text", "text.whole_text", "false");
     CopyOption(env, options, *parsed, "field_delimiter", "text.field_delimiter");
     CopyOption(env, options, *parsed, "nullValue", "text.null_literal", "\\N");
     CopyOption(env, options, *parsed, "text_escape_enabled", "text.escape_enabled", "false");
     CopyOption(env, options, *parsed, "escape", "text.escape_char");
+    CopyOption(env, options, *parsed, "quote", "text.quote");
+    CopyOption(env, options, *parsed, "text_parse_mode", "text.parse_mode", "PERMISSIVE");
     CopyOption(env, options, *parsed, "header", "text.skip_input_lines", "0");
     CopyOption(env, options, *parsed, "text_emit_header", "text.emit_header", "false");
     CopyOption(
@@ -147,7 +166,8 @@ Java_com_huawei_boostkit_write_jni_TextColumnarBatchJniWriter_initializeWriter(
     const auto textOptions = omniruntime::reader::text::TextFormatOptions::FromJson(
         ParseTextOptions(env, options));
     auto writer = std::make_unique<TextWriter>(
-        textOptions, ParseRowType(GetJsonString(env, options, "text_schema_types")));
+        textOptions, ParseRowType(GetJsonString(env, options, "text_schema_types"),
+            GetJsonString(env, options, "text_schema_names")));
     writer->Init(uriInfo);
     return reinterpret_cast<jlong>(writer.release());
     JNI_FUNC_END(runtimeExceptionClass)

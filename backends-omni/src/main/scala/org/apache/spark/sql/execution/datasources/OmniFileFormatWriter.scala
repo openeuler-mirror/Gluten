@@ -47,6 +47,8 @@ import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOut
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
+import org.apache.spark.sql.execution.datasources.csv.CSVFileFormat
+import org.apache.gluten.datasources.text.OmniCsvFileFormat
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.{SerializableConfiguration, Utils}
@@ -62,6 +64,10 @@ object OmniFileFormatWriter extends Logging {
       fileFormat: FileFormat,
       dataSchema: StructType,
       options: Map[String, String]): Option[String] = fileFormat match {
+    case _: CSVFileFormat if nativeEnabled &&
+        OmniTextOptionsAdapter.validateCsv(OmniTextOptionsAdapter.fromSparkCsv(
+          options, dataSchema, dataSchema, writing = true), writing = true).ok() =>
+      Some("csv")
     case _: TextFileFormat
         if nativeEnabled &&
           OmniTextOptionsAdapter.validateWrite(dataSchema.fields, options).ok() =>
@@ -165,7 +171,8 @@ object OmniFileFormatWriter extends Logging {
     // local-property path unchanged.
     val textNativeFormat = resolveTextNativeFormat(
       nativeEnabled, fileFormat, dataSchema, options)
-    if (nativeEnabled && fileFormat.isInstanceOf[TextFileFormat] && textNativeFormat.isEmpty) {
+    if (nativeEnabled && (fileFormat.isInstanceOf[TextFileFormat] ||
+        fileFormat.isInstanceOf[CSVFileFormat]) && textNativeFormat.isEmpty) {
       // Keep unsupported Text schemas/options on Spark's writer even if a stale write property is
       // present. This guard is deliberately Text-only; other formats keep their existing path.
       nativeEnabled = false
@@ -177,6 +184,7 @@ object OmniFileFormatWriter extends Logging {
         case ("orc", _: OrcFileFormat) => new OmniOrcFileFormat()
         case ("parquet", _: ParquetFileFormat) => new OmniParquetFileFormat()
         case ("text", _: TextFileFormat) => new OmniTextFileFormat()
+        case ("csv", _: CSVFileFormat) => new OmniCsvFileFormat()
         case _ => fileFormat
       }
     } else {

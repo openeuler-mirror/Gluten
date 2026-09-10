@@ -43,6 +43,7 @@ import org.apache.spark.sql.hive.execution.{
 }
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
+import org.apache.spark.sql.execution.datasources.csv.CSVFileFormat
 import org.apache.spark.sql.types.StringType
 
 object OmniGlutenWriterColumnarRules extends Logging {
@@ -64,7 +65,7 @@ object OmniGlutenWriterColumnarRules extends Logging {
       serde: Option[String]): Option[String] = {
     outputFormat.flatMap(formatMapping.get).orElse {
       if (outputFormat.contains(hiveTextOutputFormat) &&
-          serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass) &&
+          serde.exists(OmniTextOptionsAdapter.isSupportedHiveSerde) &&
           GlutenFormatFactory.isRegistered("text")) {
         Some("text")
       } else {
@@ -77,6 +78,10 @@ object OmniGlutenWriterColumnarRules extends Logging {
       fileFormat: FileFormat,
       options: Map[String, String],
       dataColumns: Seq[Attribute]): Boolean = fileFormat match {
+    case _: CSVFileFormat =>
+      OmniTextOptionsAdapter.validateCsv(OmniTextOptionsAdapter.fromSparkCsv(
+        options, dataColumns.toStructType, dataColumns.toStructType, writing = true),
+        writing = true).ok()
     case _: TextFileFormat =>
       dataColumns.length == 1 &&
         dataColumns.head.dataType == StringType &&
@@ -86,15 +91,15 @@ object OmniGlutenWriterColumnarRules extends Logging {
 
   private def isTextWrite(cmd: DataWritingCommand): Boolean = cmd match {
     case command: CreateDataSourceTableAsSelectCommand =>
-      command.table.provider.exists(_.equalsIgnoreCase("text"))
+      command.table.provider.exists(value => value.equalsIgnoreCase("text") || value.equalsIgnoreCase("csv"))
     case command: InsertIntoHadoopFsRelationCommand =>
-      command.fileFormat.isInstanceOf[TextFileFormat]
+      command.fileFormat.isInstanceOf[TextFileFormat] || command.fileFormat.isInstanceOf[CSVFileFormat]
     case command: OmniInsertIntoHadoopFsRelationCommand =>
-      command.fileFormat.isInstanceOf[TextFileFormat]
+      command.fileFormat.isInstanceOf[TextFileFormat] || command.fileFormat.isInstanceOf[CSVFileFormat]
     case command: InsertIntoHiveTable =>
-      command.table.storage.serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass)
+      command.table.storage.serde.exists(OmniTextOptionsAdapter.isSupportedHiveSerde)
     case command: OmniInsertIntoHiveTable =>
-      command.table.storage.serde.contains(OmniTextOptionsAdapter.LazySimpleSerdeClass)
+      command.table.storage.serde.exists(OmniTextOptionsAdapter.isSupportedHiveSerde)
     case _ => false
   }
 
@@ -127,6 +132,12 @@ object OmniGlutenWriterColumnarRules extends Logging {
         command.table.provider
           .filter(GlutenFormatFactory.isRegistered)
           .filter {
+            case "csv" =>
+              val partitions = command.table.partitionColumnNames.toSet
+              val schema = output.filterNot(attr => partitions.contains(attr.name)).toStructType
+              OmniTextOptionsAdapter.validateCsv(OmniTextOptionsAdapter.fromSparkCsv(
+                command.table.storage.properties, schema, schema, writing = true),
+                writing = true).ok()
             case "text" =>
               val partitionNames = command.table.partitionColumnNames.toSet
               val dataColumns = output.filterNot(attr => partitionNames.contains(attr.name))

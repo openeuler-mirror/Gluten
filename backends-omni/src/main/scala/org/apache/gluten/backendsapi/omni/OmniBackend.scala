@@ -23,7 +23,7 @@ import org.apache.gluten.component.Component.BuildInfo
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
-import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
+import org.apache.gluten.datasources.text.{OmniCsvFileFormat, OmniTextFileFormat, OmniTextOptionsAdapter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.extension.columnar.transition.Convention
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -42,10 +42,12 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.connector.read.{InputPartition, Scan}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.datasources.FileFormat
+import org.apache.spark.sql.execution.datasources.csv.CSVFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
+import org.apache.spark.sql.execution.datasources.v2.csv.CSVScan
 import org.apache.spark.sql.hive.execution.{HiveFileFormat, OmniHiveFileFormat}
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
@@ -176,12 +178,15 @@ object OmniBackendSettings extends BackendSettingsApi {
       case "OrcScan" => ReadFileFormat.OrcReadFormat
       case "ParquetScan" => ReadFileFormat.ParquetReadFormat
       case "DwrfScan" => ReadFileFormat.DwrfReadFormat
-      case "TextScan" => ReadFileFormat.TextReadFormat
+      case "TextScan" | "CSVScan" => ReadFileFormat.TextReadFormat
       case _ => ReadFileFormat.UnknownFormat
     }
   }
 
   override def getSubstraitReadFilePropertiesV2(scan: Scan): Map[String, String] = scan match {
+    case csv: CSVScan =>
+      OmniTextOptionsAdapter.fromSparkCsv(
+        csv.options.asCaseSensitiveMap().asScala.toMap, csv.dataSchema, csv.readDataSchema)
     case textScan: TextScan =>
       val options = textScan.options.asCaseSensitiveMap().asScala.toMap
       // Spark 3.2/3.3 TextScan does not expose dataSchema; Spark Text's file schema is fixed.
@@ -207,6 +212,10 @@ object OmniBackendSettings extends BackendSettingsApi {
               Some(OmniTextOptionsAdapter.RawLineCodec)) => true
         case (Some(OmniTextOptionsAdapter.HiveTextSource),
               Some(OmniTextOptionsAdapter.LazySimpleCodec)) => true
+        case (Some(OmniTextOptionsAdapter.SparkCsvSource),
+              Some(OmniTextOptionsAdapter.CsvCodec)) => true
+        case (Some(OmniTextOptionsAdapter.HiveTextSource),
+              Some(OmniTextOptionsAdapter.CsvCodec)) => true
         case _ => false
       }
     if (format == ReadFileFormat.TextReadFormat && supportedTextCombination) {
@@ -246,10 +255,10 @@ object OmniBackendSettings extends BackendSettingsApi {
         case "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" =>
           None
         case "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
-          if tableInfo.getDeserializerClass.getName ==
-            OmniTextOptionsAdapter.LazySimpleSerdeClass && !fileSinkConf.getCompressed =>
+          if OmniTextOptionsAdapter.isSupportedHiveSerde(
+            tableInfo.getDeserializerClass.getName) && !fileSinkConf.getCompressed =>
           OmniTextOptionsAdapter
-            .fromHiveLazySimple(
+            .fromHiveText(
               new Configuration(),
               tableInfo.getProperties,
               StructType(fields),
@@ -286,11 +295,16 @@ object OmniBackendSettings extends BackendSettingsApi {
 
     def validateFileFormat(): Option[String] = {
       format match {
+        case _: CSVFileFormat | _: OmniCsvFileFormat =>
+          val properties = OmniTextOptionsAdapter.fromSparkCsv(
+            options, StructType(fields), StructType(fields), writing = true)
+          val result = OmniTextOptionsAdapter.validateCsv(properties, writing = true)
+          if (result.ok()) None else Some(result.reason())
         case _: OrcFileFormat => None // Orc is directly supported
         case _: ParquetFileFormat => None // Parquet is directly supported
         case _: OmniOrcFileFormat => None // Omni native Orc writer
         case _: OmniParquetFileFormat => None // Omni native Parquet writer
-        case _: TextFileFormat =>
+        case _: TextFileFormat | _: OmniTextFileFormat =>
           // WriteFilesExec fields may also contain partition columns. Spark Text validates the
           // actual data schema in prepareWrite, where partition columns have already been removed.
           val result = OmniTextOptionsAdapter.validateWriteOptions(options)
@@ -301,8 +315,9 @@ object OmniBackendSettings extends BackendSettingsApi {
           validateHiveFileFormat(h)
         case _ =>
           Some(
-            "Only OrcFileFormat, ParquetFileFormat, TextFileFormat, OmniOrcFileFormat, " +
-              "OmniParquetFileFormat and HiveFileFormat are supported."
+            "Only OrcFileFormat, ParquetFileFormat, CSVFileFormat, TextFileFormat, " +
+              "OmniOrcFileFormat, OmniParquetFileFormat, OmniCsvFileFormat, " +
+              "OmniTextFileFormat and HiveFileFormat are supported."
           ) // Unsupported format
       }
     }
