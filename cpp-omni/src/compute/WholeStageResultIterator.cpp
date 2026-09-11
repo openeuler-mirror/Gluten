@@ -225,6 +225,16 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
 #endif
         configs[config::QueryConfig::KMaxBatchSize] = std::to_string(
             omniCfg_->Get<uint64_t>(kSparkBatchSize, 4096));
+        {
+            bool dfp = omniCfg_->Get<bool>(kDynamicFilterPushdownEnabled, false);
+            if (!dfp) {
+                dfp = omniCfg_->Get<bool>(config::QueryConfig::kDynamicFilterPushdownEnabled, false);
+            }
+            configs[config::QueryConfig::kDynamicFilterPushdownEnabled] = BoolToString(dfp);
+            if (dfp) {
+                configs[config::QueryConfig::kDynamicFilterPushdownEnabledSpark] = "true";
+            }
+        }
         if (omniCfg_->Get<bool>(kSparkShuffleSpillCompress, true)) {
             configs[config::QueryConfig::kSpillCompressionKind] = omniCfg_->Get<std::string>(kSpillCompressionKind,
                 omniCfg_->Get<std::string>(kCompressionKind, "lz4"));

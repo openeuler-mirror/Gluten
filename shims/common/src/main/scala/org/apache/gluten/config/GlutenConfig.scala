@@ -2673,6 +2673,13 @@ object GlutenConfig {
     .booleanConf
     .createWithDefault(false)
 
+  val COLUMNAR_OMNI_ENABLE_DYNAMIC_FILTER_PUSHDOWN =
+    buildConf("spark.gluten.sql.columnar.backend.omni.dynamicFilterPushdown.enabled")
+    .internal()
+    .doc("enable native dynamic filter pushdown from BHJ build side to probe TableScan (default off)")
+    .booleanConf
+    .createWithDefault(false)
+
   val COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT = buildConf("spark.gluten.sql.columnar.backend.omni.enableDelayCartesianProduct.enabled")
     .internal()
     .doc("enable or disable delay cartesian product")
