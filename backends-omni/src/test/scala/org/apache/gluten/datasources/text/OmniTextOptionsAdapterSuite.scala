@@ -56,7 +56,7 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
   test("CSV parser options outside the whitelist fail before native execution") {
     Seq(Map("multiLine" -> "true"), Map("sep" -> "||"), Map("mode" -> "FAILFAST"),
       Map("mode" -> "DROPMALFORMED"), Map("encoding" -> "UTF-16"),
-      Map("compression" -> "gzip"), Map("lineSep" -> "|"), Map("comment" -> "#"),
+      Map("lineSep" -> "|"), Map("comment" -> "#"),
       Map("enforceSchema" -> "false"), Map("maxColumns" -> "5"),
       Map("unescapedQuoteHandling" -> "RAISE_ERROR"), Map("quoteAll" -> "true"),
       Map("ignoreLeadingWhiteSpace" -> "true"), Map("emptyValue" -> "EMPTY"))
@@ -183,14 +183,18 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
     }
   }
 
-  test("write gate accepts only default UTF-8 uncompressed options") {
+  test("write gate accepts supported compression codecs") {
     val fields = Array(StructField("value", StringType))
     assert(OmniTextOptionsAdapter.validateWrite(fields, Map.empty).ok())
+    Seq("gzip", "deflate", "snappy", "lz4").foreach { codec =>
+      assert(OmniTextOptionsAdapter.validateWrite(
+        fields, Map("compression" -> codec)).ok(), codec)
+    }
 
     Seq(
       Map("encoding" -> "UTF-16"),
       Map("lineSep" -> "|"),
-      Map("compression" -> "gzip")).foreach { options =>
+      Map("compression" -> "bzip2")).foreach { options =>
       assert(!OmniTextOptionsAdapter.validateWrite(fields, options).ok())
     }
   }

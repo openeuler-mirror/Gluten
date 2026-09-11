@@ -32,7 +32,6 @@ import org.apache.gluten.substrait.rel.LocalFilesNode
 import org.apache.gluten.substrait.rel.LocalFilesNode.ReadFileFormat
 import org.apache.gluten.validate.NativePlanValidationInfo
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hive.ql.plan.FileSinkDesc
 import org.apache.spark.shuffle.OmniShuffleUtil
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
@@ -49,6 +48,7 @@ import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.datasources.v2.csv.CSVScan
 import org.apache.spark.sql.hive.execution.{HiveFileFormat, OmniHiveFileFormat}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
 import org.apache.spark.util.SerializableConfiguration
@@ -256,21 +256,19 @@ object OmniBackendSettings extends BackendSettingsApi {
           None
         case "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
           if OmniTextOptionsAdapter.isSupportedHiveSerde(
-            tableInfo.getDeserializerClass.getName) && !fileSinkConf.getCompressed =>
-          OmniTextOptionsAdapter
-            .fromHiveText(
-              new Configuration(),
-              tableInfo.getProperties,
-              StructType(fields),
-              StructType(fields))
-            .fold(Some(_), descriptor => {
-              val result = OmniTextOptionsAdapter.validateHiveWrite(descriptor.toProperties)
-              if (result.ok()) None else Some(result.reason())
-            })
+            tableInfo.getDeserializerClass.getName) =>
+          // WriteFiles includes directory partition columns, unlike the file's data schema.
+          // Hive encodes their names as a slash-separated list (V1WritesHiveUtils).
+          val partitionNames = Option(tableInfo.getProperties.getProperty("partition_columns"))
+            .map(_.split("/").filter(_.nonEmpty)).getOrElse(Array.empty[String])
+          val dataFields = fields.filterNot(field => partitionNames.exists(name =>
+            SQLConf.get.resolver(name, field.name)))
+          OmniHiveFileFormat.nativeTextWriteOptions(fileSinkConf, StructType(dataFields))
+            .fold(Some(_), _ => None)
         case _ =>
           Some(
-            "HiveFileFormat is supported only with orc/parquet or uncompressed " +
-              "LazySimpleSerDe text as the output file type"
+            "HiveFileFormat is supported only with ORC, Parquet, or supported Text SerDes " +
+              "and compression codecs as the output file type"
           ) // Unsupported format
       }
     }

@@ -48,8 +48,11 @@ class OmniTextFormatWriterInjects extends GlutenFormatWriterInjectsBase {
             new StructType().add("value", StringType))
           .toProperties
       }
+    val nativeCodec = OmniTextOptionsAdapter.resolveCompressionCodec(compressionCodec)
+      .fold(reason => throw new IllegalArgumentException(reason), identity)
     val result = new ju.HashMap[String, String]()
-    normalized.foreach { case (key, value) => result.put(key, value) }
+    (normalized + (OmniTextOptionsAdapter.CompressionCodecKey -> nativeCodec))
+      .foreach { case (key, value) => result.put(key, value) }
     result
   }
 

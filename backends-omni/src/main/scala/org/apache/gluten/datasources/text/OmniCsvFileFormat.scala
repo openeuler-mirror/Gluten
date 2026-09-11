@@ -39,8 +39,15 @@ class OmniCsvFileFormat extends OmniTextFileFormat {
       options, dataSchema, dataSchema, writing = true)
     val validation = OmniTextOptionsAdapter.validateCsv(properties, writing = true)
     require(validation.ok(), validation.reason())
+    val (compression, extension, blockSize) = OmniTextOptionsAdapter
+      .configureSparkWriteCompression(job, options)
+      .fold(reason => throw new IllegalArgumentException(reason), identity)
     val nativeConf = new ju.HashMap[String, String]()
-    properties.foreach { case (key, value) => nativeConf.put(key, value) }
+    (properties ++ Map(
+      OmniTextOptionsAdapter.CompressionCodecKey -> compression,
+      "text_splitable" -> (compression == OmniTextOptionsAdapter.NoCompression).toString,
+      OmniTextOptionsAdapter.CompressionBlockSizeKey -> blockSize.toString))
+      .foreach { case (key, value) => nativeConf.put(key, value) }
     new OutputWriterFactory {
       override def newInstance(
           path: String,
@@ -48,7 +55,7 @@ class OmniCsvFileFormat extends OmniTextFileFormat {
           context: TaskAttemptContext): OutputWriter =
         new OmniTextOutputWriter(path, schema, context, nativeConf)
 
-      override def getFileExtension(context: TaskAttemptContext): String = ".csv"
+      override def getFileExtension(context: TaskAttemptContext): String = ".csv" + extension
     }
   }
 

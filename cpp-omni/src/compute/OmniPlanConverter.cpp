@@ -29,8 +29,11 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
     if (options.charset() != "UTF-8") {
         throw std::runtime_error("Unsupported Text option: charset must be UTF-8.");
     }
-    if (options.compression_codec() != "NONE") {
-        throw std::runtime_error("Unsupported Text option: compression is not available.");
+    const auto& compression = options.compression_codec();
+    const bool compressed = compression != "NONE" && compression != "";
+    if (compressed && compression != "GZIP" && compression != "DEFLATE" &&
+        compression != "SNAPPY" && compression != "LZ4") {
+        throw std::runtime_error("Unsupported Text compression codec: " + compression);
     }
     std::unordered_map<std::string, std::string> result = {
         {"text.source_kind", sourceKind == 3 ? "SPARK_CSV" : rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
@@ -38,6 +41,7 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         {"text.charset", options.charset()},
         {"text.line_separator", options.line_separator()},
         {"text.compression_codec", options.compression_codec()},
+        {"text.splitable", compressed ? "false" : "true"},
         {"text.session_timezone", options.session_timezone()},
         {"text.date_format", options.date_format()},
         {"text.timestamp_format_count", std::to_string(options.timestamp_formats_size())},

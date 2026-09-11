@@ -44,9 +44,15 @@ class OmniTextFileFormat extends FileFormat with DataSourceRegister with Seriali
       dataSchema: StructType): OutputWriterFactory = {
     val validation = OmniTextOptionsAdapter.validateWrite(dataSchema.fields, options)
     require(validation.ok(), validation.reason())
+    val (compression, extension, blockSize) = OmniTextOptionsAdapter
+      .configureSparkWriteCompression(job, options)
+      .fold(reason => throw new IllegalArgumentException(reason), identity)
     val descriptorProperties = OmniTextOptionsAdapter
       .fromSparkText(options, dataSchema, dataSchema)
-      .toProperties
+      .toProperties ++ Map(
+        OmniTextOptionsAdapter.CompressionCodecKey -> compression,
+        "text_splitable" -> (compression == OmniTextOptionsAdapter.NoCompression).toString,
+        OmniTextOptionsAdapter.CompressionBlockSizeKey -> blockSize.toString)
     val nativeConf = new ju.HashMap[String, String]()
     descriptorProperties.foreach { case (key, value) => nativeConf.put(key, value) }
     new OutputWriterFactory {
@@ -56,7 +62,7 @@ class OmniTextFileFormat extends FileFormat with DataSourceRegister with Seriali
           context: TaskAttemptContext): OutputWriter =
         new OmniTextOutputWriter(path, schema, context, nativeConf)
 
-      override def getFileExtension(context: TaskAttemptContext): String = ".txt"
+      override def getFileExtension(context: TaskAttemptContext): String = ".txt" + extension
     }
   }
 

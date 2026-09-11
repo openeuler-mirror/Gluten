@@ -67,6 +67,29 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
     }
   }
 
+  private def serializeLocalFiles(
+      localFilesNode: LocalFilesNode,
+      scan: BasicScanExecTransformer): Array[Byte] = {
+    setLazySimpleFileSchema(localFilesNode, scan)
+    val localFiles = localFilesNode.toProtobuf
+    if (scan.fileFormat != ReadFileFormat.TextReadFormat) {
+      return localFiles.toByteArray
+    }
+    val builder = localFiles.toBuilder
+    val paths = (0 until builder.getItemsCount).map(builder.getItems(_).getUriFile)
+    val conf = scan.serializableHadoopConf.value
+    val compression = OmniTextOptionsAdapter
+      .resolveInputCompression(paths, conf)
+      .fold(reason => throw new IllegalArgumentException(reason), identity)
+    (0 until builder.getItemsCount).foreach { itemIndex =>
+      val item = builder.getItemsBuilder(itemIndex)
+      if (item.hasText) {
+        item.setText(item.getText.toBuilder.setCompressionCodec(compression))
+      }
+    }
+    builder.build().toByteArray
+  }
+
   override def genSplitInfo(
       partition: InputPartition,
       partitionSchema: StructType,
@@ -117,8 +140,9 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
         val serializedSplits = splitInfos.zipWithIndex.map {
           case (split, scanIndex) =>
             val localFilesNode = split.asInstanceOf[LocalFilesNode]
-            scans.lift(scanIndex).foreach(scan => setLazySimpleFileSchema(localFilesNode, scan))
-            localFilesNode.toProtobuf.toByteArray
+            scans.lift(scanIndex)
+              .map(scan => serializeLocalFiles(localFilesNode, scan))
+              .getOrElse(localFilesNode.toProtobuf.toByteArray)
         }.toArray
         GlutenPartition(
           index,

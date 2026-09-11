@@ -24,10 +24,11 @@ import org.apache.gluten.extension.ValidationResult
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.serde2.`lazy`.LazySerDeParameters
-import org.apache.hadoop.io.compress.CompressionCodecFactory
+import org.apache.hadoop.io.compress.{CompressionCodec, CompressionCodecFactory}
+import org.apache.hadoop.mapreduce.Job
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.catalyst.csv.CSVOptions
-import org.apache.spark.sql.catalyst.util.PermissiveMode
+import org.apache.spark.sql.catalyst.util.{CompressionCodecs, PermissiveMode}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.execution.datasources.FilePartition
 import org.apache.spark.sql.types._
@@ -66,7 +67,86 @@ object OmniTextOptionsAdapter {
   def isSupportedHiveSerde(serde: String): Boolean =
     serde == LazySimpleSerdeClass || serde == OpenCsvSerdeClass
   val NoCompression = "NONE"
+  val GzipCompression = "GZIP"
+  val DeflateCompression = "DEFLATE"
+  val SnappyCompression = "SNAPPY"
+  val Lz4Compression = "LZ4"
+  val CompressionBlockSizeKey = "text_compression_block_size"
+  val DefaultCompressionBlockSize = 256 * 1024
   val LazySimpleSerdeClass = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+
+  private val supportedCodecClasses = Map(
+    "org.apache.hadoop.io.compress.GzipCodec" -> GzipCompression,
+    "org.apache.hadoop.io.compress.DefaultCodec" -> DeflateCompression,
+    "org.apache.hadoop.io.compress.DeflateCodec" -> DeflateCompression,
+    "org.apache.hadoop.io.compress.SnappyCodec" -> SnappyCompression,
+    "org.apache.hadoop.io.compress.Lz4Codec" -> Lz4Compression)
+
+  def resolveCompressionCodec(codecClassName: String): Either[String, String] =
+    Option(codecClassName).filter(_.nonEmpty) match {
+      case None => Right(NoCompression)
+      case Some(codec) if codec.equalsIgnoreCase(NoCompression) ||
+          codec.equalsIgnoreCase("uncompressed") => Right(NoCompression)
+      case Some(codec) if supportedCodecClasses.values.exists(_.equalsIgnoreCase(codec)) =>
+        Right(codec.toUpperCase(java.util.Locale.ROOT))
+      case Some(codec) =>
+        supportedCodecClasses.get(codec).toRight(s"unsupported Hadoop codec $codec")
+    }
+
+  def resolveInputCompression(
+      paths: Seq[String],
+      conf: Configuration): Either[String, String] = Try {
+    val factory = new CompressionCodecFactory(conf)
+    paths.map { path =>
+      val codec = factory.getCodec(new Path(path))
+      resolveCompressionCodec(Option(codec).map(_.getClass.getName).orNull)
+        .fold(reason => throw new IllegalArgumentException(s"$reason: $path"), identity)
+    }.distinct
+  } match {
+    case Success(Seq()) => Right(NoCompression)
+    case Success(Seq(codec)) => Right(codec)
+    case Success(codecs) =>
+      Left(s"mixed Text compression codecs are not supported: ${codecs.mkString(",")}")
+    case Failure(error) => Left(error.getMessage)
+  }
+
+  private def isSupportedCompression(properties: Map[String, String]): Boolean =
+    properties.get(CompressionCodecKey).forall(codec =>
+      codec == NoCompression || supportedCodecClasses.values.toSet.contains(codec))
+
+  def configureSparkWriteCompression(
+      job: Job,
+      options: Map[String, String]): Either[String, (String, String, Int)] = {
+    normalize(options).get("compression") match {
+      case None => Right((NoCompression, "", DefaultCompressionBlockSize))
+      case Some(name) if name.equalsIgnoreCase("none") || name.equalsIgnoreCase("uncompressed") =>
+        CompressionCodecs.setCodecConfiguration(job.getConfiguration, null)
+        Right((NoCompression, "", DefaultCompressionBlockSize))
+      case Some(name) => Try {
+        val codecClassName = CompressionCodecs.getCodecClassName(name)
+        val nativeCodec = resolveCompressionCodec(codecClassName)
+          .fold(reason => throw new IllegalArgumentException(reason), identity)
+        val codecClass = Class.forName(codecClassName).asSubclass(classOf[CompressionCodec])
+        CompressionCodecs.setCodecConfiguration(job.getConfiguration, codecClassName)
+        val codec = org.apache.hadoop.util.ReflectionUtils
+          .newInstance(codecClass, job.getConfiguration)
+        val blockSizeKey = if (nativeCodec == SnappyCompression) {
+          "io.compression.codec.snappy.buffersize"
+        } else if (nativeCodec == Lz4Compression) {
+          "io.compression.codec.lz4.buffersize"
+        } else {
+          ""
+        }
+        val blockSize = if (blockSizeKey.isEmpty) DefaultCompressionBlockSize
+        else job.getConfiguration.getInt(blockSizeKey, DefaultCompressionBlockSize)
+        require(blockSize > 0, s"$blockSizeKey must be positive")
+        (nativeCodec, codec.getDefaultExtension, blockSize)
+      } match {
+        case Success(value) => Right(value)
+        case Failure(error) => Left(error.getMessage)
+      }
+    }
+  }
 
   sealed trait TextDialectOptions {
     def toProperties: Map[String, String]
@@ -76,12 +156,14 @@ object OmniTextOptionsAdapter {
       charset: String,
       lineSeparator: Option[String],
       compressionCodec: String,
-      splitable: Boolean) {
+      splitable: Boolean,
+      compressionBlockSize: Int = DefaultCompressionBlockSize) {
     def toProperties: Map[String, String] = Map(
       CharsetKey -> charset,
       LineSeparatorKey -> lineSeparator.getOrElse(""),
       CompressionCodecKey -> compressionCodec,
-      "text_splitable" -> splitable.toString)
+      "text_splitable" -> splitable.toString,
+      CompressionBlockSizeKey -> compressionBlockSize.toString)
   }
 
   final case class TemporalTextOptions(
@@ -341,6 +423,17 @@ object OmniTextOptionsAdapter {
     Try(new CSVOptions(options, conf.csvColumnPruning, conf.sessionLocalTimeZone)) match {
       case Failure(error) => failed(error.getMessage)
       case Success(csv) =>
+        val compression = if (writing) {
+          csv.compressionCodec match {
+            case Some(codec) => resolveCompressionCodec(codec) match {
+              case Right(value) => value
+              case Left(reason) => return failed(reason)
+            }
+            case None => NoCompression
+          }
+        } else {
+          NoCompression
+        }
         val dateFormat = if (writing) Some(csv.dateFormatInWrite) else csv.dateFormatInRead
         val timestampFormat =
           if (writing) Some(csv.timestampFormatInWrite) else csv.timestampFormatInRead
@@ -367,7 +460,7 @@ object OmniTextOptionsAdapter {
             csv.parseMode != PermissiveMode) {
           return failed("only single-line, comment-free PERMISSIVE CSV is supported")
         }
-        if (csv.charset != "UTF-8" || csv.compressionCodec.exists(_ != null) ||
+        if (csv.charset != "UTF-8" ||
             csv.maxColumns != 20480 || csv.maxCharsPerColumn != -1 ||
             !normalized.getOrElse("unescapedquotehandling", "STOP_AT_DELIMITER")
               .equalsIgnoreCase("STOP_AT_DELIMITER") ||
@@ -384,7 +477,11 @@ object OmniTextOptionsAdapter {
         }
         TextSourceDescriptor(
           TextFormatOptions(SparkCsvSource, CsvCodec,
-            CommonTextOptions(csv.charset, None, NoCompression, splitable = true),
+            CommonTextOptions(
+              csv.charset,
+              None,
+              compression,
+              splitable = compression == NoCompression),
             CsvOptions(DelimitedOptions(csv.delimiter, csv.nullValue, escapeEnabled = true,
               Some(csv.escape.toString), if (csv.headerFlag && !writing) 1 else 0,
               emitHeader = csv.headerFlag && writing), csv.quote.toString, "PERMISSIVE"),
@@ -398,6 +495,9 @@ object OmniTextOptionsAdapter {
     def failed(reason: String): ValidationResult =
       ValidationResult.failed(s"Unsupported CSV: $reason")
     properties.get(ValidationErrorKey).foreach(reason => return failed(reason))
+    if (!isSupportedCompression(properties)) {
+      return failed("compression codec is not supported")
+    }
     val characters = Seq("field_delimiter", "quote", "escape").map(properties.getOrElse(_, ""))
     if (characters.exists(value => value.getBytes(StandardCharsets.UTF_8).length != 1 ||
         value == "\u0000" || value == "\r" || value == "\n") ||
@@ -464,8 +564,8 @@ object OmniTextOptionsAdapter {
     if (properties.get(LineSeparatorKey).exists(_.nonEmpty)) {
       return failed("custom lineSep is not supported")
     }
-    if (!properties.get(CompressionCodecKey).contains(NoCompression)) {
-      return failed("compression is not supported")
+    if (!isSupportedCompression(properties)) {
+      return failed("compression codec is not supported")
     }
     if (properties.get(FileSchemaSizeKey) != Some("1") ||
         !properties.get(FileTypeKey).exists(_.equalsIgnoreCase("string"))) {
@@ -493,8 +593,8 @@ object OmniTextOptionsAdapter {
     if (properties.get(LineSeparatorKey).exists(_.nonEmpty)) {
       return failed("custom line separators are not supported")
     }
-    if (!properties.get(CompressionCodecKey).contains(NoCompression)) {
-      return failed("compression is not supported")
+    if (!isSupportedCompression(properties)) {
+      return failed("compression codec is not supported")
     }
     if (!properties.get("field_delimiter").exists(_.getBytes(StandardCharsets.UTF_8).length == 1)) {
       return failed("field delimiter must be one byte")
@@ -552,20 +652,16 @@ object OmniTextOptionsAdapter {
     val conf = serializableHadoopConf
       .map(_.value)
       .getOrElse(new Configuration())
-    val codecFactory = new CompressionCodecFactory(conf)
-    Try {
-      partitions.iterator
-        .map(_.asInstanceOf[FilePartition])
-        .flatMap(_.files.iterator)
-        .map(file => new Path(file.filePath.toString))
-        .find(path => codecFactory.getCodec(path) != null)
-    } match {
-      case Success(Some(path)) =>
-        ValidationResult.failed(s"Unsupported Text scan: compressed input is not supported: $path")
-      case Success(None) => ValidationResult.succeeded
-      case Failure(error) =>
-        ValidationResult.failed(
-          s"Unsupported Text scan: unable to inspect input compression: ${error.getMessage}")
+    val files = partitions.iterator
+      .map(_.asInstanceOf[FilePartition])
+      .flatMap(_.files.iterator)
+      .toSeq
+    resolveInputCompression(files.map(_.filePath.toString), conf) match {
+      case Left(reason) => ValidationResult.failed(s"Unsupported Text scan: $reason")
+      case Right(NoCompression) => ValidationResult.succeeded
+      case Right(_) if files.exists(file => file.start != 0 || file.length != file.fileSize) =>
+        ValidationResult.failed("Unsupported Text scan: compressed input must use whole-file splits")
+      case Right(_) => ValidationResult.succeeded
     }
   }
 
@@ -592,8 +688,11 @@ object OmniTextOptionsAdapter {
     if (normalized.contains("linesep")) {
       return failed("custom lineSep is not supported")
     }
-    if (normalized.contains("compression")) {
-      return failed("compression is not supported")
+    normalized.get("compression").foreach { codec =>
+      val codecClass = Try(CompressionCodecs.getCodecClassName(codec)).toOption.getOrElse {
+        return failed(s"unknown compression codec $codec")
+      }
+      resolveCompressionCodec(codecClass).left.foreach(reason => return failed(reason))
     }
     ValidationResult.succeeded
   }

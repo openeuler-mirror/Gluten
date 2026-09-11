@@ -114,6 +114,8 @@ std::shared_ptr<nlohmann::json> ParseTextOptions(JNIEnv* env, jobject options)
     CopyOption(env, options, *parsed, "text_charset", "text.charset", "UTF-8");
     CopyOption(env, options, *parsed, "text_line_separator", "text.line_separator");
     CopyOption(env, options, *parsed, "text_compression_codec", "text.compression_codec", "NONE");
+    CopyOption(env, options, *parsed,
+        "text_compression_block_size", "text.compression_block_size", "262144");
     CopyOption(env, options, *parsed, "text_session_timezone", "text.session_timezone");
     CopyOption(env, options, *parsed, "text_date_format", "text.date_format");
     CopyOption(env, options, *parsed,
