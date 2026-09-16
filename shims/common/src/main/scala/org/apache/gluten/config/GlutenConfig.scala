@@ -517,7 +517,7 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def omniColumnarShuffleSpillBatchRowNum: Int =
     conf.getConf(COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM)
 
-  def omniColumnarSpillMemPctThreshold: Int = conf.getConf(COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD)
+  def omniColumnarSpillMemoryFraction: Double = conf.getConf(COLUMNAR_OMNI_SPILL_MEMORY_FRACTION)
 
   def enableOmniExpCheck : Boolean = conf.getConf(ENABLE_OMNI_EXP_CHECK)
 
@@ -570,7 +570,7 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def columnarSpillWriteBufferSize: Long = conf.getConf(COLUMNAR_SPILL_WRITE_BUFFER_SIZE)
 
-  def columnarSpillMemPctThreshold: Long = conf.getConf(COLUMNAR_SPILL_MEM_PCT_THRESHOLD)
+  def columnarSpillMemoryFraction: Double = conf.getConf(COLUMNAR_SPILL_MEMORY_FRACTION)
 
   def columnarSpillDirDiskReserveSize: Long = conf.getConf(COLUMNAR_SPILL_DIR_DISK_RESERVE_SIZE)
 
@@ -823,7 +823,7 @@ object GlutenConfig {
       COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM.key,
       SQLConf.SESSION_LOCAL_TIMEZONE.key,
       GLUTEN_DEFAULT_SESSION_TIMEZONE.key,
-      COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD.key,
+      COLUMNAR_OMNI_SPILL_MEMORY_FRACTION.key,
       ENABLE_OMNI_AGGREGATION_SPILL.key,
       ENABLE_OMNI_EXP_CHECK.key,
       ENABLE_OMNI_UNIXTIME_FUNCTION.key,
@@ -2478,13 +2478,13 @@ object GlutenConfig {
       .intConf
       .createWithDefault(10000)
 
-  val COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD =
+  val COLUMNAR_OMNI_SPILL_MEMORY_FRACTION =
     buildConf("spark.gluten.sql.columnar.backend.omni.memFraction")
       .internal()
-      .doc("columnar spill threshold - Percentage of memory usage," +
-        " associate with the \"spark.memory.offHeap\" together")
-      .intConf
-      .createWithDefault(90)
+      .doc("Fraction of spark.memory.offHeap.size used as the spill threshold, in (0, 1].")
+      .doubleConf
+      .checkValue(v => v > 0 && v <= 1, "Spill memory fraction must be in (0, 1]")
+      .createWithDefault(0.9)
 
   val ENABLE_OMNI_AGGREGATION_SPILL =
     buildConf("spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled")
@@ -2643,12 +2643,13 @@ object GlutenConfig {
     .longConf
     .createWithDefault(4121440L)
 
-  val COLUMNAR_SPILL_MEM_PCT_THRESHOLD = buildConf("spark.gluten.sql.columnar.backend.omni.spill.memFraction")
-    .internal()
-    .doc("columnar spill threshold - Percentage of memory usage," +
-      " associate with the \"spark.memory.offHeap\" together")
-    .longConf
-    .createWithDefault(90)
+  val COLUMNAR_SPILL_MEMORY_FRACTION =
+    buildConf("spark.gluten.sql.columnar.backend.omni.spill.memFraction")
+      .internal()
+      .doc("Fraction of spark.memory.offHeap.size used as the spill threshold, in (0, 1].")
+      .doubleConf
+      .checkValue(v => v > 0 && v <= 1, "Spill memory fraction must be in (0, 1]")
+      .createWithDefault(0.9)
 
   val COLUMNAR_SPILL_DIR_DISK_RESERVE_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.spill.dirDiskReserveSize")
     .internal()
