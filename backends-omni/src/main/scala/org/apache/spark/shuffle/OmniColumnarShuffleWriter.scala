@@ -54,8 +54,8 @@ class OmniColumnarShuffleWriter[K, V](
   val columnarConf = GlutenConfig.get
   val shuffleSpillBatchRowNum = columnarConf.omniColumnarShuffleSpillBatchRowNum
   val shuffleTaskSpillMemoryThreshold = columnarConf.omniColumnarShuffleTaskSpillMemoryThreshold
-  val shuffleExecutorSpillMemoryThreshold = columnarConf.omniColumnarSpillMemPctThreshold *
-    conf.getSizeAsBytes("spark.memory.offHeap.size", "1g")
+  val shuffleExecutorSpillMemoryThreshold = (columnarConf.omniColumnarSpillMemoryFraction *
+    conf.getSizeAsBytes("spark.memory.offHeap.size", "1g")).toLong
   val shuffleCompressBlockSize = columnarConf.omniColumnarShuffleCompressBlockSize
 
   val shuffleNativeBufferSize = {

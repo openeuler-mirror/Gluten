@@ -139,7 +139,8 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         if (task_spill_memory_threshold > 0) {
             splitOptions.task_spill_mem_threshold = task_spill_memory_threshold;
         }
-        if (executor_spill_memory_threshold > 0) {
+        // A positive fraction can round down to a valid zero-byte threshold.
+        if (executor_spill_memory_threshold >= 0) {
             splitOptions.executor_spill_mem_threshold = executor_spill_memory_threshold;
         }
         if (compress_block_size > 0) {
@@ -221,7 +222,8 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         if (task_spill_memory_threshold > 0) {
             splitOptions.task_spill_mem_threshold = task_spill_memory_threshold;
         }
-        if (executor_spill_memory_threshold > 0) {
+        // A positive fraction can round down to a valid zero-byte threshold.
+        if (executor_spill_memory_threshold >= 0) {
             splitOptions.executor_spill_mem_threshold = executor_spill_memory_threshold;
         }
         if (compress_block_size > 0) {

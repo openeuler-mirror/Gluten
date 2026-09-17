@@ -154,6 +154,11 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
     const std::string &spillDir) const
 {
     std::unordered_map<std::string, std::string> configs = {};
+    const auto getSpillMemoryFraction = [this](const std::string &key) {
+        const config::ConfigBase::Entry<std::string> entry(key, "0.9", config::ToString<std::string>,
+            [](const std::string &, const std::string &value) { return value; });
+        return omniCfg_->Get(entry);
+    };
 
     try {
         if (omniCfg_->ValueExists(kDefaultSessionTimezone)) {
@@ -172,7 +177,8 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         }
         configs[config::QueryConfig::kAggregationSpillEnabled] = BoolToString(
             omniCfg_->Get<bool>(kAggregationSpillEnabled, true));
-        configs[config::QueryConfig::kMemFraction] = std::to_string(omniCfg_->Get<int32_t>(kMemFraction, 90));
+        // Preserve the fraction text; QueryConfig parses and validates it as double.
+        configs[config::QueryConfig::kMemFraction] = getSpillMemoryFraction(kMemFraction);
         configs[config::QueryConfig::kJoinSpillEnabled] = BoolToString(omniCfg_->Get<bool>(kJoinSpillEnabled, true));
         configs[config::QueryConfig::kOrderBySpillEnabled] = BoolToString(omniCfg_->Get<bool>(kOrderBySpillEnabled,
             true));
@@ -195,8 +201,8 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<int32_t>(KSpillHashAggRowThreshold, INT32_MAX));
         configs[config::QueryConfig::KSpillSortRowThreshold] = std::to_string(
             omniCfg_->Get<int32_t>(KSpillSortRowThreshold, INT32_MAX));
-        configs[config::QueryConfig::KColumnarSpillMemThreshold] = std::to_string(
-            omniCfg_->Get<uint64_t>(KColumnarSpillMemThreshold, 90));
+        configs[config::QueryConfig::KColumnarSpillMemThreshold] =
+            getSpillMemoryFraction(KColumnarSpillMemThreshold);
         configs[config::QueryConfig::KColumnarSpillWriteBufferSize] = std::to_string(
             omniCfg_->Get<uint64_t>(KColumnarSpillWriteBufferSize, 4121440L));
         configs[config::QueryConfig::KColumnarSpillDirDiskReserveSize] = std::to_string(
