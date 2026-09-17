@@ -17,7 +17,7 @@
 package org.apache.gluten.datasources.text
 
 import java.nio.charset.{Charset, StandardCharsets}
-import java.util.Properties
+import java.util.{Properties, TimeZone}
 
 import org.apache.gluten.extension.ValidationResult
 
@@ -55,6 +55,10 @@ object OmniTextOptionsAdapter {
   val DateFormatKey = "text_date_format"
   val TimestampFormatCountKey = "text_timestamp_format_count"
   val TimestampFormatPrefix = "text_timestamp_format_"
+  val EmptyValueKey = "text_empty_value"
+  val IgnoreLeadingWhitespaceKey = "text_ignore_leading_whitespace"
+  val IgnoreTrailingWhitespaceKey = "text_ignore_trailing_whitespace"
+  val CommentKey = "text_comment"
 
   val SparkTextSource = "SPARK_TEXT"
   val SparkCsvSource = "SPARK_CSV"
@@ -71,6 +75,7 @@ object OmniTextOptionsAdapter {
   val DeflateCompression = "DEFLATE"
   val SnappyCompression = "SNAPPY"
   val Lz4Compression = "LZ4"
+  private val supportedTextTimestampTimeZones = Set("GMT+08:00", "Asia/Shanghai")
   val CompressionBlockSizeKey = "text_compression_block_size"
   val DefaultCompressionBlockSize = 256 * 1024
   val LazySimpleSerdeClass = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
@@ -212,11 +217,23 @@ object OmniTextOptionsAdapter {
   final case class CsvOptions(
       delimited: DelimitedOptions,
       quote: String,
-      parseMode: String)
+      parseMode: String,
+      emptyValue: String = "",
+      ignoreLeadingWhitespace: Boolean = false,
+      ignoreTrailingWhitespace: Boolean = false,
+      quoteAll: Boolean = false,
+      escapeQuotes: Boolean = true,
+      comment: Option[String] = None)
     extends TextDialectOptions {
     override def toProperties: Map[String, String] = delimited.toProperties ++ Map(
       "quote" -> quote,
-      "text_parse_mode" -> parseMode)
+      "text_parse_mode" -> parseMode,
+      EmptyValueKey -> emptyValue,
+      IgnoreLeadingWhitespaceKey -> ignoreLeadingWhitespace.toString,
+      IgnoreTrailingWhitespaceKey -> ignoreTrailingWhitespace.toString,
+      "text_quote_all" -> quoteAll.toString,
+      "text_escape_quotes" -> escapeQuotes.toString,
+      CommentKey -> comment.getOrElse(""))
   }
 
   final case class TextFormatOptions(
@@ -270,6 +287,15 @@ object OmniTextOptionsAdapter {
     }
   }
 
+  private def validateTimestampTimeZone(schema: StructType, timeZone: String): Option[String] = {
+    if (schema.fields.exists(_.dataType == TimestampType) &&
+        !supportedTextTimestampTimeZones.contains(timeZone)) {
+      Some(s"unsupported timestamp time zone $timeZone")
+    } else {
+      None
+    }
+  }
+
   def fromSparkText(
       options: Map[String, String],
       fileSchema: StructType,
@@ -309,13 +335,15 @@ object OmniTextOptionsAdapter {
         if (timestampFormats.exists(_.isEmpty)) {
           return Left("timestamp.formats must not contain an empty format")
         }
+        val timeZone = TimeZone.getDefault.getID
+        validateTimestampTimeZone(readSchema, timeZone) match {
+          case Some(reason) => return Left(reason)
+          case None => ()
+        }
         val charsetName = normalized.getOrElse("serialization.encoding", StandardCharsets.UTF_8.name())
         val charset = Try(Charset.forName(charsetName)).toOption
         if (!charset.contains(StandardCharsets.UTF_8)) {
           return Left("only UTF-8 serialization.encoding is supported")
-        }
-        if (parameters.isLastColumnTakesRest) {
-          return Left("serialization.last.column.takes.rest=true is not supported")
         }
         if (parameters.isExtendedBooleanLiteral) {
           return Left("hive.lazysimple.extended_boolean_literal=true is not supported")
@@ -326,9 +354,6 @@ object OmniTextOptionsAdapter {
 
         val header = parseNonNegativeInt(normalized, "skip.header.line.count", 0)
         val footer = parseNonNegativeInt(normalized, "skip.footer.line.count", 0)
-        if (header.exists(_ != 0)) {
-          return Left("skip.header.line.count is not supported by Spark Hive scan")
-        }
         if (footer.exists(_ != 0)) {
           return Left("skip.footer.line.count is not supported")
         }
@@ -367,7 +392,7 @@ object OmniTextOptionsAdapter {
                 emitHeader = false),
               collection,
               mapKey,
-              lastColumnTakesRest = false),
+              lastColumnTakesRest = parameters.isLastColumnTakesRest),
             TemporalTextOptions(timestampFormats = timestampFormats)),
           fileSchema,
           readSchema)
@@ -392,23 +417,34 @@ object OmniTextOptionsAdapter {
       readSchema: StructType): Either[String, TextSourceDescriptor] = {
     val values = properties.stringPropertyNames().toArray(new Array[String](0))
       .map(key => key -> properties.getProperty(key)).toMap
-    val unsupported = Seq("skip.header.line.count", "skip.footer.line.count")
-      .find(key => values.get(key).exists(value => Try(value.toInt).toOption != Some(0)))
-    if (unsupported.nonEmpty) {
-      return Left(s"${unsupported.get} is not supported")
+    val header = parseNonNegativeInt(values, "skip.header.line.count", 0)
+    val footer = parseNonNegativeInt(values, "skip.footer.line.count", 0)
+    if (footer.exists(_ != 0)) {
+      return Left("skip.footer.line.count is not supported")
     }
-    def character(key: String, default: String): String =
-      values.getOrElse(key, default).take(1)
-    Right(TextSourceDescriptor(
+    def character(key: String, default: String): Either[String, String] = {
+      val value = values.getOrElse(key, default)
+      if (value.getBytes(StandardCharsets.UTF_8).length != 1) {
+        Left(s"$key must contain exactly one single-byte UTF-8 character")
+      } else {
+        Right(value)
+      }
+    }
+    for {
+      parsedHeader <- header
+      separator <- character("separatorChar", ",")
+      escape <- character("escapeChar", "\"")
+      quote <- character("quoteChar", "\"")
+    } yield TextSourceDescriptor(
       TextFormatOptions(
         HiveTextSource,
         CsvCodec,
         CommonTextOptions("UTF-8", None, NoCompression, splitable = true),
         CsvOptions(
-          DelimitedOptions(character("separatorChar", ","), "", escapeEnabled = true,
-            Some(character("escapeChar", "\"")), 0, emitHeader = false),
-          character("quoteChar", "\""), "PERMISSIVE")),
-      fileSchema, readSchema))
+          DelimitedOptions(separator, "", escapeEnabled = true,
+            Some(escape), parsedHeader, emitHeader = false),
+          quote, "PERMISSIVE")),
+      fileSchema, readSchema)
   }
 
   def fromSparkCsv(
@@ -423,6 +459,8 @@ object OmniTextOptionsAdapter {
     Try(new CSVOptions(options, conf.csvColumnPruning, conf.sessionLocalTimeZone)) match {
       case Failure(error) => failed(error.getMessage)
       case Success(csv) =>
+        val defaultCsv = new CSVOptions(
+          Map.empty, conf.csvColumnPruning, conf.sessionLocalTimeZone)
         val compression = if (writing) {
           csv.compressionCodec match {
             case Some(codec) => resolveCompressionCodec(codec) match {
@@ -440,25 +478,34 @@ object OmniTextOptionsAdapter {
         if (dateFormat.exists(_.isEmpty) || timestampFormat.exists(_.isEmpty)) {
           return failed("dateFormat and timestampFormat must not be empty")
         }
+        val effectiveSchema = if (writing) fileSchema else readSchema
+        validateTimestampTimeZone(effectiveSchema, csv.zoneId.getId) match {
+          case Some(reason) => return failed(reason)
+          case None => ()
+        }
         val booleanDefaults = Map(
-          "multiline" -> false, "enforceschema" -> true, "escapequotes" -> true,
-          "quoteall" -> false, "ignoreleadingwhitespace" -> writing,
-          "ignoretrailingwhitespace" -> writing, "columnpruning" -> true)
+          "multiline" -> false, "enforceschema" -> true, "columnpruning" -> true)
         val invalidBoolean = booleanDefaults.find { case (key, expected) =>
           normalized.get(key).exists(value => Try(value.toBoolean).toOption != Some(expected))
         }
-        val unsupported = Seq("linesep", "emptyvalue", "timestampntzformat",
-          "enabledatetimeparsingfallback")
-          .find(normalized.contains)
         if (invalidBoolean.nonEmpty) {
           return failed(s"non-default ${invalidBoolean.get._1} is not supported")
         }
-        if (unsupported.nonEmpty) {
-          return failed(s"${unsupported.get} is not supported")
+        if (csv.lineSeparator != defaultCsv.lineSeparator) {
+          return failed("non-default lineSep is not supported")
         }
-        if (csv.multiLine || csv.isCommentSet || !csv.enforceSchema ||
+        val emptyValue = if (writing) csv.emptyValueInWrite else csv.emptyValueInRead
+        if (csv.enableDateTimeParsingFallback.getOrElse(false) !=
+            defaultCsv.enableDateTimeParsingFallback.getOrElse(false)) {
+          return failed("non-default enableDateTimeParsingFallback is not supported")
+        }
+        if (csv.multiLine || !csv.enforceSchema ||
             csv.parseMode != PermissiveMode) {
-          return failed("only single-line, comment-free PERMISSIVE CSV is supported")
+          return failed("only single-line PERMISSIVE CSV is supported")
+        }
+        val comment = if (!writing && csv.isCommentSet) Some(csv.comment.toString) else None
+        if (comment.exists(_.getBytes(StandardCharsets.UTF_8).length != 1)) {
+          return failed("CSV comment must contain one single-byte UTF-8 character")
         }
         if (csv.charset != "UTF-8" ||
             csv.maxColumns != 20480 || csv.maxCharsPerColumn != -1 ||
@@ -484,7 +531,15 @@ object OmniTextOptionsAdapter {
               splitable = compression == NoCompression),
             CsvOptions(DelimitedOptions(csv.delimiter, csv.nullValue, escapeEnabled = true,
               Some(csv.escape.toString), if (csv.headerFlag && !writing) 1 else 0,
-              emitHeader = csv.headerFlag && writing), csv.quote.toString, "PERMISSIVE"),
+              emitHeader = csv.headerFlag && writing), csv.quote.toString, "PERMISSIVE",
+              emptyValue,
+              if (writing) csv.ignoreLeadingWhiteSpaceFlagInWrite
+              else csv.ignoreLeadingWhiteSpaceInRead,
+              if (writing) csv.ignoreTrailingWhiteSpaceFlagInWrite
+              else csv.ignoreTrailingWhiteSpaceInRead,
+              csv.quoteAll,
+              csv.escapeQuotes,
+              comment),
             TemporalTextOptions(dateFormat, timestampFormat.toSeq)),
           fileSchema, readSchema).toProperties +
           (SessionTimezoneKey -> csv.zoneId.getId)
@@ -604,8 +659,8 @@ object OmniTextOptionsAdapter {
       return failed("escape delimiter must be empty or one byte")
     }
     val header = properties.get("header").flatMap(value => Try(value.toInt).toOption)
-    if (!header.contains(0)) {
-      return failed("skip.header.line.count is not supported by Spark Hive scan")
+    if (!header.exists(_ >= 0)) {
+      return failed("skip.header.line.count must be non-negative")
     }
     val fileSchema = parseSchema(properties, FileSchemaKey).getOrElse {
       return failed("full file schema is missing or invalid")

@@ -165,6 +165,11 @@ message ReadRel {
         string session_timezone = 15;
         string date_format = 16;
         repeated string timestamp_formats = 17;
+        string empty_value = 18;
+        bool ignore_leading_whitespace = 19;
+        bool ignore_trailing_whitespace = 20;
+        string comment = 21;
+        bool last_column_takes_rest = 22;
       }
       message JsonReadOptions {
         uint64 max_block_size = 1;

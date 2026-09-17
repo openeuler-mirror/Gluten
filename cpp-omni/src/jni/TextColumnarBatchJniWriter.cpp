@@ -135,6 +135,14 @@ std::shared_ptr<nlohmann::json> ParseTextOptions(JNIEnv* env, jobject options)
     CopyOption(env, options, *parsed, "escape", "text.escape_char");
     CopyOption(env, options, *parsed, "quote", "text.quote");
     CopyOption(env, options, *parsed, "text_parse_mode", "text.parse_mode", "PERMISSIVE");
+    CopyOption(env, options, *parsed, "text_empty_value", "text.empty_value");
+    CopyOption(env, options, *parsed,
+        "text_ignore_leading_whitespace", "text.ignore_leading_whitespace", "false");
+    CopyOption(env, options, *parsed,
+        "text_ignore_trailing_whitespace", "text.ignore_trailing_whitespace", "false");
+    CopyOption(env, options, *parsed, "text_quote_all", "text.quote_all", "false");
+    CopyOption(env, options, *parsed, "text_escape_quotes", "text.escape_quotes", "true");
+    CopyOption(env, options, *parsed, "text_comment", "text.comment");
     CopyOption(env, options, *parsed, "header", "text.skip_input_lines", "0");
     CopyOption(env, options, *parsed, "text_emit_header", "text.emit_header", "false");
     CopyOption(

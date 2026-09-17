@@ -221,6 +221,20 @@ public class LocalFilesNode implements SplitInfo {
                 .setHeader(Long.parseLong(fileReadProperties.getOrDefault("header", "0")))
                 .setEscape(fileReadProperties.getOrDefault("escape", ""))
                 .setNullValue(fileReadProperties.getOrDefault("nullValue", ""))
+                .setEmptyValue(fileReadProperties.getOrDefault("text_empty_value", ""))
+                .setIgnoreLeadingWhitespace(
+                    Boolean.parseBoolean(
+                        fileReadProperties.getOrDefault(
+                            "text_ignore_leading_whitespace", "false")))
+                .setIgnoreTrailingWhitespace(
+                    Boolean.parseBoolean(
+                        fileReadProperties.getOrDefault(
+                            "text_ignore_trailing_whitespace", "false")))
+                .setComment(fileReadProperties.getOrDefault("text_comment", ""))
+                .setLastColumnTakesRest(
+                    Boolean.parseBoolean(
+                        fileReadProperties.getOrDefault(
+                            "text_last_column_takes_rest", "false")))
                 .setMaxBlockSize(GlutenConfig.get().textInputMaxBlockSize())
                 .setEmptyAsDefault(GlutenConfig.get().textIputEmptyAsDefault())
                 .setSourceKind(

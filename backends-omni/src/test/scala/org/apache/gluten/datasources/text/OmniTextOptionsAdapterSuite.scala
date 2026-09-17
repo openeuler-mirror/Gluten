@@ -19,6 +19,7 @@ package org.apache.gluten.datasources.text
 import java.util.Properties
 
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{
   DateType,
   IntegerType,
@@ -47,39 +48,81 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
     val count = OmniTextOptionsAdapter.fromSparkCsv(Map.empty, schema, new StructType())
     assert(OmniTextOptionsAdapter.validateRead(count).ok())
     val writer = OmniTextOptionsAdapter.fromSparkCsv(
-      Map("header" -> "true"), schema, schema, writing = true)
+      Map("header" -> "true", "quoteAll" -> "true", "escapeQuotes" -> "false"),
+      schema, schema, writing = true)
     assert(OmniTextOptionsAdapter.validateCsv(writer, writing = true).ok())
     assert(writer("header") == "0")
     assert(writer("text_emit_header") == "true")
+    assert(writer(OmniTextOptionsAdapter.EmptyValueKey) == "\"\"")
+    assert(writer(OmniTextOptionsAdapter.IgnoreLeadingWhitespaceKey) == "true")
+    assert(writer(OmniTextOptionsAdapter.IgnoreTrailingWhitespaceKey) == "true")
+    assert(writer("text_quote_all") == "true")
+    assert(writer("text_escape_quotes") == "false")
   }
 
   test("CSV parser options outside the whitelist fail before native execution") {
     Seq(Map("multiLine" -> "true"), Map("sep" -> "||"), Map("mode" -> "FAILFAST"),
       Map("mode" -> "DROPMALFORMED"), Map("encoding" -> "UTF-16"),
-      Map("lineSep" -> "|"), Map("comment" -> "#"),
+      Map("lineSep" -> "|"),
       Map("enforceSchema" -> "false"), Map("maxColumns" -> "5"),
-      Map("unescapedQuoteHandling" -> "RAISE_ERROR"), Map("quoteAll" -> "true"),
-      Map("ignoreLeadingWhiteSpace" -> "true"), Map("emptyValue" -> "EMPTY"))
+      Map("unescapedQuoteHandling" -> "RAISE_ERROR"))
       .foreach { options =>
         val properties = OmniTextOptionsAdapter.fromSparkCsv(options, stringSchema, stringSchema)
         assert(!OmniTextOptionsAdapter.validateRead(properties).ok(), options.toString)
       }
   }
 
+  test("CSV options are gated by parsed values instead of key presence") {
+    Seq(Map("emptyValue" -> ""), Map("emptyValue" -> "EMPTY"),
+      Map("comment" -> "#"), Map("ignoreLeadingWhiteSpace" -> "true"),
+      Map("ignoreTrailingWhiteSpace" -> "true"),
+      Map("enableDateTimeParsingFallback" -> "false"),
+      Map("timestampNTZFormat" -> "yyyy/MM/dd HH:mm:ss"))
+      .foreach { options =>
+        val properties = OmniTextOptionsAdapter.fromSparkCsv(options, stringSchema, stringSchema)
+        assert(OmniTextOptionsAdapter.validateRead(properties).ok(), options.toString)
+      }
+
+    val fallback = OmniTextOptionsAdapter.fromSparkCsv(
+      Map("enableDateTimeParsingFallback" -> "true"), stringSchema, stringSchema)
+    assert(!OmniTextOptionsAdapter.validateRead(fallback).ok())
+
+    val supported = OmniTextOptionsAdapter.fromSparkCsv(
+      Map("emptyValue" -> "EMPTY", "comment" -> "#",
+        "ignoreLeadingWhiteSpace" -> "true", "ignoreTrailingWhiteSpace" -> "true"),
+      stringSchema, stringSchema)
+    assert(supported(OmniTextOptionsAdapter.EmptyValueKey) == "EMPTY")
+    assert(supported(OmniTextOptionsAdapter.CommentKey) == "#")
+    assert(supported(OmniTextOptionsAdapter.IgnoreLeadingWhitespaceKey) == "true")
+    assert(supported(OmniTextOptionsAdapter.IgnoreTrailingWhitespaceKey) == "true")
+  }
+
   test("CSV time types respect existing conversion boundaries") {
     val timestamp = new StructType().add("t", TimestampType)
     val date = new StructType().add("d", DateType)
-    val timestampRead = OmniTextOptionsAdapter.fromSparkCsv(
-      Map("timestampFormat" -> "yyyy/MM/dd HH:mm:ss"), timestamp, timestamp)
-    val dateRead = OmniTextOptionsAdapter.fromSparkCsv(
-      Map("dateFormat" -> "yyyy/MM/dd"), date, date)
-    assert(OmniTextOptionsAdapter.validateRead(timestampRead).ok())
-    assert(OmniTextOptionsAdapter.validateRead(dateRead).ok())
-    assert(timestampRead("text_timestamp_format_0") == "yyyy/MM/dd HH:mm:ss")
-    assert(dateRead(OmniTextOptionsAdapter.DateFormatKey) == "yyyy/MM/dd")
-    assert(OmniTextOptionsAdapter.validateCsv(
-      OmniTextOptionsAdapter.fromSparkCsv(Map.empty, date, date, writing = true),
-      writing = true).ok())
+    val conf = new SQLConf()
+    conf.setConfString("spark.sql.session.timeZone", "Asia/Shanghai")
+    SQLConf.withExistingConf(conf) {
+      val timestampRead = OmniTextOptionsAdapter.fromSparkCsv(
+        Map("timestampFormat" -> "yyyy/MM/dd HH:mm:ss"), timestamp, timestamp)
+      val dateRead = OmniTextOptionsAdapter.fromSparkCsv(
+        Map("dateFormat" -> "yyyy/MM/dd"), date, date)
+      assert(OmniTextOptionsAdapter.validateRead(timestampRead).ok())
+      assert(OmniTextOptionsAdapter.validateRead(dateRead).ok())
+      assert(timestampRead("text_timestamp_format_0") == "yyyy/MM/dd HH:mm:ss")
+      assert(dateRead(OmniTextOptionsAdapter.DateFormatKey) == "yyyy/MM/dd")
+      assert(OmniTextOptionsAdapter.validateCsv(
+        OmniTextOptionsAdapter.fromSparkCsv(Map.empty, date, date, writing = true),
+        writing = true).ok())
+    }
+
+    conf.setConfString("spark.sql.session.timeZone", "Europe/Paris")
+    SQLConf.withExistingConf(conf) {
+      val timestampRead = OmniTextOptionsAdapter.fromSparkCsv(Map.empty, timestamp, timestamp)
+      assert(!OmniTextOptionsAdapter.validateRead(timestampRead).ok())
+      val stringRead = OmniTextOptionsAdapter.fromSparkCsv(Map.empty, stringSchema, stringSchema)
+      assert(OmniTextOptionsAdapter.validateRead(stringRead).ok())
+    }
   }
 
   test("OpenCSVSerde retains its own defaults and string-only schema") {
@@ -95,8 +138,25 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
       new Configuration(), properties, numeric, numeric).fold(reason => fail(reason), identity)
     assert(!OmniTextOptionsAdapter.validateRead(invalid.toProperties).ok())
     properties.setProperty("skip.header.line.count", "1")
-    assert(OmniTextOptionsAdapter.fromHiveText(
-      new Configuration(), properties, stringSchema, stringSchema).isLeft)
+    val header = OmniTextOptionsAdapter.fromHiveText(
+      new Configuration(), properties, stringSchema, stringSchema)
+      .fold(reason => fail(reason), identity)
+    assert(header.toProperties("header") == "1")
+    assert(OmniTextOptionsAdapter.validateRead(header.toProperties).ok())
+
+    properties.setProperty("skip.header.line.count", "3")
+    val multipleHeaders = OmniTextOptionsAdapter.fromHiveText(
+      new Configuration(), properties, stringSchema, stringSchema)
+      .fold(reason => fail(reason), identity)
+    assert(multipleHeaders.toProperties("header") == "3")
+    assert(OmniTextOptionsAdapter.validateRead(multipleHeaders.toProperties).ok())
+    properties.setProperty("skip.header.line.count", "0")
+    Seq("separatorChar", "quoteChar", "escapeChar").foreach { key =>
+      properties.setProperty(key, "||")
+      assert(OmniTextOptionsAdapter.fromHiveText(
+        new Configuration(), properties, stringSchema, stringSchema).isLeft, key)
+      properties.remove(key)
+    }
   }
 
   test("default Spark Text descriptor is phase-one native compatible") {
@@ -155,6 +215,8 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
     properties.setProperty("field.delim", "|")
     properties.setProperty("serialization.null.format", "NULL")
     properties.setProperty("timestamp.formats", "yyyy/MM/dd HH:mm:ss,yyyy-MM-dd HH:mm:ss")
+    properties.setProperty("skip.header.line.count", "3")
+    properties.setProperty("serialization.last.column.takes.rest", "true")
     val schema = new StructType().add("name", StringType).add("age", IntegerType)
 
     val descriptor = OmniTextOptionsAdapter
@@ -166,6 +228,8 @@ class OmniTextOptionsAdapterSuite extends AnyFunSuite {
     assert(descriptor.toProperties("field_delimiter") == "|")
     assert(descriptor.toProperties("nullValue") == "NULL")
     assert(descriptor.toProperties(OmniTextOptionsAdapter.TimestampFormatCountKey) == "2")
+    assert(descriptor.toProperties("header") == "3")
+    assert(descriptor.toProperties("text_last_column_takes_rest") == "true")
     assert(descriptor.toProperties("text_timestamp_format_0") == "yyyy/MM/dd HH:mm:ss")
     assert(descriptor.toProperties("text_timestamp_format_1") == "yyyy-MM-dd HH:mm:ss")
     assert(OmniTextOptionsAdapter.validateRead(descriptor.toProperties).ok())

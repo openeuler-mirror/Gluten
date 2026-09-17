@@ -15,7 +15,8 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
     auto codecKind = static_cast<int>(options.codec_kind());
     const bool rawLine = sourceKind == 1 && codecKind == 1;
     const bool lazySimple = sourceKind == 2 && codecKind == 2;
-    const bool csv = (sourceKind == 2 || sourceKind == 3) && codecKind == 3;
+    const bool sparkCsv = sourceKind == 3 && codecKind == 3;
+    const bool csv = (sourceKind == 2 && codecKind == 3) || sparkCsv;
     if (!rawLine && !lazySimple && !csv) {
         throw std::runtime_error(
             "Unsupported Text source/codec combination.");
@@ -36,7 +37,7 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         throw std::runtime_error("Unsupported Text compression codec: " + compression);
     }
     std::unordered_map<std::string, std::string> result = {
-        {"text.source_kind", sourceKind == 3 ? "SPARK_CSV" : rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
+        {"text.source_kind", sparkCsv ? "SPARK_CSV" : rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
         {"text.codec_kind", csv ? "CSV" : rawLine ? "RAW_LINE" : "LAZY_SIMPLE"},
         {"text.charset", options.charset()},
         {"text.line_separator", options.line_separator()},
@@ -53,6 +54,12 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         if (csv) {
             result["text.quote"] = options.quote();
             result["text.parse_mode"] = "PERMISSIVE";
+            result["text.empty_value"] = options.empty_value();
+            result["text.ignore_leading_whitespace"] =
+                options.ignore_leading_whitespace() ? "true" : "false";
+            result["text.ignore_trailing_whitespace"] =
+                options.ignore_trailing_whitespace() ? "true" : "false";
+            result["text.comment"] = options.comment();
         }
         if (options.field_delimiter().size() != 1) {
             throw std::runtime_error("LazySimple field delimiter must be exactly one byte.");
@@ -60,8 +67,8 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         if (options.escape().size() > 1) {
             throw std::runtime_error("LazySimple escape delimiter must be empty or one byte.");
         }
-        if (options.header() > 1) {
-            throw std::runtime_error("LazySimple skip header count must be 0 or 1.");
+        if (sparkCsv && options.header() > 1) {
+            throw std::runtime_error("Spark CSV header count must be 0 or 1.");
         }
         result["text.field_delimiter"] = options.field_delimiter();
         result["text.null_literal"] = options.null_value();
@@ -69,7 +76,8 @@ std::unordered_map<std::string, std::string> ParseTextOptions(
         result["text.escape_char"] = options.escape();
         result["text.skip_input_lines"] = std::to_string(options.header());
         result["text.emit_header"] = "false";
-        result["text.last_column_takes_rest"] = "false";
+        result["text.last_column_takes_rest"] =
+            options.last_column_takes_rest() ? "true" : "false";
     }
     return result;
 }
