@@ -35,6 +35,7 @@
 #include "memory/allocator.h"
 #endif
 #include "config/OmniConfig.h"
+#include "util/config/QueryConfig.h"
 #include "compute/ProtobufUtils.h"
 #include "substrait/SubstraitToOmniPlan.h"
 #include "SparkJniWrapper.hh"
@@ -396,7 +397,10 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWr
 {
     JNI_FUNC_START
         auto ctx = GetRuntime(env, wrapper);
-        auto &conf = ctx->GetConfMap();
+        // Runtime configuration is shared by kernels created from the same native runtime.
+        // Keep the Spark task partition id in a per-kernel copy to avoid leaking it across tasks.
+        auto conf = ctx->GetConfMap();
+        conf[omniruntime::config::QueryConfig::kSparkPartitionId] = std::to_string(partitionId);
 
         auto buf = getByteArrayElementsSafe(env, planArr);
         auto planSize = env->GetArrayLength(planArr);

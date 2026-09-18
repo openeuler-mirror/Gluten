@@ -61,7 +61,7 @@ WholeStageResultIterator::WholeStageResultIterator(MemoryManager *memoryManager,
                 starts[idx],
                 lengths[idx],
                 partitionKeys,
-                std::unordered_map<std::string, std::string>(),
+                scanInfo->customSplitInfo,
                 nullptr,
                 std::unordered_map<std::string, std::string>(),
                 std::unordered_map<std::string, std::string>(),
@@ -240,6 +240,10 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             if (dfp) {
                 configs[config::QueryConfig::kDynamicFilterPushdownEnabledSpark] = "true";
             }
+        }
+        if (omniCfg_->ValueExists(config::QueryConfig::kSparkPartitionId)) {
+            configs[config::QueryConfig::kSparkPartitionId] =
+                omniCfg_->Get<std::string>(config::QueryConfig::kSparkPartitionId, "0");
         }
         if (omniCfg_->Get<bool>(kSparkShuffleSpillCompress, true)) {
             configs[config::QueryConfig::kSpillCompressionKind] = omniCfg_->Get<std::string>(kSpillCompressionKind,

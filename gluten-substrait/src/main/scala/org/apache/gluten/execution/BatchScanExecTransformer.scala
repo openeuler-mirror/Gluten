@@ -118,7 +118,13 @@ abstract class BatchScanExecTransformerBase(
     pushdownFilters = filters
   }
 
-  override def filterExprs(): Seq[Expression] = pushdownFilters
+  override def filterExprs(): Seq[Expression] = {
+    if (BackendsApiManager.getSettings.supportNativeScanFilter(fileFormat)) {
+      pushdownFilters
+    } else {
+      Seq.empty
+    }
+  }
 
   override def getMetadataColumns(): Seq[AttributeReference] = Seq.empty
 
@@ -135,6 +141,9 @@ abstract class BatchScanExecTransformerBase(
     case fileScan: FileScan => fileScan.readDataSchema
     case _ => new StructType()
   }
+
+  override def getProperties: Map[String, String] =
+    BackendsApiManager.getSettings.getSubstraitReadFilePropertiesV2(scan)
 
   override def getRootPathsInternal: Seq[String] = {
     scan match {

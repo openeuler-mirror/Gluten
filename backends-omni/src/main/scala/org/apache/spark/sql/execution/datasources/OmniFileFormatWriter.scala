@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution.datasources
 import org.apache.gluten.datasources.OmniOrcFormatWriterInjects
 import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.{OmniParquetFileFormat, OmniParquetFormatWriterInjects}
+import org.apache.gluten.datasources.text.{OmniTextFileFormat, OmniTextFormatWriterInjects, OmniTextOptionsAdapter}
 import org.apache.gluten.execution.{DeltaNativeParquetWrite, TransformSupport}
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
 import org.apache.hadoop.conf.Configuration
@@ -45,7 +46,11 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOutputWriterSpec
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
+import org.apache.spark.sql.execution.datasources.text.TextFileFormat
+import org.apache.spark.sql.execution.datasources.csv.CSVFileFormat
+import org.apache.gluten.datasources.text.OmniCsvFileFormat
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.{SerializableConfiguration, Utils}
 
 import java.util.{Date, UUID}
@@ -53,6 +58,23 @@ import java.util.{Date, UUID}
 
 /** A helper object for writing FileFormat data out to a location. */
 object OmniFileFormatWriter extends Logging {
+
+  private[datasources] def resolveTextNativeFormat(
+      nativeEnabled: Boolean,
+      fileFormat: FileFormat,
+      dataSchema: StructType,
+      options: Map[String, String]): Option[String] = fileFormat match {
+    case _: CSVFileFormat if nativeEnabled &&
+        OmniTextOptionsAdapter.validateCsv(OmniTextOptionsAdapter.fromSparkCsv(
+          options, dataSchema, dataSchema, writing = true), writing = true).ok() =>
+      Some("csv")
+    case _: TextFileFormat
+        if nativeEnabled &&
+          OmniTextOptionsAdapter.validateWrite(dataSchema.fields, options).ok() =>
+      Some("text")
+    case _ => None
+  }
+
   /** Describes how output files should be placed in the filesystem. */
   case class OutputSpec(
                          outputPath: String,
@@ -143,11 +165,26 @@ object OmniFileFormatWriter extends Logging {
     val caseInsensitiveOptions = CaseInsensitiveMap(options)
 
     val dataSchema = dataColumns.toStructType
-    val nativeFormat = sparkSession.sparkContext.getLocalProperty("nativeFormat")
+    // ORC resolves its writer format from the concrete FileFormat at prepareWrite time. Keep the
+    // same execution-side guarantee for Text, whose format local property may be lost between
+    // physical-plan post rules and nested/AQE write execution. Other formats retain the existing
+    // local-property path unchanged.
+    val textNativeFormat = resolveTextNativeFormat(
+      nativeEnabled, fileFormat, dataSchema, options)
+    if (nativeEnabled && (fileFormat.isInstanceOf[TextFileFormat] ||
+        fileFormat.isInstanceOf[CSVFileFormat]) && textNativeFormat.isEmpty) {
+      // Keep unsupported Text schemas/options on Spark's writer even if a stale write property is
+      // present. This guard is deliberately Text-only; other formats keep their existing path.
+      nativeEnabled = false
+    }
+    val nativeFormat = textNativeFormat.getOrElse(
+      sparkSession.sparkContext.getLocalProperty("nativeFormat"))
     val effectiveFileFormat = if (nativeEnabled) {
       (nativeFormat, fileFormat) match {
         case ("orc", _: OrcFileFormat) => new OmniOrcFileFormat()
         case ("parquet", _: ParquetFileFormat) => new OmniParquetFileFormat()
+        case ("text", _: TextFileFormat) => new OmniTextFileFormat()
+        case ("csv", _: CSVFileFormat) => new OmniCsvFileFormat()
         case _ => fileFormat
       }
     } else {
@@ -223,22 +260,33 @@ object OmniFileFormatWriter extends Logging {
         committer = committer,
         concurrentOutputWriterSpecFunc = concurrentOutputWriterSpecFunc
       )
-      executeWrite(sparkSession, plan, writeSpec, job, nativeEnabled)
+      executeWrite(sparkSession, plan, writeSpec, job, nativeEnabled, textNativeFormat)
     } else {
       executeWrite(sparkSession, plan, job, description, committer, outputSpec,
-        requiredOrdering, partitionColumns, sortColumns, orderingMatched, nativeEnabled)
+        requiredOrdering, partitionColumns, sortColumns, orderingMatched, nativeEnabled,
+        textNativeFormat)
     }
   }
   // scalastyle:on argcount
 
   def nativeWrap(plan: SparkPlan, session: SparkSession): SparkPlan = {
+    nativeWrap(plan, session, None)
+  }
+
+  private def nativeWrap(
+      plan: SparkPlan,
+      session: SparkSession,
+      nativeFormatOverride: Option[String]): SparkPlan = {
     var wrapped: SparkPlan = plan
-    val nativeFormat = session.sparkContext.getLocalProperty("nativeFormat")
+    val nativeFormat = nativeFormatOverride.getOrElse(
+      session.sparkContext.getLocalProperty("nativeFormat"))
     GlutenFormatFactory(nativeFormat) match {
       case orcInjects: OmniOrcFormatWriterInjects =>
         orcInjects.execWriterWrappedSparkPlan(wrapped)
       case parquetInjects: OmniParquetFormatWriterInjects =>
         parquetInjects.execWriterWrappedSparkPlan(wrapped)
+      case textInjects: OmniTextFormatWriterInjects =>
+        textInjects.execWriterWrappedSparkPlan(wrapped)
       case other =>
         throw new IllegalStateException(s"Unexpected GlutenFormatWriterInjects: ${other.getClass.getName}")
     }
@@ -254,10 +302,12 @@ object OmniFileFormatWriter extends Logging {
                             requiredOrdering: Seq[Expression],
                             partitionColumns: Seq[Attribute],
                             sortColumns: Seq[Attribute],
-                            orderingMatched: Boolean, nativeEnabled : Boolean): Set[String] = {
+                            orderingMatched: Boolean,
+                            nativeEnabled: Boolean,
+                            nativeFormatOverride: Option[String]): Set[String] = {
     val projectList = V1WritesUtils.convertEmptyToNull(plan.output, partitionColumns)
     val empty2NullPlan = if (nativeEnabled && projectList.nonEmpty) {
-      nativeWrap(ProjectExec(projectList, plan), sparkSession)
+      nativeWrap(ProjectExec(projectList, plan), sparkSession, nativeFormatOverride)
     } else if (projectList.nonEmpty) {
       ProjectExec(projectList, plan)
     } else {
@@ -270,7 +320,7 @@ object OmniFileFormatWriter extends Logging {
       } else {
         val sortPlan = createSortPlan(empty2NullPlan, requiredOrdering, outputSpec)
         if (nativeEnabled) {
-          (nativeWrap(sortPlan, sparkSession), None)
+          (nativeWrap(sortPlan, sparkSession, nativeFormatOverride), None)
         } else {
           val concurrentOutputWriterSpec = createConcurrentOutputWriterSpec(
             sparkSession, sortPlan, sortColumns)
@@ -360,7 +410,9 @@ object OmniFileFormatWriter extends Logging {
                             session: SparkSession,
                             planForWrites: SparkPlan,
                             writeFilesSpec: WriteFilesSpec,
-                            job: Job, nativeEnabled : Boolean): Set[String] = {
+                            job: Job,
+                            nativeEnabled: Boolean,
+                            nativeFormatOverride: Option[String]): Set[String] = {
 
 
     val committer = writeFilesSpec.committer
@@ -371,7 +423,7 @@ object OmniFileFormatWriter extends Logging {
 
     val nPlan = planForWrites match {
       case oldPlan: OmniColumnarWriteFilesExec =>
-        OmniColumnarWriteFilesExec(nativeWrap(oldPlan.left, session), oldPlan.right, oldPlan.t, oldPlan.fileFormat, oldPlan.partitionColumns,
+        OmniColumnarWriteFilesExec(nativeWrap(oldPlan.left, session, nativeFormatOverride), oldPlan.right, oldPlan.t, oldPlan.fileFormat, oldPlan.partitionColumns,
           oldPlan.bucketSpec, oldPlan.options, oldPlan.staticPartitions)
       case _ =>
         planForWrites

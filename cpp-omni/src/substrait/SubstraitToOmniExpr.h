@@ -66,8 +66,9 @@ public:
     /// subParser: A Substrait parser used to convert Substrait representations
     /// into recognizable representations. functionMap: A pre-constructed map
     /// storing the relations between the function id and the function name.
-    explicit SubstraitOmniExprConverter(const std::unordered_map<uint64_t, std::string> &functionMap)
-        : functionMap_(functionMap)
+    SubstraitOmniExprConverter(const std::unordered_map<uint64_t, std::string> &functionMap,
+        const std::unordered_map<std::string, std::string> &confMap)
+        : queryConfig_(confMap), functionMap_(functionMap)
     {}
 
     /// Stores the variant and its type.
@@ -110,6 +111,8 @@ public:
     TypedExprPtr toLambdaExpr(std::vector<Expr *> &&args, const DataTypesPtr &inputType);
 
 private:
+    config::QueryConfig queryConfig_;
+
     /// Memory pool.
     // memory::MemoryPool* pool_;
 

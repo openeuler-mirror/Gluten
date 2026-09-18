@@ -94,15 +94,26 @@ trait BasicScanExecTransformer extends LeafTransformSupport with BaseDataSource 
       case _ =>
     }
 
+    val properties = getProperties
     val validationResult = BackendsApiManager.getSettings
       .validateScanExec(
         fileFormat,
         fields,
         getRootFilePaths,
-        getProperties,
+        properties,
         Some(serializableHadoopConf))
     if (!validationResult.ok()) {
       return validationResult
+    }
+
+    val partitionValidationResult = BackendsApiManager.getSettings
+      .validateScanInputPartitions(
+        fileFormat,
+        getPartitions,
+        properties,
+        Some(serializableHadoopConf))
+    if (!partitionValidationResult.ok()) {
+      return partitionValidationResult
     }
 
     val substraitContext = new SubstraitContext

@@ -297,6 +297,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
         std::vector<DataTypeId> argTypes(args.size());
         std::transform(args.begin(), args.end(), argTypes.begin(),
             [](Expr *expr) -> DataTypeId { return expr->GetReturnTypeId(); });
+        if (funcName == "spark_partition_id") {
+            return new FuncExpr(funcName, args, std::move(outputType), queryConfig_);
+        }
         return new FuncExpr(funcName, args, std::move(outputType));
     } else if (type == COALESCE_OMNI_EXPR_TYPE) {
         if (args.size() < 2) {

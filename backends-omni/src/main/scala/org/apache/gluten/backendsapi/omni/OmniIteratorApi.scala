@@ -18,6 +18,7 @@ package org.apache.gluten.backendsapi.omni
 
 import org.apache.gluten.backendsapi.{BackendsApiManager, IteratorApi}
 import org.apache.gluten.config.GlutenNumaBindingInfo
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.execution._
 import org.apache.gluten.iterator.Iterators
 import org.apache.gluten.metrics.{IMetrics, OmniIteratorMetricsJniWrapper}
@@ -45,8 +46,49 @@ import java.nio.charset.StandardCharsets
 import java.time.ZoneOffset
 import java.util.{UUID, ArrayList => JArrayList, HashMap => JHashMap, Map => JMap}
 import scala.collection.JavaConverters._
+import scala.util.Try
 
 class OmniIteratorApiImpl extends IteratorApi with Logging {
+
+  private def setLazySimpleFileSchema(
+      localFilesNode: LocalFilesNode,
+      scan: BasicScanExecTransformer): Unit = {
+    val properties = scan.getProperties
+    if (scan.fileFormat == ReadFileFormat.TextReadFormat &&
+        properties.get(OmniTextOptionsAdapter.CodecKindKey)
+          .exists(codec => codec == OmniTextOptionsAdapter.LazySimpleCodec ||
+            codec == OmniTextOptionsAdapter.CsvCodec)) {
+      val fileSchema = properties
+        .get(OmniTextOptionsAdapter.FileSchemaKey)
+        .flatMap(value => Try(DataType.fromJson(value)).toOption)
+        .collect { case schema: StructType => schema }
+        .getOrElse(scan.getDataSchema)
+      localFilesNode.setFileSchema(fileSchema)
+    }
+  }
+
+  private def serializeLocalFiles(
+      localFilesNode: LocalFilesNode,
+      scan: BasicScanExecTransformer): Array[Byte] = {
+    setLazySimpleFileSchema(localFilesNode, scan)
+    val localFiles = localFilesNode.toProtobuf
+    if (scan.fileFormat != ReadFileFormat.TextReadFormat) {
+      return localFiles.toByteArray
+    }
+    val builder = localFiles.toBuilder
+    val paths = (0 until builder.getItemsCount).map(builder.getItems(_).getUriFile)
+    val conf = scan.serializableHadoopConf.value
+    val compression = OmniTextOptionsAdapter
+      .resolveInputCompression(paths, conf)
+      .fold(reason => throw new IllegalArgumentException(reason), identity)
+    (0 until builder.getItemsCount).foreach { itemIndex =>
+      val item = builder.getItemsBuilder(itemIndex)
+      if (item.hasText) {
+        item.setText(item.getText.toBuilder.setCompressionCodec(compression))
+      }
+    }
+    builder.build().toByteArray
+  }
 
   override def genSplitInfo(
       partition: InputPartition,
@@ -95,10 +137,17 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
 
     splitInfos.zipWithIndex.map {
       case (splitInfos, index) =>
+        val serializedSplits = splitInfos.zipWithIndex.map {
+          case (split, scanIndex) =>
+            val localFilesNode = split.asInstanceOf[LocalFilesNode]
+            scans.lift(scanIndex)
+              .map(scan => serializeLocalFiles(localFilesNode, scan))
+              .getOrElse(localFilesNode.toProtobuf.toByteArray)
+        }.toArray
         GlutenPartition(
           index,
           planByteArray,
-          splitInfos.map(_.asInstanceOf[LocalFilesNode].toProtobuf.toByteArray).toArray,
+          serializedSplits,
           splitInfos.flatMap(_.preferredLocations().asScala).toArray
         )
     }

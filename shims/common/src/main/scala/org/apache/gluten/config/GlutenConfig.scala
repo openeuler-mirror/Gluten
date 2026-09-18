@@ -130,6 +130,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
   def enabledVecPredicateFilter: Boolean =
     conf.getConf(COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER)
 
+  def enableOmniText: Boolean =
+    conf.getConf(COLUMNAR_OMNI_TEXT_ENABLED)
+
   // Whether to use GlutenShuffleManager (experimental).
   def isUseGlutenShuffleManager: Boolean =
     conf
@@ -2666,6 +2669,13 @@ object GlutenConfig {
     .doc("enable vectorized predicate filtering")
     .booleanConf
     .createWithDefault(true)
+
+  val COLUMNAR_OMNI_TEXT_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.omni.text.enabled")
+      .internal()
+      .doc("enable native Text datasource support in the Omni backend")
+      .booleanConf
+      .createWithDefault(true)
 
   val COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE =
     buildConf("spark.gluten.sql.columnar.backend.omni.scan.filterWhileDecode.enabled")

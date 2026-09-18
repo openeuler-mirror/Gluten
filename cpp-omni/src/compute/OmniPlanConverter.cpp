@@ -6,6 +6,83 @@
 
 namespace omniruntime
 {
+namespace
+{
+std::unordered_map<std::string, std::string> ParseTextOptions(
+    const substrait::ReadRel_LocalFiles_FileOrFiles_TextReadOptions& options)
+{
+    auto sourceKind = static_cast<int>(options.source_kind());
+    auto codecKind = static_cast<int>(options.codec_kind());
+    const bool rawLine = sourceKind == 1 && codecKind == 1;
+    const bool lazySimple = sourceKind == 2 && codecKind == 2;
+    const bool sparkCsv = sourceKind == 3 && codecKind == 3;
+    const bool csv = (sourceKind == 2 && codecKind == 3) || sparkCsv;
+    if (!rawLine && !lazySimple && !csv) {
+        throw std::runtime_error(
+            "Unsupported Text source/codec combination.");
+    }
+    if (options.whole_text()) {
+        throw std::runtime_error("Unsupported Text option: whole_text must be false.");
+    }
+    if (!options.line_separator().empty()) {
+        throw std::runtime_error("Unsupported Text option: custom line separator.");
+    }
+    if (options.charset() != "UTF-8") {
+        throw std::runtime_error("Unsupported Text option: charset must be UTF-8.");
+    }
+    const auto& compression = options.compression_codec();
+    const bool compressed = compression != "NONE" && compression != "";
+    if (compressed && compression != "GZIP" && compression != "DEFLATE" &&
+        compression != "SNAPPY" && compression != "LZ4") {
+        throw std::runtime_error("Unsupported Text compression codec: " + compression);
+    }
+    std::unordered_map<std::string, std::string> result = {
+        {"text.source_kind", sparkCsv ? "SPARK_CSV" : rawLine ? "SPARK_TEXT" : "HIVE_TEXT"},
+        {"text.codec_kind", csv ? "CSV" : rawLine ? "RAW_LINE" : "LAZY_SIMPLE"},
+        {"text.charset", options.charset()},
+        {"text.line_separator", options.line_separator()},
+        {"text.compression_codec", options.compression_codec()},
+        {"text.splitable", compressed ? "false" : "true"},
+        {"text.session_timezone", options.session_timezone()},
+        {"text.date_format", options.date_format()},
+        {"text.timestamp_format_count", std::to_string(options.timestamp_formats_size())},
+        {"text.whole_text", options.whole_text() ? "true" : "false"}};
+    for (int index = 0; index < options.timestamp_formats_size(); ++index) {
+        result["text.timestamp_format_" + std::to_string(index)] = options.timestamp_formats(index);
+    }
+    if (lazySimple || csv) {
+        if (csv) {
+            result["text.quote"] = options.quote();
+            result["text.parse_mode"] = "PERMISSIVE";
+            result["text.empty_value"] = options.empty_value();
+            result["text.ignore_leading_whitespace"] =
+                options.ignore_leading_whitespace() ? "true" : "false";
+            result["text.ignore_trailing_whitespace"] =
+                options.ignore_trailing_whitespace() ? "true" : "false";
+            result["text.comment"] = options.comment();
+        }
+        if (options.field_delimiter().size() != 1) {
+            throw std::runtime_error("LazySimple field delimiter must be exactly one byte.");
+        }
+        if (options.escape().size() > 1) {
+            throw std::runtime_error("LazySimple escape delimiter must be empty or one byte.");
+        }
+        if (sparkCsv && options.header() > 1) {
+            throw std::runtime_error("Spark CSV header count must be 0 or 1.");
+        }
+        result["text.field_delimiter"] = options.field_delimiter();
+        result["text.null_literal"] = options.null_value();
+        result["text.escape_enabled"] = options.escape().empty() ? "false" : "true";
+        result["text.escape_char"] = options.escape();
+        result["text.skip_input_lines"] = std::to_string(options.header());
+        result["text.emit_header"] = "false";
+        result["text.last_column_takes_rest"] =
+            options.last_column_takes_rest() ? "true" : "false";
+    }
+    return result;
+}
+}
+
 OmniPlanConverter::OmniPlanConverter(const std::vector<std::shared_ptr<ResultIterator>> &inputIters,
     mem::MemoryPool *OmniPool, const std::unordered_map<std::string, std::string> &confMap,
     const std::optional<std::string> writeFilesTempPath, bool validationMode)
@@ -26,6 +103,7 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
     splitInfo->lengths.reserve(fileList.size());
     splitInfo->partitionColumns.reserve(fileList.size());
     splitInfo->metadataColumns.reserve(fileList.size());
+    std::string serializedFileSchema;
     for (const auto& file : fileList) {
         // Expect all Partitions share the same index.
         splitInfo->partitionIndex = file.partition_index();
@@ -55,6 +133,36 @@ std::shared_ptr<SplitInfo> parseScanSplitInfo(
             case SubstraitFileFormatCase::kParquet:
                 splitInfo->format = FileFormat::PARQUET;
                 break;
+            case SubstraitFileFormatCase::kText: {
+                splitInfo->format = FileFormat::TEXT;
+                auto textOptions = ParseTextOptions(file.text());
+                if (!splitInfo->customSplitInfo.empty() &&
+                    splitInfo->customSplitInfo != textOptions) {
+                    throw std::runtime_error("Text options must be identical within one LocalFiles split.");
+                }
+                splitInfo->customSplitInfo = std::move(textOptions);
+                if (splitInfo->customSplitInfo.at("text.codec_kind") == "LAZY_SIMPLE" ||
+                    splitInfo->customSplitInfo.at("text.codec_kind") == "CSV") {
+                    if (!file.has_schema() || file.schema().names_size() == 0) {
+                        throw std::runtime_error("LazySimple Text split requires the full file schema.");
+                    }
+                    const auto currentSchema = file.schema().SerializeAsString();
+                    if (!serializedFileSchema.empty() && serializedFileSchema != currentSchema) {
+                        throw std::runtime_error("Text file schema must be identical within one LocalFiles split.");
+                    }
+                    if (serializedFileSchema.empty()) {
+                        serializedFileSchema = currentSchema;
+                        std::vector<std::string> names;
+                        names.reserve(file.schema().names_size());
+                        for (const auto& name : file.schema().names()) {
+                            names.emplace_back(name);
+                        }
+                        auto types = SubstraitParser::ParseNamedStruct(file.schema());
+                        splitInfo->fileSchema = ROW(std::move(names), std::move(types));
+                    }
+                }
+                break;
+            }
             default:
                 splitInfo->format = FileFormat::UNKNOWN;
                 break;

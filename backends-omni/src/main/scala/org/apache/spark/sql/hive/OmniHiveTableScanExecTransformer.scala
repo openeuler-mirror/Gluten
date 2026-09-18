@@ -16,12 +16,15 @@
  */
 package org.apache.spark.sql.hive
 
+import java.util.TimeZone
+
 import com.google.protobuf.StringValue
 import com.huawei.boostkit.spark.jni.{OrcPushFilterBuilder, ParquetPushFilterBuilder}
 import io.substrait.proto.NamedStruct
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER
 import org.apache.gluten.config.GlutenConfig.COLUMNAR_OMNI_ENABLE_SCAN_FILTER_WHILE_DECODE
+import org.apache.gluten.datasources.text.OmniTextOptionsAdapter
 import org.apache.gluten.execution.{BasicScanExecTransformer, TransformContext}
 import org.apache.gluten.expression.{ConverterUtils, ExpressionConverter}
 import org.apache.gluten.metrics.MetricsUpdater
@@ -148,6 +151,26 @@ case class OmniHiveTableScanExecTransformer(
   }
 
   override def getProperties: Map[String, String] = {
+    if (fileFormat == ReadFileFormat.TextReadFormat &&
+        relation.tableMeta.storage.serde.exists(OmniTextOptionsAdapter.isSupportedHiveSerde)) {
+      val partitionNames = getPartitionSchema.fieldNames.toSet
+      val readDataSchema = attributesToStructType(
+        outputAttributes().filterNot(attribute => partitionNames.contains(attribute.name)))
+      return OmniTextOptionsAdapter
+        .fromHiveText(
+          session.sessionState.newHadoopConf(),
+          tableDesc.getProperties,
+          getDataSchema,
+          readDataSchema)
+        .fold(
+          OmniTextOptionsAdapter.validationFailureProperties,
+          _.toProperties +
+            (OmniTextOptionsAdapter.SessionTimezoneKey -> TimeZone.getDefault.getID))
+    }
+
+    // Preserve the existing property mapping for all other formats and SerDes. Unsupported Text
+    // SerDes deliberately lack a source/codec pair and therefore fall back instead of selecting
+    // RawLine or LazySimple by mistake.
     var properties: Map[String, String] = Map()
     tableDesc.getProperties
       .entrySet()
