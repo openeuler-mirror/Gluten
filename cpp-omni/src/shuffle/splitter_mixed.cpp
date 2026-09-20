@@ -79,6 +79,11 @@ void Splitter::InitializeMixedColumnarIndices(MixedVectorBatch& mixedBatch)
     }
     
     auto num_mixed_complex = mixed_complex_type_array_idx_.size();
+    for (auto &partitionBatches : partition_mixed_complex_type_proto_vecs_) {
+        for (auto &colBatches : partitionBatches) {
+            ClearComplexTypeBatches(colBatches);
+        }
+    }
     partition_mixed_complex_type_proto_vecs_.clear();
     partition_mixed_complex_type_proto_vecs_.resize(num_partitions_);
     for (auto i = 0; i < num_partitions_; ++i) {
@@ -686,15 +691,8 @@ int Splitter::SplitComplexColumnsForMixed(MixedVectorBatch& mixedBatch)
             
             DataTypePtr dataType = inputDataTypes_[col_idx_schema];
 
-            if (partition_mixed_complex_type_proto_vecs_[pid][complex_col_idx] == nullptr) {
-                spark::Vec* proto_vec = new spark::Vec();
-                partition_mixed_complex_type_proto_vecs_[pid][complex_col_idx] = proto_vec;
-                SerializeColumn(vector, row_ids, *proto_vec, dataType);
-            } else {
-                spark::Vec tmpVec;
-                SerializeColumn(vector, row_ids, tmpVec, dataType);
-                MergeProtoVec(*partition_mixed_complex_type_proto_vecs_[pid][complex_col_idx], tmpVec);
-            }
+            AppendComplexTypeRows(partition_mixed_complex_type_proto_vecs_[pid][complex_col_idx], vector, row_ids,
+                dataType);
         }
     }
 
@@ -1085,10 +1083,11 @@ int Splitter::protoSpillPartitionByMixed(int32_t partition_id, std::unique_ptr<B
                     case ShuffleTypeId::SHUFFLE_ARRAY:
                     case ShuffleTypeId::SHUFFLE_MAP:
                     case ShuffleTypeId::SHUFFLE_ROW: {
-                        if (isColumnarShuffle && mixed_complex_type_array_idx_.size() > 0 &&
-                            partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                            *vec = *partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                        } else {
+                        bool serialized = isColumnarShuffle && mixed_complex_type_array_idx_.size() > 0 &&
+                            SerializingComplexColumns(
+                                partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp],
+                                *vec, curBatch);
+                        if (!serialized) {
                             vec->mutable_values()->resize(0);
                             vec->mutable_nulls()->resize(0);
                         }
@@ -1138,9 +1137,7 @@ int Splitter::protoSpillPartitionByMixed(int32_t partition_id, std::unique_ptr<B
         }
     }
     for (size_t complexIdx = 0; complexIdx < mixed_complex_type_array_idx_.size(); ++complexIdx) {
-        if (partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx] != nullptr) {
-            partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx]->Clear();
-        }
+        ClearComplexTypeBatches(partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx]);
     }
     ClearPartitionMixedRefs(partition_id);
 
@@ -1246,10 +1243,11 @@ int32_t Splitter::ProtoWritePartitionByMixed(int32_t partition_id, std::unique_p
                 case ShuffleTypeId::SHUFFLE_ARRAY:
                 case ShuffleTypeId::SHUFFLE_MAP:
                 case ShuffleTypeId::SHUFFLE_ROW: {
-                    if (isColumnarShuffle && mixed_complex_type_array_idx_.size() > 0 &&
-                        partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                        *vec = *partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                    } else {
+                    bool serialized = isColumnarShuffle && mixed_complex_type_array_idx_.size() > 0 &&
+                        SerializingComplexColumns(
+                            partition_mixed_complex_type_proto_vecs_[partition_id][complexColIndexTmp],
+                            *vec, curBatch);
+                    if (!serialized) {
                         vec->mutable_values()->resize(0);
                         vec->mutable_nulls()->resize(0);
                     }
@@ -1299,9 +1297,7 @@ int32_t Splitter::ProtoWritePartitionByMixed(int32_t partition_id, std::unique_p
         }
     }
     for (size_t complexIdx = 0; complexIdx < mixed_complex_type_array_idx_.size(); ++complexIdx) {
-        if (partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx] != nullptr) {
-            partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx]->Clear();
-        }
+        ClearComplexTypeBatches(partition_mixed_complex_type_proto_vecs_[partition_id][complexIdx]);
     }
     ClearPartitionMixedRefs(partition_id);
 

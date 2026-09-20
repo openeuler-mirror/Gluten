@@ -19,6 +19,7 @@
 
 #include "splitter.h"
 #include "utils.h"
+#include <algorithm>
 
 #include <string>
 
@@ -985,19 +986,65 @@ int Splitter::SplitComplexColumns(VectorBatch& vb)
             int32_t col_idx_schema = singlePartitionFlag ? col_idx_vb : (col_idx_vb - 1);
             DataTypePtr dataType = inputDataTypes_[col_idx_schema];
 
-            if (partition_complex_type_proto_vecs_[pid][complex_col_idx] == nullptr) {
-                spark::Vec* proto_vec = new spark::Vec();
-                partition_complex_type_proto_vecs_[pid][complex_col_idx] = proto_vec;
-                SerializeColumn(vector, row_ids, *proto_vec, dataType);
-            } else {
-                spark::Vec tmpVec;
-                SerializeColumn(vector, row_ids, tmpVec, dataType);
-                MergeProtoVec(*partition_complex_type_proto_vecs_[pid][complex_col_idx], tmpVec);
-            }
+            AppendComplexTypeRows(partition_complex_type_proto_vecs_[pid][complex_col_idx], vector, row_ids,
+                dataType);
         }
     }
 
     return 0;
+}
+
+/// Appends rows of one complex type column to a partition's proto batch list,
+/// starting a new batch every spill_batch_row_num rows. The write path emits
+/// one VecBatch per spill_batch_row_num rows and slices the fixed width and
+/// binary columns accordingly, so a complex type batch that spans more rows
+/// than that would be re-sent with every VecBatch of the partition while the
+/// rows past the first batch would never be sent at all.
+void Splitter::AppendComplexTypeRows(std::vector<spark::Vec *> &protoBatches, BaseVector *vector,
+    const std::vector<uint32_t> &row_ids, DataTypePtr dataType)
+{
+    const int32_t batchRowNum = std::max<int32_t>(1, static_cast<int32_t>(options_.spill_batch_row_num));
+    const size_t totalRows = row_ids.size();
+    size_t copiedRows = 0;
+
+    while (copiedRows < totalRows) {
+        if (protoBatches.empty() || protoBatches.back()->size() >= batchRowNum) {
+            protoBatches.push_back(new spark::Vec());
+        }
+        spark::Vec *current = protoBatches.back();
+        size_t room = static_cast<size_t>(batchRowNum - current->size());
+        size_t takeRows = std::min(room, totalRows - copiedRows);
+
+        std::vector<uint32_t> slice(row_ids.begin() + copiedRows, row_ids.begin() + copiedRows + takeRows);
+        if (current->size() == 0) {
+            SerializeColumn(vector, slice, *current, dataType);
+        } else {
+            spark::Vec tmpVec;
+            SerializeColumn(vector, slice, tmpVec, dataType);
+            MergeProtoVec(*current, tmpVec);
+        }
+        copiedRows += takeRows;
+    }
+}
+
+/// Copies the complex type proto batch produced for VecBatch number curBatch.
+/// Returns false when the partition has no batch at that index, leaving vec
+/// untouched for the caller to fill in.
+bool Splitter::SerializingComplexColumns(const std::vector<spark::Vec *> &protoBatches, spark::Vec &vec, int curBatch)
+{
+    if (curBatch < 0 || curBatch >= static_cast<int>(protoBatches.size()) || protoBatches[curBatch] == nullptr) {
+        return false;
+    }
+    vec = *protoBatches[curBatch];
+    return true;
+}
+
+void Splitter::ClearComplexTypeBatches(std::vector<spark::Vec *> &protoBatches)
+{
+    for (auto *protoBatch : protoBatches) {
+        delete protoBatch;
+    }
+    protoBatches.clear();
 }
 
 void Splitter::MergeProtoVec(spark::Vec& dst, const spark::Vec& src)
@@ -1806,9 +1853,8 @@ int32_t Splitter::ProtoWritePartition(int32_t partition_id, std::unique_ptr<Buff
                 case ShuffleTypeId::SHUFFLE_ARRAY:
                 case ShuffleTypeId::SHUFFLE_MAP:
                 case ShuffleTypeId::SHUFFLE_ROW: {
-                    if (partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                        *vec = *partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                    }
+                    SerializingComplexColumns(partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp],
+                        *vec, curBatch);
                     complexColIndexTmp++;
                     break;
                 }
@@ -1855,8 +1901,7 @@ int32_t Splitter::ProtoWritePartition(int32_t partition_id, std::unique_ptr<Buff
         vc_partition_array_buffers_[partition_id][col].clear();
     }
     for (size_t complexIdx = 0; complexIdx < complex_type_array_idx_.size(); ++complexIdx) {
-        delete partition_complex_type_proto_vecs_[partition_id][complexIdx];
-        partition_complex_type_proto_vecs_[partition_id][complexIdx] = nullptr;
+        ClearComplexTypeBatches(partition_complex_type_proto_vecs_[partition_id][complexIdx]);
     }
 
     return 0;
@@ -2010,9 +2055,8 @@ int Splitter::protoSpillPartition(int32_t partition_id, std::unique_ptr<Buffered
                 case ShuffleTypeId::SHUFFLE_ARRAY:
                 case ShuffleTypeId::SHUFFLE_MAP:
                 case ShuffleTypeId::SHUFFLE_ROW: {
-                    if (partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp] != nullptr) {
-                        *vec = *partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp];
-                    }
+                    SerializingComplexColumns(partition_complex_type_proto_vecs_[partition_id][complexColIndexTmp],
+                        *vec, curBatch);
                     complexColIndexTmp++;
                     break;
                 }
@@ -2063,8 +2107,7 @@ int Splitter::protoSpillPartition(int32_t partition_id, std::unique_ptr<Buffered
         vc_partition_array_buffers_[partition_id][col].clear();
     }
     for (size_t complexIdx = 0; complexIdx < complex_type_array_idx_.size(); ++complexIdx) {
-        delete partition_complex_type_proto_vecs_[partition_id][complexIdx];
-        partition_complex_type_proto_vecs_[partition_id][complexIdx] = nullptr;
+        ClearComplexTypeBatches(partition_complex_type_proto_vecs_[partition_id][complexIdx]);
     }
 
     return 0;

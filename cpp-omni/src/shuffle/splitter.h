@@ -106,6 +106,17 @@ class Splitter {
 
     int SplitComplexColumns(VectorBatch& vb);
 
+    void AppendComplexTypeRows(std::vector<spark::Vec *> &protoBatches,
+                               BaseVector *vector,
+                               const std::vector<uint32_t> &row_ids,
+                               DataTypePtr dataType);
+
+    static bool SerializingComplexColumns(const std::vector<spark::Vec *> &protoBatches,
+                                          spark::Vec &vec,
+                                          int curBatch);
+
+    static void ClearComplexTypeBatches(std::vector<spark::Vec *> &protoBatches);
+
     void MergeProtoVec(spark::Vec& dst, const spark::Vec& src);
 
     int protoSpillPartition(int32_t partition_id, std::unique_ptr<BufferedOutputStream> &bufferStream);
@@ -234,9 +245,12 @@ class Splitter {
 
     /*
      * complex type protobuf vecs:
-     *  partition_complex_type_proto_vecs_[partition_id][col_id]
+     *  partition_complex_type_proto_vecs_[partition_id][col_id][protoBatch_id]
+     *
+     * Chunked at spill_batch_row_num rows, the same granularity the write path
+     * uses to slice the fixed width and binary columns into VecBatches.
      */
-    std::vector<std::vector<spark::Vec *>> partition_complex_type_proto_vecs_;
+    std::vector<std::vector<std::vector<spark::Vec *>>> partition_complex_type_proto_vecs_;
 
     spark::VecBatch *vecBatchProto = new VecBatch(); // protobuf 序列化对象结构
 
@@ -275,7 +289,7 @@ class Splitter {
     
     std::vector<std::vector<std::vector<std::vector<std::shared_ptr<Buffer>>>>> partition_mixed_cached_vectorbatch_;
     std::vector<std::vector<std::vector<VCBatchInfo>>> vc_partition_mixed_array_buffers_;
-    std::vector<std::vector<spark::Vec *>> partition_mixed_complex_type_proto_vecs_;
+    std::vector<std::vector<std::vector<spark::Vec *>>> partition_mixed_complex_type_proto_vecs_;
 
     std::vector<DataTypePtr> inputDataTypes_;
 
