@@ -132,6 +132,9 @@ abstract class BatchScanExecTransformerBase(
 
   override def getPartitions: Seq[InputPartition] = filteredFlattenPartitions
 
+  override protected def getPartitionsForValidation: Seq[InputPartition] =
+    scan.toBatch.planInputPartitions().toSeq
+
   override def getPartitionSchema: StructType = scan match {
     case fileScan: FileScan => fileScan.readPartitionSchema
     case _ => new StructType()

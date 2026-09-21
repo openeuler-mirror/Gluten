@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.FileSourceScanExecShim
-import org.apache.spark.sql.execution.datasources.HadoopFsRelation
+import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, PartitionDirectory}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
@@ -114,11 +114,18 @@ abstract class FileSourceScanExecTransformerBase(
 
   override def outputAttributes(): Seq[Attribute] = output
 
-  override def getPartitions: Seq[InputPartition] = {
+  override def getPartitions: Seq[InputPartition] =
+    inputPartitionsFor(dynamicallySelectedPartitions)
+
+  override protected def getPartitionsForValidation: Seq[InputPartition] =
+    inputPartitionsFor(selectedPartitions)
+
+  private def inputPartitionsFor(
+      partitions: Array[PartitionDirectory]): Seq[InputPartition] = {
     BackendsApiManager.getTransformerApiInstance.genInputPartitionSeq(
       relation,
       requiredSchema,
-      dynamicallySelectedPartitions,
+      partitions,
       output,
       bucketedScan,
       optionalBucketSet,

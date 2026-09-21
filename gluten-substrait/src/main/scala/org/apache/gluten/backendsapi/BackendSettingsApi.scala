@@ -57,12 +57,12 @@ trait BackendSettingsApi {
   def supportNativeScanFilter(format: ReadFileFormat): Boolean = true
 
   /**
-   * Validates the concrete input partitions of a scan. The default implementation is a no-op so
-   * adding a backend-specific file check does not change another backend's behavior.
+   * Validates static candidate partitions. The by-name argument avoids planning partitions for
+   * backends or formats that do not inspect files during validation.
    */
   def validateScanInputPartitions(
       format: ReadFileFormat,
-      partitions: Seq[InputPartition],
+      partitions: => Seq[InputPartition],
       properties: Map[String, String],
       serializableHadoopConf: Option[SerializableConfiguration] = None): ValidationResult =
     ValidationResult.succeeded

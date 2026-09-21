@@ -202,7 +202,7 @@ object OmniBackendSettings extends BackendSettingsApi {
 
   override def validateScanInputPartitions(
       format: ReadFileFormat,
-      partitions: Seq[InputPartition],
+      partitions: => Seq[InputPartition],
       properties: Map[String, String],
       serializableHadoopConf: Option[SerializableConfiguration]): ValidationResult = {
     val supportedTextCombination =
