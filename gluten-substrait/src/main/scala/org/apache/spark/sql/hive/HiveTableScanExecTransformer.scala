@@ -73,6 +73,16 @@ case class HiveTableScanExecTransformer(
 
   override def getPartitions: Seq[InputPartition] = partitions
 
+  override protected def getPartitionsForValidation: Seq[InputPartition] = {
+    val staticFilters = partitionPruningPred.filterNot(
+      org.apache.spark.sql.execution.ExecSubqueryExpression.hasSubquery)
+    if (staticFilters.size == partitionPruningPred.size) {
+      getPartitions
+    } else {
+      copy(partitionPruningPred = staticFilters)(session).getPartitions
+    }
+  }
+
   override def getPartitionSchema: StructType = relation.tableMeta.partitionSchema
 
   override def getDataSchema: StructType = relation.tableMeta.dataSchema

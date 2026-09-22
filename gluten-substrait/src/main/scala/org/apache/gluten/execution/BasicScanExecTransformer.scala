@@ -62,6 +62,12 @@ trait BasicScanExecTransformer extends LeafTransformSupport with BaseDataSource 
   /** Returns the file format properties. */
   def getProperties: Map[String, String] = Map.empty
 
+  /**
+   * Candidates for file capability checks during planning. Implementations must not evaluate
+   * subqueries or cache runtime partition selection here.
+   */
+  protected def getPartitionsForValidation: Seq[InputPartition]
+
   /** Returns the split infos that will be processed by the underlying native engine. */
   def getSplitInfos(): Seq[SplitInfo] = {
     getSplitInfosFromPartitions(getPartitions)
@@ -109,7 +115,7 @@ trait BasicScanExecTransformer extends LeafTransformSupport with BaseDataSource 
     val partitionValidationResult = BackendsApiManager.getSettings
       .validateScanInputPartitions(
         fileFormat,
-        getPartitions,
+        getPartitionsForValidation,
         properties,
         Some(serializableHadoopConf))
     if (!partitionValidationResult.ok()) {
