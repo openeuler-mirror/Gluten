@@ -225,6 +225,10 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<double>(KAdaptivePartialAggregationRatio, 0.8));
         configs[config::QueryConfig::KPreferVectorizationExpression] = BoolToString(
             omniCfg_->Get<bool>(KPreferVectorizationExpression, false));
+        configs[config::QueryConfig::kPdqSortEnabled] = BoolToString(omniCfg_->Get<bool>(kPdqSortEnabled, false));
+        configs[config::QueryConfig::kInplacePdqSortEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kInplacePdqSortEnabled, false));
+        configs[config::QueryConfig::kTimSortEnabled] = BoolToString(omniCfg_->Get<bool>(kTimSortEnabled, false));
 #ifdef STRINGVIEW_ENABLE
         configs[config::QueryConfig::KStringViewRuntimeValidationEnabled] = BoolToString(
             omniCfg_->Get<bool>(kOmniStringViewRuntimeValidationEnabled, false));
