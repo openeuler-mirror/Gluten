@@ -2474,8 +2474,15 @@ object GlutenConfig {
   val COLUMNAR_OMNI_SHUFFLE_SPILL_BATCH_ROW_NUM =
     buildConf("spark.gluten.sql.columnar.backend.omni.shuffleSpillBatchRowNum")
       .internal()
-      .doc("columnar shuffle spill batch row number")
+      .doc(
+        "columnar shuffle spill batch row number. " +
+          "Values below 1024 cause excessive ColumnarBatch objects and can OOM the JVM heap.")
       .intConf
+      .checkValue(
+        _ >= 1024,
+        "spark.gluten.sql.columnar.backend.omni.shuffleSpillBatchRowNum must be >= 1024 " +
+          "(default 10000). Smaller values create too many ColumnarBatch objects and may " +
+          "trigger Java heap OOM or too many open files.")
       .createWithDefault(10000)
 
   val COLUMNAR_OMNI_SPILL_MEMORY_FRACTION =
