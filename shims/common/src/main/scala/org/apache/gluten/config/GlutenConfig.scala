@@ -589,6 +589,12 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def columnarSortSpillRowThreshold: Int = conf.getConf(COLUMNAR_SORT_SPILL_ROW_THRESHOLD)
 
+  def enablePdqSort: Boolean = conf.getConf(ENABLE_PDQ_SORT)
+
+  def enableInplacePdqSort: Boolean = conf.getConf(ENABLE_INPLACE_PDQ_SORT)
+
+  def enableTimSort: Boolean = conf.getConf(ENABLE_TIM_SORT)
+
   def omniColumnarEnableDelayCartesianProduct: Boolean = conf.getConf(COLUMNAR_OMNI_ENABLE_DELAY_CARTESIAN_PRODUCT)
 
   def columnarPreferShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_OMNI_PREFER_SHUFFLED_HASH_JOIN)
@@ -837,7 +843,10 @@ object GlutenConfig {
       COLUMNAR_OMNI_MAX_ROW_COUNT.key,
       COLUMNAR_MAX_BATCH_SIZE.key,
       COLUMNAR_OMNI_MERGED_BATCH_THRESHOLD.key,
-      COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key)
+      COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key,
+      ENABLE_PDQ_SORT.key,
+      ENABLE_INPLACE_PDQ_SORT.key,
+      ENABLE_TIM_SORT.key)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
     nativeConfMap.putAll(conf.filter(e => e._1.contains("omni")).asJava)
     // return
@@ -2663,6 +2672,24 @@ object GlutenConfig {
     .doc("columnar sort spill threshold")
     .intConf
     .createWithDefault(Integer.MAX_VALUE)
+
+  val ENABLE_PDQ_SORT = buildConf("spark.gluten.sql.columnar.backend.omni.pdqSort.enabled")
+    .internal()
+    .doc("Use PDQSort for general multi-key columnar sort. Default is QuickSort.")
+    .booleanConf
+    .createWithDefault(false)
+
+  val ENABLE_INPLACE_PDQ_SORT = buildConf("spark.gluten.sql.columnar.backend.omni.inplacePdqSort.enabled")
+    .internal()
+    .doc("Use inplace PDQSort for single-column inplace sort (e.g. MergeSortJoin). Default is std::sort.")
+    .booleanConf
+    .createWithDefault(false)
+
+  val ENABLE_TIM_SORT = buildConf("spark.gluten.sql.columnar.backend.omni.timSort.enabled")
+    .internal()
+    .doc("Use TimSort for varchar/char sort. Default is QuickSort.")
+    .booleanConf
+    .createWithDefault(false)
 
   val COLUMNAR_OMNI_ENABLE_VEC_PREDICATE_FILTER = buildConf("spark.gluten.sql.columnar.backend.omni.vec.predicate.enabled")
     .internal()
