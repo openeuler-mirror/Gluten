@@ -240,7 +240,7 @@ class Splitter {
     std::vector<std::vector<std::unique_ptr<ComplexColumnAccumulator>>> partition_complex_accumulators_;
 
     // Data structures required to handle row formats
-    std::vector<std::vector<RowInfo *>> partition_rows; // pid : std::vector<row>
+    std::vector<std::vector<std::unique_ptr<RowInfo>>> partition_rows; // pid : std::vector<row>
     RowBatch *array_partition_rows;
     std::vector<std::vector<RowBatch *>> partition_row_batch;
     std::vector<uint32_t> partition_row_batch_count;

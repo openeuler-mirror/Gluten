@@ -29,7 +29,7 @@ static arrow::Status WriteBigEndianSizePrefix(ArrowOutputStream& out, int32_t si
 int32_t ArrowWriteRowPartition(int32_t partition_id,
                                ArrowOutputStream& out,
                                const ArrowFileHeader& header,
-                               const std::vector<std::vector<RowInfo*>>& partitionRows,
+                               const std::vector<std::vector<std::unique_ptr<RowInfo>>>& partitionRows,
                                uint64_t spillBatchRowNum,
                                OmniMemoryPoolAdapter& pool,
                                bool headerAlreadyWritten)
@@ -71,7 +71,7 @@ int32_t ArrowWriteRowPartition(int32_t partition_id,
         std::vector<int32_t> offsetVec(onceCopyRow + 1, 0);
         auto rowInfoPtr = rows.data() + offset;
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo* rowInfo = rowInfoPtr[i];
+            RowInfo* rowInfo = rowInfoPtr[i].get();
             offsetVec[i + 1] = offsetVec[i] + rowInfo->length;
         }
 
@@ -85,7 +85,7 @@ int32_t ArrowWriteRowPartition(int32_t partition_id,
                                      + reserveSt.ToString());
         }
         for (uint64_t i = 0; i < onceCopyRow; ++i) {
-            RowInfo* rowInfo = rowInfoPtr[i];
+            RowInfo* rowInfo = rowInfoPtr[i].get();
             auto appendSt = rowsBuilder.Append(rowInfo->row, rowInfo->length);
             if (!appendSt.ok()) {
                 LogsError("ArrowWriteRowPartition rows Append failed: pid=%d batch=%u row=%llu len=%d msg=%s",
