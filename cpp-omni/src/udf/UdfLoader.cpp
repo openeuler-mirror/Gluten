@@ -213,18 +213,39 @@ std::unordered_set<std::shared_ptr<UdfLoader::UdfSignature>> UdfLoader::getRegis
 
 std::unordered_set<std::string> UdfLoader::getRegisteredUdafNames()
 {
-    if (!names_.empty()) {
-        return names_;
+    if (!udafNames_.empty()) {
+        return udafNames_;
     }
     if (signatures_.empty()) {
         getRegisteredUdfSignatures();
     }
     for (const auto &sig : signatures_) {
         if (!sig->intermediateType.empty()) {
-            names_.insert(sig->name);
+            udafNames_.insert(sig->name);
         }
     }
-    return names_;
+    return udafNames_;
+}
+
+std::unordered_set<std::string> UdfLoader::getRegisteredUdfNames()
+{
+    if (!udfNames_.empty()) {
+        return udfNames_;
+    }
+    if (signatures_.empty()) {
+        getRegisteredUdfSignatures();
+    }
+    for (const auto &sig : signatures_) {
+        if (sig->intermediateType.empty()) {
+            udfNames_.insert(sig->name);
+        }
+    }
+    return udfNames_;
+}
+
+bool UdfLoader::isRegisteredUdf(const std::string &name)
+{
+    return getInstance()->getRegisteredUdfNames().count(name) > 0;
 }
 
 bool UdfLoader::isRegisteredUdaf(const std::string &name)

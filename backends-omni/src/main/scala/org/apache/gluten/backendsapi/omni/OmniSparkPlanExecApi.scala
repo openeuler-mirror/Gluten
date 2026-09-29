@@ -57,7 +57,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
-import org.apache.spark.sql.hive.OmniHiveUDFTransformer
+import org.apache.spark.sql.hive.{OmniHiveUDFTransformer, OmniScalaUDFTransformer}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.expression.UserDefinedAggregateFunction
@@ -722,6 +722,12 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
                                       expr: Expression,
                                       attributeSeq: Seq[Attribute]): ExpressionTransformer = {
     OmniHiveUDFTransformer.replaceWithExpressionTransformer(expr, attributeSeq)
+  }
+
+  override def genScalaUDFTransformer(
+                                      expr: Expression,
+                                      attributeSeq: Seq[Attribute]): ExpressionTransformer = {
+    OmniScalaUDFTransformer.replaceWithExpressionTransformer(expr, attributeSeq)
   }
 
   override def genHiveTableScanExecTransformer(

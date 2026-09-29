@@ -17,6 +17,7 @@
 package org.apache.spark.sql.hive
 
 import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.expression.UDFResolver
 
 /**
  * Detects whether an expression is a Spark Hive UDF (Simple/Generic/UDAF/UDTF).
@@ -29,4 +30,14 @@ object OmniHiveUdfUtil {
     case _: HiveGenericUDTF => true
     case _ => false
   }
+
+  def hiveUdfClassName(expr: Expression): Option[String] = expr match {
+    case s: HiveSimpleUDF => Some(s.funcWrapper.functionClassName)
+    case g: HiveGenericUDF => Some(g.funcWrapper.functionClassName)
+    case _ => None
+  }
+
+  /** True when a matching cpp so has registered this Hive class FQCN into [[UDFResolver.UDFNames]]. */
+  def isRegisteredNativeHiveUdf(expr: Expression): Boolean =
+    hiveUdfClassName(expr).exists(UDFResolver.UDFNames.contains)
 }

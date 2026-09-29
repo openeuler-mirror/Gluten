@@ -179,7 +179,9 @@ std::pair<SubstraitToOmniExprType, std::string> SubstraitParser::FindOmniFunctio
     if (funcName.find(HIVE_SIMPLE_TAG) == 0) {
         return {HIVE_UDF_FUNCTION_OMNI_EXPR_TYPE, funcName.erase(0, HIVE_SIMPLE_TAG.length())};
     }
-    if (gluten::UdfLoader::isRegisteredUdaf(funcName)) {
+    // Same-name cpp so: Java UDFNames uses the Hive class FQCN, which is not in
+    // substraitOmniFunctionMap. Keep it on the vectorization FuncExpr path.
+    if (gluten::UdfLoader::isRegisteredUdf(funcName) || gluten::UdfLoader::isRegisteredUdaf(funcName)) {
         return {FUNCTION_OMNI_EXPR_TYPE, funcName};
     }
     return MapToOmniFunction(funcName);
