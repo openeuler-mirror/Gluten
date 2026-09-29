@@ -34,6 +34,7 @@ import org.apache.spark.sql.catalyst.optimizer.{CombineJoinedAggregates, DedupLe
 import org.apache.gluten.extension.{AdaptiveHashAggregateRule, FallbackBroadcastHashJoin, FallbackBroadcastHashJoinPrepQueryStage, MixedStorageFallbackGuard, OmniMixedStoragePrepRule, OmniRewriteCollectFuncRule, OmniRewriteJoin, PushDownFilterToOmniScan, RewriteAQEShuffleRead}
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.sql.execution.{ColumnarCollapseTransformStages, GlutenAutoAdjustStageResourceProfile, GlutenFallbackReporter}
+import org.apache.gluten.extension.OmniCascadingJoinRule
 
 class OmniRuleApi extends RuleApi {
 
@@ -120,6 +121,8 @@ object OmniRuleApi {
     injector.injectPostTransform(c => InsertTransitions.create(c.outputsColumnar, OmniBatch))
     injector.injectPostTransform(_ => RewriteTopNSort())
     injector.injectPostTransform(_ => CombineWindowSort())
+    injector.injectPreTransform(_ => OmniCascadingJoinRule())
+
     // Gluten columnar: Fallback policies.
     injector.injectFallbackPolicy(
       c => ExpandFallbackPolicy(c.ac.isAdaptiveContext(), c.ac.originalPlan()))

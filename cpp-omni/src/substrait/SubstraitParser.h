@@ -111,6 +111,13 @@ public:
     static bool ConfigExistInOptimization(
         const ::substrait::extensions::AdvancedExtension &, const std::string &config);
 
+    /// @brief Get integer value from AdvancedExtension optimization.
+    /// @param extension Substrait advanced extension.
+    /// @param key the key string to search for.
+    /// @return The integer value, or 0 if not found.
+    static int32_t GetIntFromOptimization(
+        const ::substrait::extensions::AdvancedExtension &extension, const std::string &key);
+
     /// Extract input types from Substrait function signature.
     static std::vector<type::DataTypePtr> SigToTypes(const std::string &functionSig);
 

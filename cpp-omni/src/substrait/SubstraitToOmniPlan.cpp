@@ -417,6 +417,18 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
         OMNI_THROW("Substrait Error", "Right Rel is expected in JoinRel.");
     }
 
+    // Check for CascadingJoin
+    if (joinRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isCascading=")) {
+        int32_t cascadeLevels = SubstraitParser::GetIntFromOptimization(
+            joinRel.advanced_extension(), "cascadeLevels=");
+
+        // Create CascadingJoinNode for multi-table joins
+        // Note: leftNode and rightNode are NOT passed because CreateCascadingJoinNode
+        // will traverse the nested JoinRel structure and convert nodes itself
+        return CreateCascadingJoinNode(joinRel, cascadeLevels);
+    }
+
     auto leftNode = ToOmniPlan(joinRel.left());
     auto rightNode = ToOmniPlan(joinRel.right());
 
@@ -810,6 +822,9 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel 
     // ValueStreamNode as the data source.
     auto streamIdx = GetStreamIndex(readRel);
     if (streamIdx >= 0) {
+        if (cascadingInputMode) {
+            return ConstructValueStreamNode(readRel, streamIdx, true);
+        }
         return ConstructValueStreamNode(readRel, streamIdx);
     }
     auto splitInfo = std::make_shared<SplitInfo>();
@@ -873,6 +888,22 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ReadRel 
     }
 }
 
+PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlanCascadingInput(
+    const ::substrait::Rel &rel)
+{
+    const bool previousMode = cascadingInputMode;
+    cascadingInputMode = true;
+
+    try {
+        auto node = ToOmniPlan(rel);
+        cascadingInputMode = previousMode;
+        return node;
+    } catch (...) {
+        cascadingInputMode = previousMode;
+        throw;
+    }
+}
+
 PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
     const ::substrait::ReadRel &readRel, int32_t streamIdx)
 {
@@ -894,6 +925,39 @@ PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
         iterator = inputIters[streamIdx];
     }
     auto node = std::make_shared<ValueStreamNode>(NextPlanNodeId(), outputType, std::move(iterator));
+    return node;
+}
+
+PlanNodePtr SubstraitToOmniPlanConverter::ConstructValueStreamNode(
+    const ::substrait::ReadRel &readRel, int32_t streamIdx, bool isCascading)
+{
+    // This overload is used only by CascadingJoin.
+    // Keep the original ConstructValueStreamNode(readRel, streamIdx) unchanged.
+    uint64_t colNum = 0;
+    std::vector<type::DataTypePtr> veloxTypeList;
+    if (readRel.has_base_schema()) {
+        const auto &baseSchema = readRel.base_schema();
+        colNum = baseSchema.names().size();
+        veloxTypeList = SubstraitParser::ParseNamedStruct(baseSchema);
+    }
+
+    auto outputType = std::make_shared<DataTypes>(veloxTypeList);
+    std::shared_ptr<ResultIterator> iterator;
+    if (!validationMode) {
+        OMNI_CHECK(
+            streamIdx >= 0 &&
+                static_cast<size_t>(streamIdx) < inputIters.size(),
+            "Could not find cascading stream index {} in input iterator list.");
+
+        iterator = inputIters[streamIdx];
+    }
+
+    auto node =
+        std::make_shared<ValueStreamNode>(
+            NextPlanNodeId(),
+            outputType,
+            std::move(iterator));
+
     return node;
 }
 
@@ -1157,18 +1221,18 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Generate
         OMNI_THROW("SUBSTRAIT_ERROR:", "Child Rel is expected in GenerateRel.");
     }
     const auto& inputType = childNode->OutputType();
-  
+
     std::vector<Expr*> replicated;
     std::vector<Expr*> unnest;
-  
+
     const auto& generator = generateRel.generator();
     const auto& requiredChildOutput = generateRel.child_output();
-  
+
     replicated.reserve(requiredChildOutput.size());
     for (const auto& output : requiredChildOutput) {
         auto expression = exprConverter->ToOmniExpr(output, inputType);
         OMNI_CHECK(expression != nullptr, " the output in Generate Operator only support field");
-  
+
         replicated.emplace_back(expression);
     }
 
@@ -1182,7 +1246,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Generate
             childNode->OutputType()->GetSize() > requiredChildOutput.size(),
             "injectedProject is true, but the ProjectNode or ValueStreamNode (in case of projection fallback)"
             " is missing or does not have the corresponding projection field");
-  
+
         bool isStack = generateRel.has_advanced_extension() &&
             SubstraitParser::ConfigSetInOptimization(generateRel.advanced_extension(), "isStack=");
         // Generator function's input is NOT a field reference.
@@ -1214,7 +1278,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Generate
             }
             auto numFields = static_cast<int32_t>(std::ceil((generatorFunc.arguments_size() - 1.0) / numRows));
             auto totalProjectCount = childNode->OutputType()->GetSize();
-  
+
             for (auto i = totalProjectCount - numFields; i < totalProjectCount; ++i) {
                 extractUnnestFieldExpr(childNode, i, unnest);
             }
@@ -1242,4 +1306,686 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Generate
     return std::make_shared<UnnestNode>(
         NextPlanNodeId(), replicated, unnest, childNode, withOrdinality, outer);
 }
+
+
+/**
+ * Update the declaration in SubstraitToOmniPlanConverter header to:
+ *
+ * PlanNodePtr CreateCascadingJoinNode(
+ *     const ::substrait::JoinRel& joinRel,
+ *     int32_t cascadeLevels);
+ *
+ * Remove leftNode/rightNode from the old signature. If they are already passed
+ * in, the children have already been converted and the cascading chain cannot
+ * be folded cleanly without duplicate ToOmniPlan() work.
+ */
+PlanNodePtr
+SubstraitToOmniPlanConverter::CreateCascadingJoinNode(
+    const ::substrait::JoinRel& topJoinRel,
+    int32_t expectedCascadeLevels)
+{
+
+    if (expectedCascadeLevels < 2) {
+        throw OmniException(
+            "INVALID_ARGUMENT",
+            "Cascading join requires at least two levels");
+    }
+
+    // ======================================================================
+    // Phase 1: collect EXACTLY this Cascading segment.
+    //
+    // Fixed-point JVM rewriting may produce nested independent segments:
+    //
+    //   Cascading(levels=4)
+    //       probe = Cascading(levels=3)
+    //
+    // Both are represented by nested JoinRel nodes and both carry
+    // isCascading=1. Therefore we must not keep walking only because the
+    // left child is also cascading.  This converter owns exactly
+    // expectedCascadeLevels levels; after collecting them, the remaining
+    // left subtree is the root probe, even when it is another CascadingJoin.
+    // ======================================================================
+
+    std::vector<const ::substrait::JoinRel*> outerToInner;
+
+    outerToInner.reserve(
+        static_cast<size_t>(
+            expectedCascadeLevels));
+
+    const ::substrait::JoinRel* current =
+        &topJoinRel;
+
+    for (int32_t depth = 0;
+         depth < expectedCascadeLevels;
+         ++depth) {
+
+        if (current == nullptr) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Unexpected null JoinRel while collecting cascading segment");
+        }
+
+        if (!IsCascadingJoinRel(*current)) {
+            std::ostringstream oss;
+            oss
+                << "Expected cascading JoinRel at segment depth "
+                << depth
+                << " of "
+                << expectedCascadeLevels;
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        if (!current->has_advanced_extension()) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Cascading JoinRel has no advanced_extension");
+        }
+
+        const int32_t currentCascadeLevels =
+            SubstraitParser::GetIntFromOptimization(
+                current->advanced_extension(),
+                "cascadeLevels=");
+
+        if (currentCascadeLevels !=
+            expectedCascadeLevels) {
+
+            std::ostringstream oss;
+            oss
+                << "Cascading segment metadata mismatch at depth "
+                << depth
+                << ": expected cascadeLevels="
+                << expectedCascadeLevels
+                << ", actual="
+                << currentCascadeLevels;
+
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        if (SubstraitParser::ConfigExistInOptimization(
+                current->advanced_extension(),
+                "currentLevel=")) {
+
+            const int32_t currentLevel =
+                SubstraitParser::GetIntFromOptimization(
+                    current->advanced_extension(),
+                    "currentLevel=");
+
+            // doTransform() creates level0 first and wraps higher levels
+            // around it, so outer-to-inner traversal must see:
+            //
+            //   N-1, N-2, ..., 1, 0
+            const int32_t expectedCurrentLevel =
+                expectedCascadeLevels - 1 - depth;
+
+            if (currentLevel !=
+                expectedCurrentLevel) {
+
+                std::ostringstream oss;
+                oss
+                    << "Cascading currentLevel mismatch at depth "
+                    << depth
+                    << ": expected "
+                    << expectedCurrentLevel
+                    << ", actual "
+                    << currentLevel
+                    << ", cascadeLevels="
+                    << expectedCascadeLevels;
+
+                throw OmniException(
+                    "INVALID_ARGUMENT",
+                    oss.str());
+            }
+        }
+
+        outerToInner.push_back(
+            current);
+
+        // THIS segment is complete. Do not absorb the left child further.
+        // It is the root probe subtree and may itself be a separate
+        // CascadingJoin(levels=M).
+        if (depth + 1 ==
+            expectedCascadeLevels) {
+            break;
+        }
+
+        if (!current->has_left()) {
+            std::ostringstream oss;
+            oss
+                << "Cascading segment ended before expected level count: "
+                << "collected="
+                << (depth + 1)
+                << ", expected="
+                << expectedCascadeLevels;
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        const auto& leftRel =
+            current->left();
+
+        if (!leftRel.has_join()) {
+            std::ostringstream oss;
+            oss
+                << "Cascading segment left child is not JoinRel before all "
+                << "levels were collected: collected="
+                << (depth + 1)
+                << ", expected="
+                << expectedCascadeLevels;
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        const auto& nestedJoin =
+            leftRel.join();
+
+        if (!IsCascadingJoinRel(nestedJoin)) {
+            std::ostringstream oss;
+            oss
+                << "Non-cascading JoinRel encountered before current segment "
+                << "was complete: collected="
+                << (depth + 1)
+                << ", expected="
+                << expectedCascadeLevels;
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        const int32_t nestedCascadeLevels =
+            SubstraitParser::GetIntFromOptimization(
+                nestedJoin.advanced_extension(),
+                "cascadeLevels=");
+
+        if (nestedCascadeLevels !=
+            expectedCascadeLevels) {
+
+            std::ostringstream oss;
+            oss
+                << "Nested CascadingJoin(levels="
+                << nestedCascadeLevels
+                << ") encountered before outer CascadingJoin(levels="
+                << expectedCascadeLevels
+                << ") was complete at collected="
+                << (depth + 1);
+
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        current =
+            &nestedJoin;
+    }
+
+    const int32_t actualCascadeLevels =
+        static_cast<int32_t>(
+            outerToInner.size());
+
+    if (actualCascadeLevels !=
+        expectedCascadeLevels) {
+
+        std::ostringstream oss;
+
+        oss
+            << "Cascading level mismatch: extension says "
+            << expectedCascadeLevels
+            << ", but native converter collected "
+            << actualCascadeLevels
+            << " for this segment";
+
+        throw OmniException(
+            "INVALID_ARGUMENT",
+            oss.str());
+    }
+
+    // ======================================================================
+    // Reverse to native execution order:
+    //
+    // level0 = innermost A JOIN B
+    // level1 = A JOIN C
+    // level2 = A JOIN D
+    // ...
+    // ======================================================================
+
+    std::reverse(
+        outerToInner.begin(),
+        outerToInner.end());
+
+    const auto& levelRels =
+        outerToInner;
+
+    // ======================================================================
+    // Convert root probe exactly once.
+    //
+    // After reverse(), the first JoinRel is the innermost cascading JoinRel,
+    // whose left child is the root probe subtree A.
+    // ======================================================================
+
+    const ::substrait::JoinRel& firstJoinRel =
+        *levelRels.front();
+
+    if (!firstJoinRel.has_left()) {
+        throw OmniException(
+            "INVALID_ARGUMENT",
+            "Innermost cascading JoinRel has no left/root probe child");
+    }
+
+    PlanNodePtr probeNode =
+        ToOmniPlanCascadingInput(
+            firstJoinRel.left());
+
+    if (probeNode == nullptr) {
+        throw OmniException(
+            "INVALID_ARGUMENT",
+            "Failed to convert cascading root probe");
+    }
+
+    auto rootProbeType =
+        probeNode->OutputType();
+
+    if (rootProbeType == nullptr) {
+        throw OmniException(
+            "INVALID_ARGUMENT",
+            "Cascading root probe has null output type");
+    }
+
+    const int32_t rootProbeColumnCount =
+        rootProbeType->GetSize();
+
+    // ======================================================================
+    // Per-level CascadingJoinNode metadata.
+    // ======================================================================
+
+    std::vector<PlanNodePtr>
+        buildNodes;
+
+    std::vector<std::vector<TypedExprPtr>>
+        probeKeysList;
+
+    std::vector<std::vector<TypedExprPtr>>
+        buildKeysList;
+
+    std::vector<std::vector<int32_t>>
+        buildOutputColsList;
+
+    std::vector<type::DataTypesPtr>
+        buildOutputTypesList;
+
+    buildNodes.reserve(
+        levelRels.size());
+
+    probeKeysList.reserve(
+        levelRels.size());
+
+    buildKeysList.reserve(
+        levelRels.size());
+
+    buildOutputColsList.reserve(
+        levelRels.size());
+
+    buildOutputTypesList.reserve(
+        levelRels.size());
+
+    // ======================================================================
+    // Phase 2: convert exactly one current build child per level.
+    //
+    // Intermediate JoinRel(A,B), JoinRel(AB,C), ... are NOT converted into
+    // ordinary HashJoinNode objects.
+    // ======================================================================
+
+    for (size_t level = 0;
+         level < levelRels.size();
+         ++level) {
+
+        const ::substrait::JoinRel& currentJoinRel =
+            *levelRels[level];
+
+        if (!currentJoinRel.has_right()) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Cascading JoinRel has no right/build child");
+        }
+
+        // Every accepted JVM join is BuildRight:
+        //
+        // left  = streamed
+        // right = current build B/C/D...
+        PlanNodePtr buildNode =
+            ToOmniPlanCascadingInput(
+                currentJoinRel.right());
+
+        if (buildNode == nullptr) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Failed to convert cascading build node");
+        }
+
+        auto buildOutputType =
+            buildNode->OutputType();
+
+        if (buildOutputType == nullptr) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Cascading build node has null output type");
+        }
+
+        // ------------------------------------------------------------------
+        // Extract equality/hash keys from JoinRel.expression().
+        // ------------------------------------------------------------------
+
+        if (!currentJoinRel.has_expression()) {
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                "Cascading hash join has no JoinRel.expression");
+        }
+
+        std::vector<const ::substrait::Expression*>
+            leftExprs;
+
+        std::vector<const ::substrait::Expression*>
+            rightExprs;
+
+        ExtractJoinKeys(
+            currentJoinRel.expression(),
+            leftExprs,
+            rightExprs);
+
+        if (leftExprs.empty() ||
+            leftExprs.size() !=
+                rightExprs.size()) {
+
+            std::ostringstream oss;
+
+            oss
+                << "Invalid cascading hash key count at level "
+                << level
+                << ": left="
+                << leftExprs.size()
+                << ", right="
+                << rightExprs.size();
+
+            throw OmniException(
+                "INVALID_ARGUMENT",
+                oss.str());
+        }
+
+        std::vector<TypedExprPtr>
+            levelProbeKeys;
+
+        std::vector<TypedExprPtr>
+            levelBuildKeys;
+
+        levelProbeKeys.reserve(
+            leftExprs.size());
+
+        levelBuildKeys.reserve(
+            rightExprs.size());
+
+        for (size_t keyIndex = 0;
+             keyIndex < leftExprs.size();
+             ++keyIndex) {
+
+            // --------------------------------------------------------------
+            // CRITICAL:
+            //
+            // Every streamed key is converted against ROOT A's output schema,
+            // not the intermediate A+B+C... schema.
+            //
+            // JVM validation has already proved:
+            //   1. streamed key references root A only
+            //   2. root A remains the streamed prefix at every level
+            //
+            // Therefore the field ordinal is unchanged.
+            // --------------------------------------------------------------
+
+            TypedExprPtr probeKey =
+                exprConverter->ToOmniExpr(
+                    *leftExprs[keyIndex],
+                    rootProbeType);
+
+            TypedExprPtr buildKey =
+                exprConverter->ToOmniExpr(
+                    *rightExprs[keyIndex],
+                    buildOutputType);
+
+            if (probeKey == nullptr ||
+                buildKey == nullptr) {
+
+                throw OmniException(
+                    "INVALID_ARGUMENT",
+                    "Failed to convert cascading join key");
+            }
+
+            // --------------------------------------------------------------
+            // The current CascadingLookupJoinOperatorFactory eventually reads
+            // FieldExpr::colVal, so arbitrary calculated key expressions are
+            // not safe yet.
+            // --------------------------------------------------------------
+
+            auto* probeField =
+                dynamic_cast<FieldExpr*>(
+                    probeKey);
+
+            auto* buildField =
+                dynamic_cast<FieldExpr*>(
+                    buildKey);
+
+            if (probeField == nullptr ||
+                buildField == nullptr) {
+
+                std::ostringstream oss;
+
+                oss
+                    << "Cascading join currently supports direct field "
+                    << "hash keys only, level="
+                    << level
+                    << ", keyIndex="
+                    << keyIndex;
+
+                throw OmniException(
+                    "NOT_SUPPORTED",
+                    oss.str());
+            }
+
+            // Defensive root-probe validation.
+            if (probeField->colVal < 0 ||
+                probeField->colVal >=
+                    rootProbeColumnCount) {
+
+                std::ostringstream oss;
+
+                oss
+                    << "Cascading streamed key does not reference root probe A, "
+                    << "level="
+                    << level
+                    << ", col="
+                    << probeField->colVal
+                    << ", rootColumns="
+                    << rootProbeColumnCount;
+
+                throw OmniException(
+                    "INVALID_ARGUMENT",
+                    oss.str());
+            }
+
+            const int32_t buildColumnCount =
+                buildOutputType->GetSize();
+
+            if (buildField->colVal < 0 ||
+                buildField->colVal >=
+                    buildColumnCount) {
+
+                std::ostringstream oss;
+
+                oss
+                    << "Cascading build key is outside current build schema, "
+                    << "level="
+                    << level
+                    << ", col="
+                    << buildField->colVal
+                    << ", buildColumns="
+                    << buildColumnCount;
+
+                throw OmniException(
+                    "INVALID_ARGUMENT",
+                    oss.str());
+            }
+
+            levelProbeKeys.emplace_back(
+                std::move(probeKey));
+
+            levelBuildKeys.emplace_back(
+                std::move(buildKey));
+        }
+
+        // ------------------------------------------------------------------
+        // RESIDUAL CONDITION:
+        //
+        // JVM OmniJoinUtils puts Spark HashJoin.condition into
+        // JoinRel.post_join_filter.
+        //
+        // The current CascadingLookupJoinOperator does NOT yet have a
+        // per-level residual evaluator. Ignoring post_join_filter changes SQL
+        // semantics, so reject it until native residual execution is wired.
+        //
+        // Later replace this with something like:
+        //
+        //   residualFilters[level] =
+        //       ConvertAndRemapResidual(
+        //           currentJoinRel.post_join_filter(),
+        //           rootProbeType,
+        //           buildOutputType,
+        //           previousBuildColumnCount);
+        //
+        // because standard JoinRel filter ordinals are based on:
+        //   A + previous builds + current build
+        //
+        // while root-probe cascading wants:
+        //   A + current build
+        // ------------------------------------------------------------------
+
+        if (currentJoinRel.has_post_join_filter()) {
+
+            std::ostringstream oss;
+
+            oss
+                << "Cascading native residual condition is not wired yet, "
+                << "level="
+                << level
+                << ". Ignoring post_join_filter would produce wrong results.";
+
+            throw OmniException(
+                "NOT_SUPPORTED",
+                oss.str());
+        }
+
+        // Current implementation outputs all current-build columns.
+        std::vector<int32_t>
+            buildOutputCols;
+
+        const int32_t buildOutputColumnCount =
+            buildOutputType->GetSize();
+
+        buildOutputCols.reserve(
+            static_cast<size_t>(
+                buildOutputColumnCount));
+
+        for (int32_t column = 0;
+             column < buildOutputColumnCount;
+             ++column) {
+
+            buildOutputCols.push_back(
+                column);
+        }
+
+        probeKeysList.emplace_back(
+            std::move(levelProbeKeys));
+
+        buildKeysList.emplace_back(
+            std::move(levelBuildKeys));
+
+        buildOutputColsList.emplace_back(
+            std::move(buildOutputCols));
+
+        buildOutputTypesList.emplace_back(
+            buildOutputType);
+
+        buildNodes.emplace_back(
+            std::move(buildNode));
+
+    }
+
+    // ======================================================================
+    // Final consistency validation.
+    // ======================================================================
+
+    const size_t finalLevelCount =
+        buildNodes.size();
+
+    if (finalLevelCount !=
+            probeKeysList.size() ||
+        finalLevelCount !=
+            buildKeysList.size() ||
+        finalLevelCount !=
+            buildOutputColsList.size() ||
+        finalLevelCount !=
+            buildOutputTypesList.size()) {
+
+        throw OmniException(
+            "INTERNAL_ERROR",
+            "Inconsistent CascadingJoinNode level metadata");
+    }
+
+    auto cascadingNode =
+        std::make_shared<CascadingJoinNode>(
+            NextPlanNodeId(),
+            static_cast<int32_t>(
+                finalLevelCount),
+            probeKeysList,
+            buildKeysList,
+            buildOutputColsList,
+            buildOutputTypesList,
+            buildNodes,
+            probeNode);
+
+    int32_t expectedOutputColumnCount =
+        rootProbeColumnCount;
+
+    for (const auto& outputCols : buildOutputColsList) {
+        expectedOutputColumnCount +=
+            static_cast<int32_t>(
+                outputCols.size());
+    }
+
+    if (cascadingNode->OutputType() == nullptr ||
+        cascadingNode->OutputType()->GetSize() !=
+            expectedOutputColumnCount) {
+        throw OmniException(
+            "INTERNAL_ERROR",
+            "CascadingJoinNode output schema does not match physical output");
+    }
+
+    return cascadingNode;
+}
+
+bool IsCascadingJoinRel(
+    const ::substrait::JoinRel& joinRel)
+{
+    if (!joinRel.has_advanced_extension()) {
+        return false;
+    }
+
+    // API already used in your current branch.
+    return SubstraitParser::ConfigSetInOptimization(
+        joinRel.advanced_extension(),
+        "isCascading=");
+}
+
+
 } // namespace omniruntime

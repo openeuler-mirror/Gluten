@@ -250,6 +250,32 @@ bool SubstraitParser::ConfigExistInOptimization(
     return false;
 }
 
+int32_t SubstraitParser::GetIntFromOptimization(
+    const ::substrait::extensions::AdvancedExtension &extension, const std::string &key)
+{
+    if (extension.has_optimization()) {
+        google::protobuf::StringValue msg;
+        extension.optimization().UnpackTo(&msg);
+        const std::string& optimizationStr = msg.value();
+
+        std::size_t pos = optimizationStr.find(key);
+        if (pos != std::string::npos) {
+            std::size_t valueStart = pos + key.length();
+            std::size_t valueEnd = optimizationStr.find('\n', valueStart);
+            if (valueEnd == std::string::npos) {
+                valueEnd = optimizationStr.length();
+            }
+            std::string valueStr = optimizationStr.substr(valueStart, valueEnd - valueStart);
+            try {
+                return std::stoi(valueStr);
+            } catch (...) {
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
 template <typename T>
 T SubstraitParser::GetLiteralValue(const ::substrait::Expression::Literal & /* literal */)
 {
