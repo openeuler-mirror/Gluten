@@ -19,6 +19,7 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <cstring>
 
 #include "io/SparkFile.hh"
 #include "io/ColumnWriter.hh"
@@ -35,6 +36,7 @@
 #include "SparkJniWrapper.hh"
 #include "compute/OmniBackend.h"
 #include "JniUdf.h"
+#include "shuffle/omni_rss_push_client.h"
 
 using namespace spark;
 using namespace google::protobuf::io;
@@ -119,6 +121,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         env->ReleaseStringUTFChars(partitioning_name_jstr, partitioning_name_c);
 
         auto splitOptions = SplitOptions::Defaults();
+        splitOptions.rss_mode = false;
         if (buffer_size > 0) {
             splitOptions.buffer_size = buffer_size;
         }
@@ -162,6 +165,116 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         auto splitter = Splitter::Make(partitioning_name, inputDataTypesTmp, jNumCols, num_partitions,
             std::move(splitOptions));
         splitter->SetInputDataTypes(inputDataTypes);
+        return reinterpret_cast<intptr_t>(static_cast<void*>(splitter));
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMakeForRSS(
+    JNIEnv *env, jobject,
+    jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
+    jstring compression_type_jstr, jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
+    jlong executor_spill_memory_threshold, jobject partitionPusher)
+{
+    JNI_FUNC_START
+        if (partitioning_name_jstr == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, std::string("Short partitioning name can't be null").c_str());
+            return 0;
+        }
+        if (jInputType == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, std::string("input types can't be null").c_str());
+            return 0;
+        }
+        if (partitionPusher == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, std::string("partitionPusher can't be null").c_str());
+            return 0;
+        }
+
+        const char *inputTypeCharPtr = env->GetStringUTFChars(jInputType, JNI_FALSE);
+        DataTypes inputVecTypes = Deserialize(inputTypeCharPtr);
+        const int32_t *inputVecTypeIds = inputVecTypes.GetIds();
+        std::vector<DataTypePtr> inputDataTypes = inputVecTypes.Get();
+        int32_t size = inputDataTypes.size();
+        uint32_t *inputDataPrecisions = new uint32_t[size];
+        uint32_t *inputDataScales = new uint32_t[size];
+        int32_t *elementTypIds = new int32_t[size];
+        uint32_t *elementPrecisions = new uint32_t[size];
+        uint32_t *elementScales = new uint32_t[size];
+        InputDataTypes *elementTypes = new InputDataTypes();
+        for (int i = 0; i < size; ++i) {
+            if (inputDataTypes[i]->GetId() == OMNI_DECIMAL64 || inputDataTypes[i]->GetId() == OMNI_DECIMAL128) {
+                inputDataScales[i] = std::dynamic_pointer_cast<DecimalDataType>(inputDataTypes[i])->GetScale();
+                inputDataPrecisions[i] = std::dynamic_pointer_cast<DecimalDataType>(inputDataTypes[i])->GetPrecision();
+            }
+            if (inputDataTypes[i]->GetId() == OMNI_ARRAY) {
+                auto elementType = std::dynamic_pointer_cast<type::ArrayType>(inputDataTypes[i])->ElementType();
+                elementTypIds[i] = elementType->GetId();
+                if (elementType->GetId() == OMNI_DECIMAL64 || elementType->GetId() == OMNI_DECIMAL128) {
+                    elementPrecisions[i] = std::dynamic_pointer_cast<DecimalDataType>(elementType)->GetPrecision();
+                    elementScales[i] = std::dynamic_pointer_cast<DecimalDataType>(elementType)->GetScale();
+                }
+            }
+        }
+        elementTypes->inputDataPrecisions = elementPrecisions;
+        elementTypes->inputDataScales = elementScales;
+        elementTypes->inputVecTypeIds = elementTypIds;
+
+        InputDataTypes inputDataTypesTmp;
+        inputDataTypesTmp.inputVecTypeIds = (int32_t*)inputVecTypeIds;
+        inputDataTypesTmp.inputDataPrecisions = inputDataPrecisions;
+        inputDataTypesTmp.inputDataScales = inputDataScales;
+        inputDataTypesTmp.elementTypes = elementTypes;
+
+        auto partitioning_name_c = env->GetStringUTFChars(partitioning_name_jstr, JNI_FALSE);
+        auto partitioning_name = std::string(partitioning_name_c);
+        env->ReleaseStringUTFChars(partitioning_name_jstr, partitioning_name_c);
+
+        auto splitOptions = SplitOptions::Defaults();
+        splitOptions.rss_mode = true;
+        if (buffer_size > 0) {
+            splitOptions.buffer_size = buffer_size;
+        }
+        if (compression_type_jstr != NULL) {
+            auto compression_type_result = GetCompressionType(env, compression_type_jstr);
+            splitOptions.compression_type = compression_type_result;
+        }
+        if (spill_batch_row > 0) {
+            splitOptions.spill_batch_row_num = spill_batch_row;
+        }
+        if (task_spill_memory_threshold > 0) {
+            splitOptions.task_spill_mem_threshold = task_spill_memory_threshold;
+        }
+        if (executor_spill_memory_threshold > 0) {
+            splitOptions.executor_spill_mem_threshold = executor_spill_memory_threshold;
+        }
+        if (compress_block_size > 0) {
+            splitOptions.compress_block_size = compress_block_size;
+        }
+
+        jobject thread = env->CallStaticObjectMethod(threadClass, currentThread);
+        if (thread == NULL) {
+            std::cout << "Thread.currentThread() return NULL" << std::endl;
+        } else {
+            jlong sid = env->CallLongMethod(thread, threadGetId);
+            splitOptions.thread_id = (int64_t)sid;
+        }
+
+        JavaVM *vm;
+        if (env->GetJavaVM(&vm) != JNI_OK) {
+            throw std::runtime_error("Unable to get JavaVM instance");
+        }
+        jclass pusherClass = env->GetObjectClass(partitionPusher);
+        jmethodID pushMethod = env->GetMethodID(
+            pusherClass, "pushPartitionData", "(I[BI)I");
+        if (pushMethod == nullptr) {
+            env->ThrowNew(runtimeExceptionClass, "pushPartitionData method not found on partitionPusher");
+            return 0;
+        }
+
+        auto splitter = Splitter::Make(partitioning_name, inputDataTypesTmp, jNumCols, num_partitions,
+            std::move(splitOptions));
+        splitter->SetInputDataTypes(inputDataTypes);
+        splitter->SetRssPushClient(
+            std::make_shared<OmniRssPushClient>(vm, partitionPusher, pushMethod));
         return reinterpret_cast<intptr_t>(static_cast<void*>(splitter));
     JNI_FUNC_END(runtimeExceptionClass)
 }
@@ -629,4 +742,14 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatch
     auto* shuffleIter = static_cast<spark::ShuffleReaderDeserializer*>(innerIter);
     return shuffleIter->getMetaInfo(env);
     JNI_FUNC_END(runtimeExceptionClass)
+}
+
+JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OnHeapJniByteInputStream_memCopyFromHeap(
+    JNIEnv *env, jobject, jbyteArray source, jlong destAddress, jint size)
+{
+    JNI_FUNC_START
+    auto bytes = env->GetByteArrayElements(source, nullptr);
+    std::memcpy(reinterpret_cast<void*>(destAddress), bytes, size);
+    env->ReleaseByteArrayElements(source, bytes, JNI_ABORT);
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
