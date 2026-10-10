@@ -25,7 +25,7 @@ import org.apache.spark.sql.catalyst.expressions.{
   ScalaUDF
 }
 import org.apache.spark.sql.execution.{ProjectExec, SparkPlan}
-import org.apache.spark.sql.hive.OmniHiveUdfUtil
+import org.apache.spark.sql.hive.{OmniHiveUdfUtil, OmniScalaUdfUtil}
 import org.apache.spark.sql.types._
 
 import scala.collection.mutable.ListBuffer
@@ -41,9 +41,11 @@ object OmniPartialProjectSplit {
   def containsUDF(expr: Expression): Boolean = {
     if (expr == null) return false
     expr match {
-      case _: ScalaUDF => true
-      case h if OmniHiveUdfUtil.isHiveUdf(h) => true
-      case p => p.children.exists(c => containsUDF(c))
+      case s: ScalaUDF =>
+        !OmniScalaUdfUtil.isRegisteredNativeScalaUdf(s) || s.children.exists(containsUDF)
+      case h if OmniHiveUdfUtil.isHiveUdf(h) =>
+        !OmniHiveUdfUtil.isRegisteredNativeHiveUdf(h) || h.children.exists(containsUDF)
+      case p => p.children.exists(containsUDF)
     }
   }
 
