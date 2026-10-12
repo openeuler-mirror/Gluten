@@ -93,19 +93,7 @@ object ExpressionConverter extends SQLConfHelper with Logging {
       udf: ScalaUDF,
       attributeSeq: Seq[Attribute],
       expressionsMap: Map[Class[_], String]): ExpressionTransformer = {
-    if (udf.udfName.isEmpty) {
-      throw new GlutenNotSupportException("UDF name is not found!")
-    }
-    val substraitExprName = UDFMappings.scalaUDFMap.get(udf.udfName.get)
-    substraitExprName match {
-      case Some(name) =>
-        GenericExpressionTransformer(
-          name,
-          udf.children.map(replaceWithExpressionTransformer0(_, attributeSeq, expressionsMap)),
-          udf)
-      case _ =>
-        throw new GlutenNotSupportException(s"Not supported scala udf: $udf.")
-    }
+    BackendsApiManager.getSparkPlanExecApiInstance.genScalaUDFTransformer(udf, attributeSeq)
   }
 
   private def tryArithmeticNames(
