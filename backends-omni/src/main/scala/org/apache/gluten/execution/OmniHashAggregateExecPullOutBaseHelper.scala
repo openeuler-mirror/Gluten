@@ -74,7 +74,7 @@ case class OmniHashAggregateExecPullOutBaseHelper(
      aggFunc match {
         case _: CollectList | _: CollectSet =>
             mode match {
-                case Partial | Final => true
+                case Partial | Final | Complete => true
                 case _ => false
             }
         case bloom if bloom.getClass.getSimpleName.equals("BloomFilterAggregate") =>

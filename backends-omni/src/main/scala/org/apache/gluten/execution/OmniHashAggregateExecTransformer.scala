@@ -159,6 +159,8 @@ abstract class HashAggregateExecTransformer(
     var completeOnlySupported = Set(
       classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
       classOf[Average], classOf[First], classOf[Last], classOf[ApproximatePercentile],
+      classOf[CollectList], classOf[OmniCollectList],
+      classOf[CollectSet], classOf[OmniCollectSet],
     )
 
     val supported = mode match {
