@@ -421,7 +421,8 @@ abstract class HashAggregateExecTransformer(
     }
 
     val allowFlushStr = if (allowFlush) "1" else "0"
-    val str = s"allowFlush=$allowFlushStr\n"
+    val sortedAggStr = if (isSortAggregation) "1" else "0"
+    val str = s"allowFlush=$allowFlushStr\nisSorted=$sortedAggStr\n"
     val optimization =
       BackendsApiManager.getTransformerApiInstance.packPBMessage(
         StringValue.newBuilder.setValue(str).build)
@@ -459,7 +460,9 @@ case class OmniAdaptiveHashAggregateExecTransformer(
     s"OmniAdaptive${super.verboseString(maxFields)}"
 
   override protected def withNewChildInternal(newChild: SparkPlan): HashAggregateExecTransformer = {
-    copy(child = newChild)
+    val newAggregate = copy(child = newChild)
+    newAggregate.setSortAggregation(isSortAggregation)
+    newAggregate
   }
 }
 
@@ -489,6 +492,8 @@ case class OmniHashAggregateExecTransformer(
     s"Omni${super.verboseString(maxFields)}"
 
   override protected def withNewChildInternal(newChild: SparkPlan): HashAggregateExecTransformer = {
-    copy(child = newChild)
+    val newAggregate = copy(child = newChild)
+    newAggregate.setSortAggregation(isSortAggregation)
+    newAggregate
   }
 }

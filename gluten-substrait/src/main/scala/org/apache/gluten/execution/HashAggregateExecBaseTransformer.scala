@@ -212,7 +212,7 @@ object HashAggregateExecBaseTransformer {
   }
 
   def from(agg: BaseAggregateExec): HashAggregateExecBaseTransformer = {
-    BackendsApiManager.getSparkPlanExecApiInstance
+    val transformer = BackendsApiManager.getSparkPlanExecApiInstance
       .genHashAggregateExecTransformer(
         agg.requiredChildDistributionExpressions,
         agg.groupingExpressions,
@@ -222,6 +222,8 @@ object HashAggregateExecBaseTransformer {
         agg.resultExpressions,
         agg.child
       )
+    transformer.setSortAggregation(agg.isInstanceOf[SortAggregateExec])
+    transformer
   }
 }
 

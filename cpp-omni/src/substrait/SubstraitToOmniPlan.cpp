@@ -737,9 +737,29 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::Aggregat
     }
 
     outputType = std::make_shared<DataTypes>(std::move(nodeOutputTypes));
+    bool isSorted = aggRel.has_advanced_extension() &&
+        SubstraitParser::ConfigSetInOptimization(aggRel.advanced_extension(), "isSorted=");
+    if (!isSorted && !groupingExprs.empty()) {
+        if (auto orderByNode = std::dynamic_pointer_cast<const OrderByNode>(childNode)) {
+            const auto &sortExpressions = orderByNode->GetExpressions();
+            if (sortExpressions.size() >= groupingExprs.size()) {
+                isSorted = true;
+                for (size_t i = 0; i < groupingExprs.size(); ++i) {
+                    auto *groupField = dynamic_cast<const FieldExpr *>(groupingExprs[i]);
+                    auto *sortField = dynamic_cast<const FieldExpr *>(sortExpressions[i]);
+                    if (groupField == nullptr || sortField == nullptr ||
+                        groupField->colVal != sortField->colVal ||
+                        groupField->ordinal != sortField->ordinal) {
+                        isSorted = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     auto aggregationNode = std::make_shared<AggregationNode>(NextPlanNodeId(), groupingExprs, groupByNum, aggsKeys,
         sourceDataTypes, outPutDataTypes, aggFuncTypes, aggFilterExprs, maskColumns, inputRaws, outputPartial,
-        isStatisticalAggregate, outputType, childNode, aggStep, aggUdafNames);
+        isStatisticalAggregate, outputType, childNode, aggStep, isSorted, aggUdafNames);
     if (expandPlanNode) {
         if (auto expandNode = std::dynamic_pointer_cast<const ExpandNode>(expandPlanNode)) {
             return std::make_shared<GroupingNode>(NextPlanNodeId(), expandNode, aggregationNode);
