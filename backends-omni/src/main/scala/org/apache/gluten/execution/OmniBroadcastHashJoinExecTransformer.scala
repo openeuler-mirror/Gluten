@@ -9,11 +9,16 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans._
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.execution.{ColumnarBroadcastExchangeExec, ColumnarInputAdapter, InputIteratorTransformer, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.BroadcastQueryStageExec
+import org.apache.spark.sql.execution.omni.OmniBroadcastCacheRpc
+import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.BuildSideRelation
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 import scala.collection.Seq
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 case class OmniBroadcastHashJoinExecTransformer(
     leftKeys: Seq[Expression], 
@@ -34,6 +39,46 @@ case class OmniBroadcastHashJoinExecTransformer(
     left, 
     right, 
     isNullAwareAntiJoin) {
+
+  private def materializedExchange(plan: SparkPlan): Option[ColumnarBroadcastExchangeExec] = {
+    plan match {
+      case exchange: ColumnarBroadcastExchangeExec => Some(exchange)
+      case stage: BroadcastQueryStageExec => materializedExchange(stage.plan)
+      case reused: ReusedExchangeExec => materializedExchange(reused.child)
+      case adapter: ColumnarInputAdapter => materializedExchange(adapter.child)
+      case input: InputIteratorTransformer => materializedExchange(input.child)
+      case _ => None
+    }
+  }
+
+  // Build and cleanup derive their identity from the same materialized exchange.
+  // The signature avoids sharing a table between joins that reuse broadcast
+  // batches with different key or join layouts.
+  private def currentBuildHashTableId: String = materializedExchange(buildPlan)
+    .map(_.broadcastCacheKey)
+    .filter(_.nonEmpty)
+    .map { exchangeKey =>
+      OmniBroadcastCacheRpc.openExecution(exchangeKey.split(":", 4)(2))
+      val signature = Seq(
+        joinType.toString,
+        buildSide.toString,
+        isNullAwareAntiJoin.toString,
+        buildKeyExprs.map(_.canonicalized.sql).mkString("[", ",", "]"),
+        condition.map(_.canonicalized.sql).getOrElse(""))
+        .map(value => value.length + ":" + value)
+        .mkString
+      val digest = MessageDigest.getInstance("SHA-256")
+        .digest(signature.getBytes(StandardCharsets.UTF_8))
+        .map(byte => f"${byte & 0xff}%02x")
+        .mkString
+      exchangeKey + "#" + digest
+    }
+    .getOrElse("")
+
+  // The base API retains a lazy value for compatibility, while native plan
+  // generation asks for the current SQL execution. A reused SparkPlan may run
+  // under a later execution ID with the same broadcast materialization.
+  override lazy val buildHashTableId: String = currentBuildHashTableId
     
   override protected lazy val substraitJoinType: JoinRel.JoinType = joinType match {
     case _: InnerLike =>
@@ -154,7 +199,7 @@ case class OmniBroadcastHashJoinExecTransformer(
   }
 
   override def genJoinParametersInternal(): (Int, Int, String) = {
-    (1, if (isNullAwareAntiJoin) 1 else 0, buildHashTableId)
+    (1, if (isNullAwareAntiJoin) 1 else 0, currentBuildHashTableId)
   }
 
   override protected def withNewChildrenInternal(newLeft: SparkPlan, newRight: SparkPlan): SparkPlan = 

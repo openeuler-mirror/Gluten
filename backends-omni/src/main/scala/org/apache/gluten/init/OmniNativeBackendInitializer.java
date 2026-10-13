@@ -2,6 +2,7 @@ package org.apache.gluten.init;
 
 import nova.hetu.omniruntime.memory.MemoryManager;
 import nova.hetu.omniruntime.operator.OmniOperatorFactoryContext;
+import org.apache.gluten.memory.listener.ReservationListener;
 import org.apache.gluten.config.GlutenConfig;
 import org.apache.gluten.utils.ConfigUtil;
 import scala.runtime.BoxedUnit;
@@ -20,6 +21,7 @@ public final class OmniNativeBackendInitializer {
     private static final Map<String, OmniNativeBackendInitializer> instances = new ConcurrentHashMap<>();
 
     private final AtomicBoolean initialized = new AtomicBoolean(false);
+    private final AtomicBoolean broadcastCacheInitialized = new AtomicBoolean(false);
     private final String backendName;
 
     private OmniNativeBackendInitializer(String backendName) {
@@ -61,4 +63,31 @@ public final class OmniNativeBackendInitializer {
     }
 
     private native void initialize(byte[] configPlan);
+
+    public void initializeBroadcastCache(ReservationListener listener) {
+        if (!broadcastCacheInitialized.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            initializeBroadcastCache0(listener);
+        } catch (RuntimeException e) {
+            broadcastCacheInitialized.set(false);
+            throw e;
+        }
+    }
+
+    public void shutdownBroadcastCache() {
+        if (broadcastCacheInitialized.compareAndSet(true, false)) {
+            try {
+                shutdownBroadcastCache0();
+            } catch (RuntimeException e) {
+                broadcastCacheInitialized.set(true);
+                throw e;
+            }
+        }
+    }
+
+    private native void initializeBroadcastCache0(ReservationListener listener);
+
+    private native void shutdownBroadcastCache0();
 }

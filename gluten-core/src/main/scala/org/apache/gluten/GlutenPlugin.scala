@@ -91,6 +91,15 @@ private[gluten] class GlutenDriverPlugin extends DriverPlugin with Logging {
     Component.sorted().reverse.foreach(_.onDriverShutdown())
   }
 
+  override def receive(message: AnyRef): AnyRef = {
+    Component.sorted().iterator
+      .flatMap(_.onDriverMessage(message))
+      .take(1)
+      .toSeq
+      .headOption
+      .getOrElse(throw new IllegalArgumentException("Unsupported Gluten driver plugin message"))
+  }
+
   private def postBuildInfoEvent(
       sc: SparkContext,
       componentBuildInfos: Seq[Component.BuildInfo]): Unit = {

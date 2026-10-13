@@ -22,6 +22,7 @@ import org.apache.spark.api.plugin.PluginContext
 trait ListenerApi {
   def onDriverStart(sc: SparkContext, pc: PluginContext): Unit = {}
   def onDriverShutdown(): Unit = {}
+  def onDriverMessage(message: AnyRef): Option[AnyRef] = None
   def onExecutorStart(pc: PluginContext): Unit = {}
   def onExecutorShutdown(): Unit = {}
 }

@@ -58,6 +58,7 @@ trait Component {
   /** Spark listeners. */
   def onDriverStart(sc: SparkContext, pc: PluginContext): Unit = {}
   def onDriverShutdown(): Unit = {}
+  def onDriverMessage(message: AnyRef): Option[AnyRef] = None
   def onExecutorStart(pc: PluginContext): Unit = {}
   def onExecutorShutdown(): Unit = {}
 

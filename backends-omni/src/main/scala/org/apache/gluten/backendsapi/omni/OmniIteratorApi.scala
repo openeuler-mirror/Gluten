@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.util.{DateFormatter, TimestampFormatter}
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.execution.omni.OmniBroadcastCacheRpc
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.utils.SparkInputMetricsUtil.InputMetricsWrapper
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -271,7 +272,8 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
       .asInstanceOf[GlutenPartition].plan).getRelations(0).getRoot.getOutputSchema
     val typeNodes = VectorTransferUtils.getStructNodeFromProto(outputSchemaStruct)
 
-    val resIter: OmniColumnarBatchOutIterator =
+    val resIter: OmniColumnarBatchOutIterator = {
+      OmniBroadcastCacheRpc.registerPlan(inputPartition.plan)
       transKernel.createKernelWithBatchIterator(
         inputPartition.plan,
         splitInfoByteArray,
@@ -280,6 +282,7 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
         BackendsApiManager.getSparkPlanExecApiInstance.rewriteSpillPath(spillDirPath),
         typeNodes
       )
+    }
 
     val itrMetrics = OmniIteratorMetricsJniWrapper.create()
     Iterators
@@ -323,9 +326,11 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
     .namespace("gluten-spill")
     .mkChildDirRoundRobin(UUID.randomUUID.toString)
     .getAbsolutePath
-  val nativeResultIterator =
+  val nativeResultIterator = {
+    val planBytes = rootNode.toProtobuf.toByteArray
+    OmniBroadcastCacheRpc.registerPlan(planBytes)
     transKernel.createKernelWithBatchIterator(
-      rootNode.toProtobuf.toByteArray,
+      planBytes,
       // Final iterator does not contain scan split, so pass empty split info to native here.
       new Array[Array[Byte]](0),
       columnarNativeIterator,
@@ -333,6 +338,7 @@ class OmniIteratorApiImpl extends IteratorApi with Logging {
       BackendsApiManager.getSparkPlanExecApiInstance.rewriteSpillPath(spillDirPath),
       rootNode.getOutputSchema()
     )
+  }
   val itrMetrics = OmniIteratorMetricsJniWrapper.create()
   Iterators
     .wrap(nativeResultIterator.asScala)
