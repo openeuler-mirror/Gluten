@@ -18,6 +18,7 @@ package org.apache.gluten.memory.listener;
 
 import org.apache.gluten.memory.SimpleMemoryUsageRecorder;
 import org.apache.gluten.memory.memtarget.MemoryTarget;
+import org.apache.gluten.memory.memtarget.ThrowOnOomMemoryTarget.OutOfMemoryException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,7 +51,10 @@ public class ManagedReservationListener implements ReservationListener {
         sharedUsage.inc(granted);
         return granted;
       } catch (Exception e) {
-        LOG.error("Error reserving memory from target", e);
+        if (!(e instanceof OutOfMemoryException)
+            || !((OutOfMemoryException) e).isAdvisory()) {
+          LOG.error("Error reserving memory from target", e);
+        }
         throw e;
       }
     }

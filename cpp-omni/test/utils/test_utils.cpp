@@ -18,8 +18,47 @@
  */
 
 #include "test_utils.h"
+#include "memory/omni_task_memory_pool.h"
+
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 using namespace omniruntime::vec;
+
+namespace {
+
+struct TestSplitterMemoryContext {
+    std::unique_ptr<omniruntime::mem::OmniTaskMemoryPool> pool =
+        std::make_unique<omniruntime::mem::OmniTaskMemoryPool>(nullptr);
+};
+
+std::mutex& TestSplitterContextsMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<Splitter*, std::unique_ptr<TestSplitterMemoryContext>>& TestSplitterContexts()
+{
+    static std::unordered_map<Splitter*, std::unique_ptr<TestSplitterMemoryContext>> contexts;
+    return contexts;
+}
+
+std::unique_ptr<TestSplitterMemoryContext> TakeTestSplitterContext(Splitter* splitter)
+{
+    std::lock_guard<std::mutex> lock(TestSplitterContextsMutex());
+    auto& contexts = TestSplitterContexts();
+    auto found = contexts.find(splitter);
+    if (found == contexts.end()) {
+        return nullptr;
+    }
+    auto context = std::move(found->second);
+    contexts.erase(found);
+    return context;
+}
+
+} // namespace
 
 VectorBatch *CreateVectorBatch(const DataTypes &types, int32_t rowCount, ...)
 {
@@ -564,7 +603,21 @@ long Test_splitter_nativeMake(std::string partitioning_name,
     splitOptions.data_file = data_file_jstr;
     splitOptions.task_spill_mem_threshold = task_spill_mem_threshold;
     splitOptions.executor_spill_mem_threshold = executor_spill_mem_threshold;
-    auto splitter = Splitter::Make(partitioning_name, inputDataTypes, numCols, num_partitions, std::move(splitOptions));
+    // Match the JNI production path: every test splitter gets an explicit
+    // task-bound pool. In particular, the single-partition row path allocates
+    // owning RowInfo objects through this pool and must never fall back to a
+    // process-global or null allocator.
+    auto memoryContext = std::make_unique<TestSplitterMemoryContext>();
+    auto splitter = Splitter::Make(partitioning_name,
+                                   inputDataTypes,
+                                   numCols,
+                                   num_partitions,
+                                   std::move(splitOptions),
+                                   memoryContext->pool.get());
+    {
+        std::lock_guard<std::mutex> lock(TestSplitterContextsMutex());
+        TestSplitterContexts().emplace(splitter, std::move(memoryContext));
+    }
     // 模拟生产路径：nativeMake 通过 SetInputDataTypes 传入完整递归 DataType（写 Arrow 文件头 schema 用）。
     // 标量类型由扁平 InputDataTypes 重建；复杂类型返回空时由测试自行 SetInputDataTypes（现有复杂测试已如此）。
     auto dataTypes = BuildDataTypesFromInput(inputDataTypes, numCols);
@@ -609,7 +662,11 @@ void Test_splitter_close(long splitter_addr) {
         std::string error_message = "Invalid splitter id " + std::to_string(splitter_addr);
         throw std::runtime_error("Test no splitter.");
     }
+    // Keep the per-test task pool alive through Splitter::~Splitter(), which
+    // frees its buffers and unregisters its spillable against that pool.
+    auto memoryContext = TakeTestSplitterContext(splitter);
     delete splitter;
+    memoryContext.reset();
 }
 
 void GetFilePath(const char *path, const char *filename, char *filepath, const uint64_t filepathLen) {

@@ -34,15 +34,23 @@ public final class ReservationListeners {
 
   public static ReservationListener create(
       String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats) {
+    return create(name, spiller, mutableStats, false);
+  }
+
+  /** Use advisory denials only when the native caller handles reservation rejection. */
+  public static ReservationListener create(
+      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
+      boolean advisory) {
     if (!TaskResources.inSparkTask()) {
       throw new IllegalStateException(
           "Spillable reservation listener must be used in a Spark task.");
     }
-    return create0(name, spiller, mutableStats);
+    return create0(name, spiller, mutableStats, advisory);
   }
 
   private static ReservationListener create0(
-      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats) {
+      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
+      boolean advisory) {
     // Memory target.
     final double overAcquiredRatio = GlutenConfig.get().memoryOverAcquiredRatio();
     final long reservationBlockSize = GlutenConfig.get().memoryReservationBlockSize();
@@ -54,11 +62,12 @@ public final class ReservationListeners {
         MemoryTargets.newConsumer(
             tmm, consumer.name() + ".OverAcquire", Spillers.NOOP, Collections.emptyMap());
     final MemoryTarget target =
-        MemoryTargets.throwOnOom(
+        new ThrowOnOomMemoryTarget(
             MemoryTargets.overAcquire(
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(consumer),
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(overConsumer),
-                overAcquiredRatio));
+                overAcquiredRatio),
+            advisory);
 
     // Listener.
     return new ManagedReservationListener(target, TaskResources.getSharedUsage(), tmm);
