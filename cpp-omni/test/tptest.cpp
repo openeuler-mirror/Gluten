@@ -16,9 +16,33 @@
  * limitations under the License.
  */
 #include "gtest/gtest.h"
+#include "utils/test_utils.h"
+
+namespace {
+
+class ShuffleTestEnvironment final : public testing::Environment {
+public:
+    void SetUp() override
+    {
+        if (IsFileExist(s_shuffle_tests_dir)) {
+            DeletePathAll(s_shuffle_tests_dir.c_str());
+        }
+        ASSERT_EQ(mkdir(s_shuffle_tests_dir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH), 0);
+    }
+
+    void TearDown() override
+    {
+        if (IsFileExist(s_shuffle_tests_dir)) {
+            DeletePathAll(s_shuffle_tests_dir.c_str());
+        }
+    }
+};
+
+} // namespace
 
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
+    ::testing::AddGlobalTestEnvironment(new ShuffleTestEnvironment());
     return RUN_ALL_TESTS();
 }

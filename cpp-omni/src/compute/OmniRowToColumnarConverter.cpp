@@ -109,8 +109,10 @@ std::string_view ReadUnsafeRowString(uint8_t *rowAddress, int64_t fieldOffset)
 }
 } // namespace
 
-OmniRowToColumnarConverter::OmniRowToColumnarConverter(const std::string &schemaJson)
-    : fieldTypes_(ParseSchema(schemaJson))
+OmniRowToColumnarConverter::OmniRowToColumnarConverter(
+    const std::string &schemaJson,
+    omniruntime::mem::OmniTaskMemoryPool *taskPool)
+    : fieldTypes_(ParseSchema(schemaJson)), taskPool_(taskPool)
 {
 }
 
@@ -129,7 +131,8 @@ omniruntime::vec::VectorBatch *OmniRowToColumnarConverter::Convert(
     try {
         for (int32_t columnIdx = 0; columnIdx < numFields; ++columnIdx) {
             const auto typeId = fieldTypes_[columnIdx];
-            auto *vector = omniruntime::vec::VectorHelper::CreateFlatVector(typeId, static_cast<int32_t>(numRows));
+            auto *vector = omniruntime::vec::VectorHelper::CreateFlatVector(
+                taskPool_, typeId, static_cast<int32_t>(numRows));
             FillColumn(vector, typeId, columnIdx, GetFieldOffset(nullBitsetWidthInBytes, columnIdx),
                 rowOffsets, memoryAddress);
             batch->Append(vector);

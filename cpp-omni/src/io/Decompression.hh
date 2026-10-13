@@ -31,6 +31,14 @@
 
 #include <cstddef>
 
+// Forward-decl OmniTaskMemoryPool so
+// ShuffleReaderDeserializer + DecompressionStream can hold a taskPool_ member
+// without pulling the full omni-core memory header into this widely-included
+// shuffle header. Mirrors splitter.h:47 forward-decl pattern.
+namespace omniruntime::mem {
+class OmniTaskMemoryPool;
+}
+
 namespace spark {
 
 const int32_t BYTE_3_OFFSET = 24;
@@ -48,8 +56,14 @@ public:
     std::vector<char> uncompress;
     char* output = nullptr;
 
-    DecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : dIn(dIn), shuffleCompressBlockSize(shuffleCompressBlockSize) {}
+    // Trailing taskPool param (default nullptr)
+    // keeps existing tests/no-pool callsites buildable while real callers in
+    // ShuffleReaderDeserializer thread the per-task pool through. The pool is
+    // forwarded into VectorHelper::CreateFlatVector / CreateComplexVector at the
+    // 4 ctor sites in columnarShuffleParseArrowBatch/rowShuffleParseArrowBatch in the .cc.
+    DecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : dIn(dIn), shuffleCompressBlockSize(shuffleCompressBlockSize), taskPool_(taskPool) {}
 
     virtual ~DecompressionStream()
     {
@@ -75,6 +89,11 @@ protected:
     size_t uncompressedCursor_ = 0;
     size_t uncompressedLimit_ = 0;
     bool finishedReading_ = false;
+    // Per-task pool threaded from Spark
+    // task context via OmniRuntimes.contextInstance("omni-shuffle-reader").
+    // nullptr when no Spark task is active (test rigs / pre-task paths); the
+    // ctor sites then fall back to the unaccounted no-pool path.
+    omniruntime::mem::OmniTaskMemoryPool* taskPool_ = nullptr;
 
     bool ensureBufferHasData(JNIEnv* env);
     bool consumeBytes(JNIEnv* env, void* dest, int32_t n);
@@ -87,8 +106,9 @@ protected:
 
 class UncompressionStream final: public DecompressionStream {
 public:
-    UncompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : DecompressionStream(dIn, shuffleCompressBlockSize) {}
+    UncompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : DecompressionStream(dIn, shuffleCompressBlockSize, taskPool) {}
 
 protected:
     std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) override {
@@ -100,8 +120,9 @@ protected:
 
 class LZ4DecompressionStream final: public DecompressionStream {
 public:
-    LZ4DecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : DecompressionStream(dIn, shuffleCompressBlockSize) {}
+    LZ4DecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : DecompressionStream(dIn, shuffleCompressBlockSize, taskPool) {}
 
 protected:
     std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) override;
@@ -109,8 +130,9 @@ protected:
 
 class SnappyDecompressionStream final: public DecompressionStream {
 public:
-    SnappyDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : DecompressionStream(dIn, shuffleCompressBlockSize) {}
+    SnappyDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : DecompressionStream(dIn, shuffleCompressBlockSize, taskPool) {}
 
 protected:
     std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) override;
@@ -118,8 +140,9 @@ protected:
 
 class ZlibDecompressionStream final: public DecompressionStream {
 public:
-    ZlibDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : DecompressionStream(dIn, shuffleCompressBlockSize) {}
+    ZlibDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : DecompressionStream(dIn, shuffleCompressBlockSize, taskPool) {}
 
 protected:
     std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) override;
@@ -127,8 +150,9 @@ protected:
 
 class ZstdDecompressionStream final: public DecompressionStream {
 public:
-    ZstdDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize)
-        : DecompressionStream(dIn, shuffleCompressBlockSize) {}
+    ZstdDecompressionStream(jobject dIn, int64_t shuffleCompressBlockSize,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr)
+        : DecompressionStream(dIn, shuffleCompressBlockSize, taskPool) {}
 
 protected:
     std::pair<char*, int32_t> doDecompression(char* input, int32_t inputLength) override;
@@ -136,7 +160,12 @@ protected:
 
 class ShuffleReaderDeserializer final: public omniruntime::ColumnarBatchIterator {
 public:
-    ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn, CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle);
+    // Trailing taskPool (default nullptr) so
+    // the per-task pool decoded from makeNativeDeserializer's nmmHandle reaches
+    // the underlying DecompressionStream and downstream Vector ctor sites.
+    ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn, CompressionKind codec,
+        int64_t shuffleCompressBlockSize, jboolean isRowShuffle,
+        omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr);
 
     ~ShuffleReaderDeserializer()
     {

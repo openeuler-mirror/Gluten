@@ -30,6 +30,7 @@ class OmniSortMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metric
       metrics("addInputTime") += operatorMetrics.getAddInputTime
       metrics("numSpilledBytes") += operatorMetrics.getSpilledBytes
       metrics("numSpilledRows") += operatorMetrics.getSpilledRows
+      metrics("numSpilledFiles") += operatorMetrics.getSpilledFiles
 
       // todo omniCodegenTime
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows

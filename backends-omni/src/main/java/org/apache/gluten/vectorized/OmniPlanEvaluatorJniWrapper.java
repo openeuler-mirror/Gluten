@@ -79,4 +79,7 @@ public class OmniPlanEvaluatorJniWrapper implements RuntimeAware {
      * @param buildHashTableId the unique id of the built hash table (e.g. "BuiltHashTable-42").
      */
     public static native void nativeInvalidateBroadcastHashTable(String buildHashTableId);
+
+    /** Indexed entries, builds, hits, retirements, outstanding Spark storage bytes. */
+    public static native long[] nativeBroadcastCacheSnapshot();
 }

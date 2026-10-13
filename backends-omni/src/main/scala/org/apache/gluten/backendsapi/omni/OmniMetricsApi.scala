@@ -167,6 +167,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
     "getOutputTime" -> SQLMetrics.createTimingMetric(sparkContext, "output time of aggregation"),
     "numSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of spilled bytes"),
     "numSpilledRows" -> SQLMetrics.createMetric(sparkContext, "number of spilled rows"),
+    "numSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "number of native spill files"),
   )
 
   override def genHashAggregateTransformerMetricsUpdater(
@@ -227,6 +228,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "getOutputCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
       "numSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of spilled bytes"),
       "numSpilledRows" -> SQLMetrics.createMetric(sparkContext, "number of spilled rows"),
+      "numSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "number of native spill files"),
     )
 
   override def genWindowTransformerMetricsUpdater(metrics: Map[String, SQLMetric]): MetricsUpdater =
@@ -283,6 +285,7 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
       "getOutputCpuCount" -> SQLMetrics.createMetric(sparkContext, "output calls count"),
       "numSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of spilled bytes"),
       "numSpilledRows" -> SQLMetrics.createMetric(sparkContext, "number of spilled rows"),
+      "numSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "number of native spill files"),
     )
   }
 

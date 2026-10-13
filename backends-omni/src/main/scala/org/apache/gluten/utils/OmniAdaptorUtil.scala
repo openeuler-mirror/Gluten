@@ -63,6 +63,7 @@ object OmniAdaptorUtil {
 
   def transColBatchToOmniVecs(cb: ColumnarBatch, isSlice: Boolean): Array[Vec] = {
     val input = new Array[Vec](cb.numCols())
+    lazy val taskPoolAddress = OmniColumnVector.resolveColumnVectorPoolAddress()
     try {
       for (i <- 0 until cb.numCols()) {
         val omniVec: Vec = cb.column(i) match {
@@ -73,7 +74,7 @@ object OmniAdaptorUtil {
               vector.getVec.slice(0, cb.numRows())
             }
           case vector: ColumnVector =>
-            transColumnVector(vector, cb.numRows())
+            transColumnVector(vector, cb.numRows(), taskPoolAddress)
           case _ =>
             throw new UnsupportedOperationException("unsupport column vector!")
         }
@@ -95,10 +96,20 @@ object OmniAdaptorUtil {
   }
 
   def transColumnVector(columnVector: ColumnVector, columnSize: Int): Vec = {
+    transColumnVector(
+      columnVector,
+      columnSize,
+      OmniColumnVector.resolveColumnVectorPoolAddress())
+  }
+
+  private def transColumnVector(
+      columnVector: ColumnVector,
+      columnSize: Int,
+      nmmHandle: Long): Vec = {
     val datatype: DataType = columnVector.dataType()
     val vec: Vec = datatype match {
       case LongType | TimestampType =>
-        val vec = new LongVec(columnSize)
+        val vec = new LongVec(columnSize, nmmHandle)
         val values = new Array[Long](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -110,7 +121,7 @@ object OmniAdaptorUtil {
         vec.put(values, 0, 0, columnSize)
         vec
       case DateType | IntegerType =>
-        val vec = new IntVec(columnSize)
+        val vec = new IntVec(columnSize, nmmHandle)
         val values = new Array[Int](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -122,7 +133,7 @@ object OmniAdaptorUtil {
         vec.put(values, 0, 0, columnSize)
         vec
       case ShortType =>
-        val vec = new ShortVec(columnSize)
+        val vec = new ShortVec(columnSize, nmmHandle)
         val values = new Array[Short](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -134,7 +145,7 @@ object OmniAdaptorUtil {
         vec.put(values, 0, 0, columnSize)
         vec
       case DoubleType =>
-        val vec = new DoubleVec(columnSize)
+        val vec = new DoubleVec(columnSize, nmmHandle)
         val values = new Array[Double](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -146,7 +157,7 @@ object OmniAdaptorUtil {
         vec.put(values, 0, 0, columnSize)
         vec
       case FloatType =>
-        val vec = new FloatVec(columnSize)
+        val vec = new FloatVec(columnSize, nmmHandle)
         val values = new Array[Float](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -167,7 +178,7 @@ object OmniAdaptorUtil {
           }
           offsets(i + 1) = totalSize
         }
-        val vec = new VarcharVec(columnSize)
+        val vec = new VarcharVec(columnSize, nmmHandle)
         val values = new Array[Byte](totalSize)
         for (i <- 0 until columnSize) {
           if (null != columnVector.getUTF8String(i)) {
@@ -184,7 +195,7 @@ object OmniAdaptorUtil {
         vec.put(0, values, 0, offsets, 0, columnSize)
         vec
       case BooleanType =>
-        val vec = new BooleanVec(columnSize)
+        val vec = new BooleanVec(columnSize, nmmHandle)
         val values = new Array[Boolean](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -196,7 +207,7 @@ object OmniAdaptorUtil {
         vec.put(values, 0, 0, columnSize)
         vec
       case ByteType =>
-        val vec = new ByteVec(columnSize)
+        val vec = new ByteVec(columnSize, nmmHandle)
         val values = new Array[Byte](columnSize)
         for (i <- 0 until columnSize) {
           if (!columnVector.isNullAt(i)) {
@@ -209,7 +220,7 @@ object OmniAdaptorUtil {
         vec
       case t: DecimalType =>
         if (DecimalType.is64BitDecimalType(datatype)) {
-          val vec = new LongVec(columnSize)
+          val vec = new LongVec(columnSize, nmmHandle)
           val values = new Array[Long](columnSize)
           for (i <- 0 until columnSize) {
             if (!columnVector.isNullAt(i)) {
@@ -221,7 +232,7 @@ object OmniAdaptorUtil {
           vec.put(values, 0, 0, columnSize)
           vec
         } else {
-          val vec = new Decimal128Vec(columnSize)
+          val vec = new Decimal128Vec(columnSize, nmmHandle)
           for (i <- 0 until columnSize) {
             if (!columnVector.isNullAt(i)) {
               vec.setBigInteger(
@@ -239,11 +250,12 @@ object OmniAdaptorUtil {
             fields.map(field => sparkTypeToOmniTypeWithComplex(field.dataType, Metadata.empty)),
             fields.map(_.name)
           ),
-          columnSize
+          columnSize,
+          nmmHandle
         )
         val numChildren = fields.length
         for (i <- 0 until numChildren) {
-          vec.setChild(i, transColumnVector (columnVector.getChild (i), columnSize))
+          vec.setChild(i, transColumnVector(columnVector.getChild(i), columnSize, nmmHandle))
         }
         vec
       case MapType(keyType, valueType, valueContainsNull) =>
@@ -252,9 +264,14 @@ object OmniAdaptorUtil {
         for (i <- 1 until columnSize + 1) {
           offsets(i) = offsets(i - 1) + columnVector.getMap(i - 1).numElements()
         }
-        val vec = new MapVec(new MapDataType(sparkTypeToOmniTypeWithComplex(keyType, Metadata.empty), sparkTypeToOmniTypeWithComplex(valueType, Metadata.empty)), offsets(columnSize))
-        vec.AddKeys(transColumnVector(columnVector.getChild(0), offsets(columnSize)))
-        vec.AddValues(transColumnVector(columnVector.getChild(1), offsets(columnSize)))
+        val vec = new MapVec(
+          new MapDataType(
+            sparkTypeToOmniTypeWithComplex(keyType, Metadata.empty),
+            sparkTypeToOmniTypeWithComplex(valueType, Metadata.empty)),
+          offsets(columnSize),
+          nmmHandle)
+        vec.AddKeys(transColumnVector(columnVector.getChild(0), offsets(columnSize), nmmHandle))
+        vec.AddValues(transColumnVector(columnVector.getChild(1), offsets(columnSize), nmmHandle))
         vec.AddOffsets(offsets)
         vec
       case ArrayType(elementType, valueContainsNull) =>
@@ -263,8 +280,11 @@ object OmniAdaptorUtil {
         for (i <- 1 until columnSize + 1) {
           offsets(i) = offsets(i - 1) + columnVector.getArray(i - 1).numElements()
         }
-        val vec = new ArrayVec(new ArrayDataType(sparkTypeToOmniTypeWithComplex(elementType, Metadata.empty)), offsets(columnSize))
-        vec.addElements(transColumnVector(columnVector.getChild(0), offsets(columnSize)))
+        val vec = new ArrayVec(
+          new ArrayDataType(sparkTypeToOmniTypeWithComplex(elementType, Metadata.empty)),
+          offsets(columnSize),
+          nmmHandle)
+        vec.addElements(transColumnVector(columnVector.getChild(0), offsets(columnSize), nmmHandle))
         vec.addOffsets(offsets)
         vec
       case _ =>

@@ -9,13 +9,36 @@
 #include "compute/plannode_stats.h"
 #include "Runtime.h"
 
+#include <cstdlib>
+
+// Per-task pool TLS install at Next() is GONE. Under the Velox per-task pool
+// model, every allocator/buffer/Vector carries its owning pool at construction.
+// Native operator allocations driven by task_->Next() now route via the
+// pool-bound Allocator chain — no per-batch TLS install needed. The
+// memoryManager_ member is read only at construction (to decode the per-task
+// pool); metrics come from task_ stats, not from memoryManager_.
+
 namespace omniruntime {
+namespace {
+bool IsEnvironmentSwitchEnabled(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+}
+
+bool IsReclaimSuccessTelemetryEnabled()
+{
+    return IsEnvironmentSwitchEnabled("OMNI_RECLAIM_VERBOSE") ||
+        IsEnvironmentSwitchEnabled("OMNI_RECLAIM_VERBOSE_SUCCESS");
+}
+} // namespace
+
 std::string BoolToString(const bool value)
 {
     return value ? "true" : "false";
 }
 
-WholeStageResultIterator::WholeStageResultIterator(MemoryManager *memoryManager,
+WholeStageResultIterator::WholeStageResultIterator(gluten::MemoryManager *memoryManager,
     const std::shared_ptr<const PlanNode> &planNode, const std::vector<PlanNodeId> &scanNodeIds,
     const std::vector<PlanNodeId> &streamIds, const std::string &spillDir,
     const std::unordered_map<std::string, std::string> &confMap,
@@ -28,7 +51,16 @@ WholeStageResultIterator::WholeStageResultIterator(MemoryManager *memoryManager,
     config::QueryConfig queryConfig(GetQueryContextConf(spillDir));
     std::unordered_set<PlanNodeId> emptySet;
     PlanFragment planFragment{planNode, ExecutionStrategy::K_UNGROUPED, 1, emptySet};
-    task_ = std::make_shared<OmniTask>(planFragment, std::move(queryConfig));
+    // Decode the per-task OmniTaskMemoryPool from the
+    // opaque gluten::MemoryManager* and thread it through OmniTask → LocalPlanner →
+    // createOperator → factory->CreateOperator(pool). Production gluten path always
+    // supplies a real pool (JNI nmmHandle decode lands a gluten::OmniMemoryManager).
+    // ToOmniTaskPoolOrNull returns nullptr only when memoryManager_ is null or not
+    // a gluten::OmniMemoryManager — in that case OmniTask passes nullptr down and
+    // individual operator factories hit their Wave-3-deferred no-pool path.
+    omniruntime::mem::OmniTaskMemoryPool* pool =
+        omniruntime::ToOmniTaskPoolOrNull(memoryManager_);
+    task_ = std::make_shared<OmniTask>(planFragment, std::move(queryConfig), pool);
     getOrderedNodeIds(omniPlan_, orderedNodeIds_);
 
     if (!omniruntime::connector::getConnector(kHiveConnectorId())) {
@@ -125,6 +157,14 @@ void WholeStageResultIterator::TryAddSplitsToTask()
 
 VectorBatch *WholeStageResultIterator::Next()
 {
+    // Per-task pool TLS install removed. Native
+    // operator allocations driven by task_->Next() route via pool-bound
+    // allocators carried in the ExecutionContext / Buffer.pool_ members
+    // (Plans 02.1-01 / 02.1-02). The listener chain (AddMemory ->
+    // allocationChanged -> Spark TMM reserve) still fires correctly because
+    // pool_->AddMemory() is called directly from the pool-bound Allocator hot
+    // path — no thread-local marker required.
+
     TryAddSplitsToTask();
     VectorBatch *vectorBatch = nullptr;
     while (true) {
@@ -179,7 +219,18 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<bool>(kAggregationSpillEnabled, true));
         // Fraction in (0, 1], default 0.9. Join spill reads this same key; do not inject a percent.
         configs[config::QueryConfig::kMemFraction] = getSpillMemoryFraction(kMemFraction);
-        configs[config::QueryConfig::kJoinSpillEnabled] = BoolToString(omniCfg_->Get<bool>(kJoinSpillEnabled, true));
+        // Hash-join spill is driven from the Spark conf
+        // (spark.gluten.sql.columnar.backend.omni.joinSpillEnabled); fork default is ON so
+        // the join spill path is exercised unless a job explicitly disables it. The master
+        // gate (kSpillEnabled) comes from spillStrategy != "none" above.
+        configs[config::QueryConfig::kJoinSpillEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kJoinSpillEnabled, true));
+        configs[config::QueryConfig::kJoinSpillHandoffEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kJoinSpillHandoffEnabled, true));
+        configs[config::QueryConfig::kPassiveReclaimEnabled] = BoolToString(
+            omniCfg_->Get<bool>(kPassiveReclaimEnabled, false));
+        configs[config::QueryConfig::kForceBuildGroupSpillAfterNoMoreInput] =
+            BoolToString(omniCfg_->Get<bool>(kForceBuildGroupSpillAfterNoMoreInput, false));
         configs[config::QueryConfig::kOrderBySpillEnabled] = BoolToString(omniCfg_->Get<bool>(kOrderBySpillEnabled,
             true));
         configs[config::QueryConfig::kMaxSpillLevel] = std::to_string(omniCfg_->Get<int32_t>(kMaxSpillLevel, 4));
@@ -327,6 +378,14 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kSpilledPartitions)[metricIndex] = second->spilledPartitions;
         metrics_->get(omniruntime::OmniMetrics::kCpuCount)[metricIndex] = second->cpuWallTiming.count;
         metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
+        if ((second->spilledBytes > 0 || second->spilledFiles > 0) &&
+            IsReclaimSuccessTelemetryEnabled()) {
+            std::fprintf(stderr,
+                "[OMNI-METRICS] event=spill_snapshot index=%d operator=%s files=%u bytes=%lu rows=%lu\n",
+                metricIndex, entry.first.c_str(), second->spilledFiles,
+                static_cast<unsigned long>(second->spilledBytes),
+                static_cast<unsigned long>(second->spilledRows));
+        }
         metrics_->get(omniruntime::OmniMetrics::kScanTime)[metricIndex] =
             static_cast<long>(second->totalScanWallNanos);
         metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] = second->addInputTime.cpuNanos;

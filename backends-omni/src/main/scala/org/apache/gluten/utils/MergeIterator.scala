@@ -43,33 +43,35 @@ class MergeIterator(iter: Iterator[ColumnarBatch], localSchema: StructType,
 
   private def createOmniVectors(schema: StructType, rowSize: Int): Array[Vec] = {
     val vecs = new Array[Vec](schema.fields.length)
+    // Resolve the per-task column-vector pool address once (0L outside a Spark task).
+    val taskPoolAddress = OmniColumnVector.resolveColumnVectorPoolAddress()
     try {
       schema.fields.zipWithIndex.foreach { case (field, index) =>
         field.dataType match {
           case LongType | TimestampType =>
-            vecs(index) = new LongVec(rowSize)
+            vecs(index) = new LongVec(rowSize, taskPoolAddress)
           case DateType | IntegerType =>
-            vecs(index) = new IntVec(rowSize)
+            vecs(index) = new IntVec(rowSize, taskPoolAddress)
           case ShortType =>
-            vecs(index) = new ShortVec(rowSize)
+            vecs(index) = new ShortVec(rowSize, taskPoolAddress)
           case DoubleType =>
-            vecs(index) = new DoubleVec(rowSize)
+            vecs(index) = new DoubleVec(rowSize, taskPoolAddress)
           case FloatType =>
-            vecs(index) = new FloatVec(rowSize)
+            vecs(index) = new FloatVec(rowSize, taskPoolAddress)
           case BooleanType | NullType =>
-            vecs(index) = new BooleanVec(rowSize)
+            vecs(index) = new BooleanVec(rowSize, taskPoolAddress)
           case ByteType =>
-            vecs(index) = new ByteVec(rowSize)
+            vecs(index) = new ByteVec(rowSize, taskPoolAddress)
           case StringType | BinaryType =>
             val vecType: DataType = sparkTypeToOmniType(field.dataType, field.metadata)
-            vecs(index) = new VarcharVec(rowSize)
+            vecs(index) = new VarcharVec(rowSize, taskPoolAddress)
           case ArrayType(elementType, _) =>
             vecs(index) = new ArrayVec(new ArrayDataType(sparkTypeToOmniTypeWithComplex(elementType, Metadata.empty)), 0)
           case dt: DecimalType =>
             if (DecimalType.is64BitDecimalType(dt)) {
-              vecs(index) = new LongVec(rowSize)
+              vecs(index) = new LongVec(rowSize, taskPoolAddress)
             } else {
-              vecs(index) = new Decimal128Vec(rowSize)
+              vecs(index) = new Decimal128Vec(rowSize, taskPoolAddress)
             }
           case _ =>
             throw new UnsupportedOperationException("Fail to create omni vector, unsupported fields")

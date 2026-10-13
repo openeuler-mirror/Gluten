@@ -75,18 +75,30 @@ public class VectorTransferUtils {
 
     public static ColumnarBatch vectorsToNativeColumnarBatch(
             Vec[] vecs, List<TypeNode> colTypes, int batchSize) {
+        return vectorsToNativeColumnarBatch(
+                vecs, colTypes, batchSize, OmniColumnVector.resolveColumnVectorPoolAddress());
+    }
+
+    /** Wraps vectors using the task pool already resolved by the batch producer. */
+    public static ColumnarBatch vectorsToNativeColumnarBatch(
+            Vec[] vecs, List<TypeNode> colTypes, int batchSize, long taskPoolAddress) {
+        if (taskPoolAddress == 0L && org.apache.spark.task.TaskResources.inSparkTask()) {
+            throw new IllegalStateException("Active Spark task has no Omni memory pool");
+        }
         int count = colTypes.size();
         ColumnVector[] nColumnarVectors = new OmniColumnVector[count];
         for (int i = 0; i < count; i++) {
-            nColumnarVectors[i] = vecToOmniNativeColumnVector(vecs[i], colTypes.get(i));
+            nColumnarVectors[i] = vecToOmniNativeColumnVector(vecs[i], colTypes.get(i), taskPoolAddress);
         }
 
         return new ColumnarBatch(nColumnarVectors, batchSize);
     }
 
-    private static OmniColumnVector vecToOmniNativeColumnVector(Vec vec, TypeNode type) {
+    private static OmniColumnVector vecToOmniNativeColumnVector(
+            Vec vec, TypeNode type, long taskPoolAddress) {
         int size = vec.getSize();
-        OmniColumnVector vector = new OmniColumnVector(size, OmniColumnVector.populateVec(type), false);
+        OmniColumnVector vector = new OmniColumnVector(
+                size, OmniColumnVector.populateVec(type), false, taskPoolAddress);
         vector.setVec(vec);
         return vector;
     }
@@ -156,9 +168,11 @@ public class VectorTransferUtils {
 
     public static Vec populateVec(TypeNode typeNode, int size, String value) {
         String simpleName = typeNode.getClass().getSimpleName();
+        // Resolve the per-task column-vector pool address once (0L outside a Spark task).
+        long taskPoolAddress = OmniColumnVector.resolveColumnVectorPoolAddress();
         switch (simpleName) {
             case "BooleanTypeNode":
-                BooleanVec booleanVec = new BooleanVec(size);
+                BooleanVec booleanVec = new BooleanVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -170,7 +184,7 @@ public class VectorTransferUtils {
                 }
                 return booleanVec;
             case "I16TypeNode":
-                ShortVec shortVec = new ShortVec(size);
+                ShortVec shortVec = new ShortVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -182,7 +196,7 @@ public class VectorTransferUtils {
                 }
                 return shortVec;
             case "I32TypeNode":
-                IntVec intVec = new IntVec(size);
+                IntVec intVec = new IntVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -194,7 +208,7 @@ public class VectorTransferUtils {
                 }
                 return intVec;
             case "DateTypeNode":
-                IntVec dateVec = new IntVec(size);
+                IntVec dateVec = new IntVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -207,7 +221,7 @@ public class VectorTransferUtils {
                 }
                 return dateVec;
             case "I64TypeNode":
-                LongVec longVec = new LongVec(size);
+                LongVec longVec = new LongVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -222,7 +236,7 @@ public class VectorTransferUtils {
             case "VarCharTypeNode":
             case "StringTypeNode":
             case "FixedCharTypeNode":
-                VarcharVec varcharVec = new VarcharVec(size);
+                VarcharVec varcharVec = new VarcharVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -237,7 +251,7 @@ public class VectorTransferUtils {
             case "DecimalTypeNode":
                 DecimalTypeNode decimalTypeNode = (DecimalTypeNode) typeNode;
                 if (decimalTypeNode.precision > MAX_LONG_DIGITS) {
-                    Decimal128Vec decimal128Vec = new Decimal128Vec(size);
+                    Decimal128Vec decimal128Vec = new Decimal128Vec(size, taskPoolAddress);
                     if (value == null) {
                         byte[] nulls = new byte[size];
                         Arrays.fill(nulls, (byte) 1);
@@ -250,7 +264,7 @@ public class VectorTransferUtils {
                     }
                     return decimal128Vec;
                 } else {
-                    LongVec decimal64Vec = new LongVec(size);
+                    LongVec decimal64Vec = new LongVec(size, taskPoolAddress);
                     if (value == null) {
                         byte[] nulls = new byte[size];
                         Arrays.fill(nulls, (byte) 1);
@@ -264,7 +278,7 @@ public class VectorTransferUtils {
                     return decimal64Vec;
                 }
             case "FP64TypeNode":
-                DoubleVec doubleVec = new DoubleVec(size);
+                DoubleVec doubleVec = new DoubleVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);
@@ -276,7 +290,7 @@ public class VectorTransferUtils {
                 }
                 return doubleVec;
             case "TimestampTypeNode":
-                LongVec timestampVec = new LongVec(size);
+                LongVec timestampVec = new LongVec(size, taskPoolAddress);
                 if (value == null) {
                     byte[] nulls = new byte[size];
                     Arrays.fill(nulls, (byte) 1);

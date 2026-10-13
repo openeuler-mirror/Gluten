@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "compute/ProtobufUtils.h"
+#include "../compute/ProtobufUtils.h"
 #include "config.pb.h"
 #include <thread>
 #include <functional>
@@ -94,6 +94,13 @@ const uint32_t kSpillThreadNumDefaultValue = 0;
 const std::string kMemFraction = "spark.gluten.sql.columnar.backend.omni.memFraction";
 const std::string kAggregationSpillEnabled = "spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled";
 const std::string kJoinSpillEnabled = "spark.gluten.sql.columnar.backend.omni.joinSpillEnabled";
+const std::string kJoinSpillHandoffEnabled = "spark.gluten.sql.columnar.backend.omni.joinSpillHandoffEnabled";
+// Pool-driven passive reclaim. Independent from the debug-only EOB force below.
+const std::string kPassiveReclaimEnabled =
+    "spark.gluten.sql.columnar.backend.omni.passiveReclaimEnabled";
+// Debug-only EOB force group spill. Do NOT wire passiveReclaimTriggerBytes (mid self-trigger deleted on omni).
+const std::string kForceBuildGroupSpillAfterNoMoreInput =
+    "spark.gluten.sql.columnar.backend.omni.forceBuildGroupSpillAfterNoMoreInput";
 const std::string kOrderBySpillEnabled = "spark.gluten.sql.columnar.backend.omni.orderBySpillEnabled";
 
 // spill config

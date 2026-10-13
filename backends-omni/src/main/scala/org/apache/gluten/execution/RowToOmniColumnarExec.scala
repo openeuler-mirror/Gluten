@@ -150,7 +150,9 @@ object NativeInternalRowToColumnarBatch {
 
     val converter = UnsafeProjection.create(localSchema)
     val jniWrapper = new OmniRowToColumnarJniWrapper()
-    val r2cHandle = jniWrapper.init(nativeSchemaJson(localSchema, stringViewEnabled))
+    val taskPoolAddress = OmniColumnVector.resolveColumnVectorPoolAddress()
+    val r2cHandle = jniWrapper.init(
+      nativeSchemaJson(localSchema, stringViewEnabled), taskPoolAddress)
     val nativeBatchOwners = new java.util.IdentityHashMap[ColumnarBatch, VecBatch]()
 
     val res = new Iterator[ColumnarBatch] {
@@ -169,13 +171,13 @@ object NativeInternalRowToColumnarBatch {
       override def next(): ColumnarBatch = {
         val startTime = System.nanoTime()
         val firstRow = convertToUnsafeRow(rowIterator.next())
-        // Staging buffer is allocated from the Omni native allocator (accounted in Omni's
-        // ThreadMemoryManager) instead of Arrow, so the omni backend carries no Arrow dependency.
+        // Staging and output buffers share the task-bound Omni allocator, so
+        // both lifetimes remain visible to Spark's native memory manager.
         var bufAddr: Long = 0L
         var bufCapacity: Long = 0L
         def freeStagingBuf(): Unit = {
           if (bufAddr != 0L) {
-            jniWrapper.freeRowBuffer(bufAddr, bufCapacity)
+            jniWrapper.freeRowBuffer(taskPoolAddress, bufAddr, bufCapacity)
             bufAddr = 0L
           }
         }
@@ -197,12 +199,12 @@ object NativeInternalRowToColumnarBatch {
             // is 0 and allocateRowBuffer throws "row buffer size must be positive". Clamp to a positive
             // minimum; such rows carry no bytes, so any >0 capacity is safe.
             bufCapacity = Math.max(estimatedBufSize.toLong, 1L)
-            bufAddr = jniWrapper.allocateRowBuffer(bufCapacity)
+            bufAddr = jniWrapper.allocateRowBuffer(taskPoolAddress, bufCapacity)
           } else if ((offset + sizeInBytes) > bufCapacity) {
             val newCapacity = (offset + sizeInBytes) * 2
-            val newAddr = jniWrapper.allocateRowBuffer(newCapacity)
+            val newAddr = jniWrapper.allocateRowBuffer(taskPoolAddress, newCapacity)
             Platform.copyMemory(null, bufAddr, null, newAddr, offset)
-            jniWrapper.freeRowBuffer(bufAddr, bufCapacity)
+            jniWrapper.freeRowBuffer(taskPoolAddress, bufAddr, bufCapacity)
             bufAddr = newAddr
             bufCapacity = newCapacity
           }

@@ -30,6 +30,7 @@ class OmniWindowMetricsUpdater(val metrics: Map[String, SQLMetric]) extends Metr
       metrics("addInputTime") += operatorMetrics.getAddInputTime
       metrics("numSpilledBytes") += operatorMetrics.getSpilledBytes
       metrics("numSpilledRows") += operatorMetrics.getSpilledRows
+      metrics("numSpilledFiles") += operatorMetrics.getSpilledFiles
 
       metrics("numOutputRows") += operatorMetrics.getNumOutputRows
       metrics("numOutputVectorBatches") += operatorMetrics.getNumOutputVecBatches

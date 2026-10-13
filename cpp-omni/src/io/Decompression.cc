@@ -25,6 +25,7 @@
 #include "shuffle/arrow_frame.h"
 #include "shuffle/arrow_columnar_deserializer.h"
 #include "shuffle/arrow_row_deserializer.h"
+#include "memory/omni_task_memory_pool.h"
 
 namespace spark {
 
@@ -227,7 +228,8 @@ std::pair<char*, int32_t> ZstdDecompressionStream::doDecompression(char* input, 
 }
 
 ShuffleReaderDeserializer::ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn,
-    CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
+    CompressionKind codec, int64_t shuffleCompressBlockSize, jboolean isRowShuffle,
+    omniruntime::mem::OmniTaskMemoryPool* taskPool)
 : env(env), shuffleCompressBlockSize(shuffleCompressBlockSize), isRowShuffle(JNI_TRUE == isRowShuffle)
 {
     if (env->GetJavaVM(&vm_) != JNI_OK) {
@@ -236,23 +238,23 @@ ShuffleReaderDeserializer::ShuffleReaderDeserializer(JNIEnv* env, jobject jniIn,
     this->jniIn = env->NewGlobalRef(jniIn);
     switch (static_cast<int64_t>(codec)) {
         case CompressionKind_LZ4: {
-            this->decompressionStream = std::make_unique<LZ4DecompressionStream>(this->jniIn, this->shuffleCompressBlockSize);
+            this->decompressionStream = std::make_unique<LZ4DecompressionStream>(this->jniIn, this->shuffleCompressBlockSize, taskPool);
             break;
         }
         case CompressionKind_SNAPPY: {
-            this->decompressionStream = std::make_unique<SnappyDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize);
+            this->decompressionStream = std::make_unique<SnappyDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize, taskPool);
             break;
         }
         case CompressionKind_ZLIB: {
-            this->decompressionStream = std::make_unique<ZlibDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize);
+            this->decompressionStream = std::make_unique<ZlibDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize, taskPool);
             break;
         }
         case CompressionKind_ZSTD: {
-            this->decompressionStream = std::make_unique<ZstdDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize);
+            this->decompressionStream = std::make_unique<ZstdDecompressionStream>(this->jniIn, this->shuffleCompressBlockSize, taskPool);
             break;
         }
         case CompressionKind_NONE: {
-            this->decompressionStream = std::make_unique<UncompressionStream>(this->jniIn, this->shuffleCompressBlockSize);
+            this->decompressionStream = std::make_unique<UncompressionStream>(this->jniIn, this->shuffleCompressBlockSize, taskPool);
             break;
         }
         default:
@@ -347,9 +349,9 @@ int32_t DecompressionStream::columnarShuffleParseArrowBatch(
         auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
         if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
             auto dataType = DescriptorToOmniType(desc);
-            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(taskPool_, dataType.get(), rowCount);
         } else {
-            vecs[i] = omniruntime::vec::VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateFlatVector(taskPool_, vectorDataTypeId, rowCount);
         }
         vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
 
@@ -402,9 +404,9 @@ int32_t DecompressionStream::rowShuffleParseArrowBatch(
         auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
         if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
             auto dataType = DescriptorToOmniType(desc);
-            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(taskPool_, dataType.get(), rowCount);
         } else {
-            vecs[i] = omniruntime::vec::VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+            vecs[i] = omniruntime::vec::VectorHelper::CreateFlatVector(taskPool_, vectorDataTypeId, rowCount);
         }
         vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
     }
