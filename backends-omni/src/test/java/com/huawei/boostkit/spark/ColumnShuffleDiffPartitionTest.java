@@ -98,7 +98,7 @@ public class ColumnShuffleDiffPartitionTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 1;
         boolean pidVec = true;
         if (partitionType.equals("single")){
@@ -117,7 +117,8 @@ public class ColumnShuffleDiffPartitionTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         for (int i = 0; i < 99; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 999, partitionNum, true, pidVec);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

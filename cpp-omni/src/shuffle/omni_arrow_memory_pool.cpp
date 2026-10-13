@@ -26,14 +26,13 @@
 // OmniMemoryPoolAdapter implementation.
 //
 // Each Arrow Allocate/Reallocate/Free is forwarded to the omniruntime Allocator
-// which transparently reports to the global memory ledger
-// (MemoryManager::GetGlobalAccountedMemory).  The adapter additionally keeps
-// a local bytes_allocated counter (for arrow::MemoryPool::bytes_allocated) and
-// a peak tracker (for max_memory).
+// which reports through its bound OmniTaskMemoryPool. The adapter additionally
+// keeps a local bytes_allocated counter (for arrow::MemoryPool::bytes_allocated)
+// and a peak tracker (for max_memory).
 
 arrow::Status OmniMemoryPoolAdapter::Allocate(int64_t size, int64_t /*alignment*/, uint8_t **out)
 {
-    void *p = alloc_->Alloc(size); // → automatically accounted in GetGlobalAccountedMemory()
+    void *p = alloc_->Alloc(size); // accounted by the allocator's bound task pool
     if (p == nullptr) {
         LogsError("OmniMemoryPoolAdapter Allocate failed: size=%lld bytesAllocated=%lld peak=%lld",
                   static_cast<long long>(size),

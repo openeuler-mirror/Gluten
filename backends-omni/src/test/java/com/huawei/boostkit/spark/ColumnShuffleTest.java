@@ -19,6 +19,15 @@
 package com.huawei.boostkit.spark;
 
 import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import com.huawei.boostkit.spark.jni.SparkJniWrapper;
+import org.apache.gluten.memory.OmniNativeMemoryManagerJniWrapper;
+import org.apache.gluten.memory.listener.ReservationListener;
+import org.junit.Before;
+import org.junit.After;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import nova.hetu.omniruntime.type.CharDataType;
 import nova.hetu.omniruntime.type.DataType;
 import nova.hetu.omniruntime.type.Date32DataType;
@@ -44,6 +53,87 @@ import java.util.List;
 
 abstract class ColumnShuffleTest {
     public static String shuffleTestDir = "/tmp/shuffleTests";
+
+    protected long nmmHandle;
+    private final Set<Long> openSplitters = new LinkedHashSet<>();
+    private long reservedBytes;
+    private final SparkJniWrapper cleanupWrapper = new SparkJniWrapper();
+
+    @Before
+    public void createNativeMemoryManager() {
+        String nativeLibrary = System.getProperty("omni.test.nativeLibrary");
+        if (nativeLibrary == null) {
+            System.loadLibrary("spark_columnar_plugin");
+        } else {
+            System.load(nativeLibrary);
+        }
+        ReservationListener listener = new ReservationListener() {
+            @Override
+            public synchronized long reserve(long size) {
+                reservedBytes = Math.addExact(reservedBytes, size);
+                return size;
+            }
+
+            @Override
+            public synchronized long unreserve(long size) {
+                if (size > reservedBytes) {
+                    throw new IllegalStateException("Native test reservation underflow");
+                }
+                reservedBytes -= size;
+                return size;
+            }
+
+            @Override
+            public synchronized long getUsedBytes() {
+                return reservedBytes;
+            }
+        };
+        nmmHandle = OmniNativeMemoryManagerJniWrapper.create(
+                "omni", listener, new byte[0], "shuffle-test", "test", "1", -1L);
+        assertTrue("Native manager must be valid", nmmHandle > 0);
+    }
+
+    protected long reservedNativeBytes() {
+        return reservedBytes;
+    }
+
+    protected SparkJniWrapper newTestShuffleWrapper() {
+        return new SparkJniWrapper() {
+            @Override
+            public long nativeMake(String name, int partitions, String types, int columns,
+                    int bufferSize, String codec, String dataFile, int subDirs, String localDirs,
+                    long compressionBlockSize, int spillRows, long taskThreshold,
+                    long executorThreshold, long handle) {
+                assertEquals(nmmHandle, handle);
+                long splitter = super.nativeMake(name, partitions, types, columns, bufferSize,
+                        codec, dataFile, subDirs, localDirs, compressionBlockSize, spillRows,
+                        taskThreshold, executorThreshold, handle);
+                openSplitters.add(splitter);
+                return splitter;
+            }
+
+            @Override
+            public void close(long splitter) {
+                super.close(splitter);
+                openSplitters.remove(splitter);
+            }
+        };
+    }
+
+    @After
+    public void releaseNativeMemoryManager() {
+        // Even failed assertions must close splitters before destroying their pool.
+        for (long splitter : new ArrayList<>(openSplitters)) {
+            cleanupWrapper.close(splitter);
+            openSplitters.remove(splitter);
+        }
+        if (nmmHandle > 0) {
+            OmniNativeMemoryManagerJniWrapper.release(nmmHandle);
+            nmmHandle = 0;
+        }
+        assertEquals("Native reservations must be fully returned", 0L, reservedBytes);
+    }
+
 
     public DataType[] dataTypeId2DataType(DataType.DataTypeId[] idTypes) {
         DataType[] types = new DataType[idTypes.length];

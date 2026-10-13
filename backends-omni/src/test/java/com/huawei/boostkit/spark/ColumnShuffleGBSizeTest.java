@@ -82,7 +82,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_INT, OMNI_LONG, OMNI_DOUBLE};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 3;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -97,7 +97,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         for (int i = 0; i < 6 * 1024; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -112,7 +113,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_INT, OMNI_LONG, OMNI_DOUBLE};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 3;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -127,7 +128,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         for (int i = 0; i < 10 * 8 * 1024; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -142,7 +144,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_VARCHAR, OMNI_VARCHAR, OMNI_VARCHAR};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -157,7 +159,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         // 不能重复split同一个vb,接口有释放vb内存，重复split会导致重复释放内存而Core
         for (int i = 0; i < 99; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 999, partitionNum, false, true);
@@ -173,7 +176,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_VARCHAR, OMNI_VARCHAR, OMNI_VARCHAR};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -188,7 +191,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         for (int i = 0; i < 10 * 3 * 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -204,7 +208,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -219,7 +223,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         // 不能重复split同一个vb,接口有释放vb内存，重复split会导致重复释放内存而Core
         for (int i = 0; i < 6 * 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, partitionNum, false, true);
@@ -236,7 +241,7 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -251,7 +256,8 @@ public class ColumnShuffleGBSizeTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle);
         for (int i = 0; i < 3 * 9 * 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

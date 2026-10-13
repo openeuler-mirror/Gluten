@@ -66,7 +66,17 @@ public class ShuffleDataSerializer {
         }
     }
 
-    public static ColumnarBatch deserialize(boolean isRowShuffle, byte[] bytes, int readSize) {
+    /**
+     * Trailing taskPoolAddress carries the per-task
+     * pool address. Threaded through to ShuffleDataSerializerUtils.parse so the JNI
+     * vector constructors in deserializer.cpp consume it. 0L is the no-task fallback
+     * (native then uses the unaccounted no-pool path).
+     * Note: this method has no callers in the current gluten tree — Path 1 is reached
+     * only via the JNI surface (ShuffleColumnarBatchOutIterator → makeNativeDeserializer
+     * → Decompression.cc), so the parameter is plumbed for symmetry and future-proofing.
+     */
+    public static ColumnarBatch deserialize(boolean isRowShuffle, byte[] bytes, int readSize,
+                                            long taskPoolAddress) {
         ColumnVector[] vecs = null;
         long address = -1;
         ShuffleDataSerializerUtils deserializer = null;
@@ -83,7 +93,7 @@ public class ShuffleDataSerializer {
             int[] precisionArray = new int[vecCount];
             int[] scaleArray = new int[vecCount];
             long[] vecNativeIdArray = new long[vecCount];
-            deserializer.parse(typeIdArray, precisionArray, scaleArray, vecNativeIdArray);
+            deserializer.parse(typeIdArray, precisionArray, scaleArray, vecNativeIdArray, taskPoolAddress);
             vecs = new ColumnVector[vecCount];
             for (int i = 0; i < vecCount; i++) {
                 vecs[i] = buildVec(typeIdArray[i], vecNativeIdArray[i], rowCount, precisionArray[i], scaleArray[i]);

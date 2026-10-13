@@ -16,7 +16,9 @@
  */
 package org.apache.spark.shuffle
 
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.runtime.OmniRuntimes
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
@@ -83,7 +85,9 @@ private class OmniCelebornColumnarBatchSerializerInstance(
             dIn,
             shuffleCompressionCodec,
             shuffleCompressBlockSize,
-            isRowShuffle)
+            isRowShuffle,
+            OmniRuntimes.contextInstance(
+              BackendsApiManager.getBackendName, "omni-celeborn-shuffle-reader").getPoolAddress())
         }
       private val wrappedOut: ShuffleColumnarBatchOutIterator =
         if (isEmptyStream) null else new ShuffleColumnarBatchOutIterator(shuffleReaderHandle)

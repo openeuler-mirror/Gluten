@@ -16,30 +16,48 @@
  * limitations under the License.
  */
 
-// Task 2 (TC-MP-01/02): Verify OmniMemoryPoolAdapter routes Arrow allocations
-// through the omni Allocator so that GetGlobalAccountedMemory() reflects every
-// byte. This is the spill-accounting gate for all subsequent Arrow shuffle work.
+// Verify OmniMemoryPoolAdapter routes Arrow allocations through the per-task
+// Omni allocator. This is the spill-accounting gate for Arrow shuffle work.
 
 #include "gtest/gtest.h"
+#include "memory/AllocationListener.h"
+#include "memory/omni_task_memory_pool.h"
+#include "memory/OmniPoolAllocationListener.h"
 #include "shuffle/omni_arrow_memory_pool.h"
 
 #include <arrow/buffer.h>
 #include <arrow/result.h>
 
+#include <algorithm>
 #include <vector/vector_common.h>
 
-using omniruntime::mem::Allocator;
-using omniruntime::mem::MemoryManager;
-using omniruntime::mem::ThreadMemoryManager;
+namespace {
+class TrackingAllocationListener final : public gluten::AllocationListener {
+public:
+    void allocationChanged(int64_t diff) override
+    {
+        current_ += diff;
+        peak_ = std::max(peak_, current_);
+    }
+
+    int64_t currentBytes() override { return current_; }
+    int64_t peakBytes() override { return peak_; }
+
+private:
+    int64_t current_{0};
+    int64_t peak_{0};
+};
+} // namespace
 
 // TC-MP-01 — AdapterCounterTracksAllocations
 // Verify the adapter's own bytes_allocated / max_memory counters correctly
-// track Arrow allocations routed through the omni Allocator.  This is a unit
-// test of the adapter's bookkeeping and does not depend on the 1 MB global
-// flush threshold of ThreadMemoryManager.
+// track Arrow allocations routed through the task-bound Omni allocator.
 TEST(OmniMemoryPoolAdapter, AdapterCounterTracksAllocations)
 {
-    auto *omniAlloc = Allocator::GetAllocator();
+    TrackingAllocationListener listener;
+    gluten::OmniPoolAllocationListener taskPoolListenerBridge(listener);
+    omniruntime::mem::OmniTaskMemoryPool taskPool(&taskPoolListenerBridge);
+    auto *omniAlloc = taskPool.getBoundAllocator();
     OmniMemoryPoolAdapter pool(omniAlloc);
 
     constexpr int64_t kSize = 4096;
@@ -61,27 +79,23 @@ TEST(OmniMemoryPoolAdapter, AdapterCounterTracksAllocations)
     EXPECT_LE(pool.bytes_allocated(), 0);
     // Peak must remain at least kSize (peak is not reduced on free)
     EXPECT_GE(pool.max_memory(), kSize);
+    EXPECT_EQ(taskPool.currentBytes(), 0);
+    EXPECT_EQ(listener.currentBytes(), 0);
 }
 
-// TC-MP-02 — LargeAllocationFlushesToGlobalLedger
-// Verify that Arrow allocations through the adapter eventually appear in the
-// global memory ledger (GetGlobalAccountedMemory), which is what the shuffle
-// spill threshold check reads.  The omni ThreadMemoryManager batches per-thread
-// accounting with a 1 MB flush threshold, so we allocate >1 MB to force a flush
-// and use arrow::AllocateResizableBuffer to exercise the high-level Arrow API
-// path that production shuffle code will use.
-TEST(OmniMemoryPoolAdapter, LargeAllocationFlushesToGlobalLedger)
+// TC-MP-02 — LargeAllocationTracksTaskPoolLedger
+// Exercise the high-level Arrow API and verify that both the task pool and its
+// listener see the allocation immediately and reconcile it on release.
+TEST(OmniMemoryPoolAdapter, LargeAllocationTracksTaskPoolLedger)
 {
-    // Reset thread-local and global memory state for a deterministic baseline.
-    ThreadMemoryManager::GetThreadMemoryManager()->Clear();
-
-    auto *omniAlloc = Allocator::GetAllocator();
+    TrackingAllocationListener listener;
+    gluten::OmniPoolAllocationListener taskPoolListenerBridge(listener);
+    omniruntime::mem::OmniTaskMemoryPool taskPool(&taskPoolListenerBridge);
+    auto *omniAlloc = taskPool.getBoundAllocator();
     OmniMemoryPoolAdapter pool(omniAlloc);
 
-    int64_t before = MemoryManager::GetGlobalAccountedMemory();
+    const int64_t before = taskPool.currentBytes();
 
-    // Allocate 2 MB — exceeds the 1 MB untrackedMemoryThreshold so the batched
-    // AddMemory propagates to the global MemoryManager.
     constexpr int64_t kSize = 2 * 1024 * 1024; // 2 MB
     auto bufResult = arrow::AllocateResizableBuffer(kSize, &pool);
     ASSERT_TRUE(bufResult.ok()) << bufResult.status().ToString();
@@ -92,12 +106,13 @@ TEST(OmniMemoryPoolAdapter, LargeAllocationFlushesToGlobalLedger)
     buf->mutable_data()[0] = 0xAB;
     EXPECT_EQ(buf->data()[0], 0xAB);
 
-    int64_t after = MemoryManager::GetGlobalAccountedMemory();
-    EXPECT_GE(after, before + kSize) << "Arrow alloc must be accounted in global memory";
+    const int64_t after = taskPool.currentBytes();
+    EXPECT_GE(after, before + kSize) << "Arrow alloc must be accounted in the task pool";
+    EXPECT_GE(listener.currentBytes(), kSize);
 
-    // Release the buffer — destructor calls pool->Free which routes through
-    // Allocator::Free → ThreadMemoryManager::ReclaimMemory → global ledger.
+    // Release routes through the same bound allocator and reconciles both
+    // the pool-local and Spark-facing listener ledgers.
     buf.reset();
-    int64_t freed = MemoryManager::GetGlobalAccountedMemory();
-    EXPECT_LE(freed, after);
+    EXPECT_EQ(taskPool.currentBytes(), before);
+    EXPECT_EQ(listener.currentBytes(), before);
 }
