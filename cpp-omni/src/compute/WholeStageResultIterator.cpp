@@ -228,7 +228,7 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         configs[config::QueryConfig::kJoinSpillHandoffEnabled] = BoolToString(
             omniCfg_->Get<bool>(kJoinSpillHandoffEnabled, true));
         configs[config::QueryConfig::kPassiveReclaimEnabled] = BoolToString(
-            omniCfg_->Get<bool>(kPassiveReclaimEnabled, false));
+            omniCfg_->Get<bool>(kPassiveReclaimEnabled, true));
         configs[config::QueryConfig::kForceBuildGroupSpillAfterNoMoreInput] =
             BoolToString(omniCfg_->Get<bool>(kForceBuildGroupSpillAfterNoMoreInput, false));
         configs[config::QueryConfig::kOrderBySpillEnabled] = BoolToString(omniCfg_->Get<bool>(kOrderBySpillEnabled,
