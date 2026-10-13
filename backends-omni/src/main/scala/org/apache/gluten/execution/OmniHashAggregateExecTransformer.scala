@@ -22,7 +22,6 @@ import org.apache.gluten.expression.{OmniExpressionAdaptor, OmniRegrMeasureBuild
 import org.apache.gluten.expression.OmniExpressionAdaptor.{sparkTypeToOmniTypeWithComplex, toOmniAggFunType}
 import org.apache.gluten.expression.aggregate.{OmniHLLAdapter,OmniCollectSet, OmniCollectList}
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
-import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.extension.{HashAggEligibility, ValidationResult}
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
 import org.apache.gluten.substrait.expression.{AggregateFunctionNode, ExpressionBuilder, ExpressionNode}
@@ -464,7 +463,7 @@ case class OmniAdaptiveHashAggregateExecTransformer(
 
   override def withMixedOutputEnabled(enabled: Boolean): HashAggregateExecBaseTransformer = {
     if (!enabled) { return this }
-    val shouldEnable = GlutenConfig.get.enableMixedStorage &&
+    val shouldEnable = HashAggEligibility.isMixedStorageEnabled &&
       aggregateExpressions.forall(p => p.mode == Partial || p.mode == PartialMerge) &&
       !groupingExpressions.exists(_.dataType.isInstanceOf[MapType]) &&
       !HashAggEligibility.isAggInputAlreadyDistributedWithAggKeys(this)
@@ -513,7 +512,7 @@ case class OmniHashAggregateExecTransformer(
 
   override def withMixedOutputEnabled(enabled: Boolean): HashAggregateExecBaseTransformer = {
     if (!enabled) { return this }
-    val shouldEnable = GlutenConfig.get.enableMixedStorage &&
+    val shouldEnable = HashAggEligibility.isMixedStorageEnabled &&
       aggregateExpressions.forall(p => p.mode == Partial || p.mode == PartialMerge) &&
       !groupingExpressions.exists(_.dataType.isInstanceOf[MapType]) &&
       !HashAggEligibility.isAggInputAlreadyDistributedWithAggKeys(this)

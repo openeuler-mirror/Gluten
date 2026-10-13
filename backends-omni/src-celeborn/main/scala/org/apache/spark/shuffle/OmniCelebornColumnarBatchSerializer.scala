@@ -57,7 +57,8 @@ private class OmniCelebornColumnarBatchSerializerInstance(
   private val columnarConf = GlutenConfig.get
   private val conf = SparkEnv.get.conf
   private val shuffleCompressBlockSize = columnarConf.omniColumnarShuffleCompressBlockSize
-  private val enableMix = columnarConf.enableMixedStorage
+  // Celeborn writer never emits mixed batches, so skip mixed stream detection.
+  private val enableMix = false
   private val enableShuffleCompress = conf.getBoolean("spark.shuffle.compress", defaultValue = true)
   private val jniWrapper = new SparkJniWrapper()
 

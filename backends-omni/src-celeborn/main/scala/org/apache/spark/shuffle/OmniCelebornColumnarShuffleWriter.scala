@@ -32,7 +32,7 @@ import org.apache.celeborn.common.CelebornConf
 
 import java.io.IOException
 
-import nova.hetu.omniruntime.vector.VecBatch
+import nova.hetu.omniruntime.vector.{MixedVec, VecBatch}
 
 class OmniCelebornColumnarShuffleWriter[K, V](
     shuffleId: Int,
@@ -101,6 +101,10 @@ class OmniCelebornColumnarShuffleWriter[K, V](
         initShuffleWriter(cb)
         val startTime = System.nanoTime()
         val input = OmniAdaptorUtil.transColBatchToOmniVecs(cb)
+        if (input.last.isInstanceOf[MixedVec]) {
+          throw new UnsupportedOperationException(
+            "Mixed storage output is not supported by Celeborn shuffle")
+        }
         for (col <- 0 until cb.numCols()) {
           dep.metrics("dataSize").add(input(col).getRealValueBufCapacityInBytes)
           dep.metrics("dataSize").add(input(col).getRealNullBufCapacityInBytes)

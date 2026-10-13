@@ -1,5 +1,6 @@
 package org.apache.gluten.extension
 
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution.{HashAggregateExecBaseTransformer, OmniResizeBatchesExec, ProjectExecTransformer}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{Final, Partial, PartialMerge}
 import org.apache.spark.sql.catalyst.plans.physical.ClusteredDistribution
@@ -12,6 +13,12 @@ import org.apache.spark.sql.execution.aggregate.BaseAggregateExec
  * on what a convertible partial hash aggregate looks like.
  */
 object HashAggEligibility {
+
+  /** Celeborn shuffle has no mixed write path, so mixed output is only allowed with local shuffle. */
+  def isMixedStorageEnabled: Boolean = {
+    val conf = GlutenConfig.get
+    conf.enableMixedStorage && !conf.isUseCelebornShuffleManager
+  }
 
   /** All aggregate functions are in partial/partialmerge mode (an intermediate agg). */
   def isIntermediateAgg(agg: HashAggregateExecBaseTransformer): Boolean =
