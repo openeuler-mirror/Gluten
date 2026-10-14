@@ -51,6 +51,14 @@ int64_t QuantizedSize(int64_t size) {
     constexpr int64_t kQuantum = 8 * kMiB;
     return roundUp(size, kQuantum);
 }
+
+// Unused reservation kept on frees before it is repaid to Spark. Every repay
+// or borrow is a JNI call through Spark's executor-wide memory lock, so usage
+// that wobbles across a 1 MiB step (or drains operator by operator at
+// teardown) must not round-trip on every step. Velox goes further and keeps
+// its whole pool capacity until arbitration shrinks it; this bounds the
+// retained slack per task instead. Reaching zero usage still repays all.
+constexpr int64_t kRepaySlack = 8 * kMiB;
 } // namespace
 
 OmniBlockAllocationListener::ReservationUpdate
@@ -67,7 +75,13 @@ OmniBlockAllocationListener::updateReservation(int64_t diff) {
         throw std::underflow_error("OmniBlockAllocationListener: usedBytes_ underflow");
     }
     const int64_t newCommittedUsed = committedUsed + diff;
-    const int64_t target = newCommittedUsed == 0 ? 0 : QuantizedSize(newCommittedUsed);
+    int64_t target = newCommittedUsed == 0 ? 0 : QuantizedSize(newCommittedUsed);
+    if (target < committedReservation && newCommittedUsed > 0 &&
+        (diff > 0 || committedReservation - target < kRepaySlack)) {
+        // Growth never repays retained slack; a free repays only once the
+        // slack reaches kRepaySlack, and then down to the quantized usage.
+        target = committedReservation;
+    }
     const int64_t granted = target - committedReservation;
     if (granted > 0 && reservationBytes_ > std::numeric_limits<int64_t>::max() - granted) {
         throw std::overflow_error("OmniBlockAllocationListener: reservation overflow");

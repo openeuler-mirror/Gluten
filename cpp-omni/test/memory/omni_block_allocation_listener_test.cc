@@ -111,9 +111,9 @@ TEST(OmniBlockAllocationListener, ExactExternalRepaySupportsLaterBlockCrossingsA
     wrap.allocationChanged(MiB(1)); // used 2.5 MiB -> reservation 3 MiB
     EXPECT_EQ(delegate.total, MiB(3));
     EXPECT_EQ(wrap.currentBytes(), MiB(3));
-    wrap.allocationChanged(-MiB(1)); // used 1.5 MiB -> reservation 2 MiB
-    EXPECT_EQ(delegate.total, MiB(2));
-    EXPECT_EQ(wrap.currentBytes(), MiB(2));
+    wrap.allocationChanged(-MiB(1)); // used 1.5 MiB -> 1.5 MiB slack is retained
+    EXPECT_EQ(delegate.total, MiB(3));
+    EXPECT_EQ(wrap.currentBytes(), MiB(3));
     wrap.allocationChanged(-MiB(3) / 2); // free-to-zero returns exact remainder
     EXPECT_EQ(delegate.total, 0);
     EXPECT_EQ(wrap.currentBytes(), 0);
@@ -183,8 +183,10 @@ TEST(OmniBlockAllocationListener, NestedFreeCannotRepayProvisionalTierRounding) 
         throw std::runtime_error("denied");
     };
     EXPECT_THROW(wrap.allocationChanged(MiB(2)), std::runtime_error);
-    EXPECT_EQ(wrap.currentBytes(), MiB(12));
-    EXPECT_EQ(delegate.total, MiB(12));
+    // The nested free stays inside the repay slack, so the committed 15 MiB
+    // reservation is retained; the denied borrow's rounding is not.
+    EXPECT_EQ(wrap.currentBytes(), MiB(15));
+    EXPECT_EQ(delegate.total, MiB(15));
     wrap.allocationChanged(-MiB(12));
     EXPECT_EQ(delegate.total, 0);
 }
@@ -240,4 +242,47 @@ TEST(OmniBlockAllocationListenerTest, ExternalRepaymentCommitsOnlyAfterDownstrea
     block.allocationChanged(-MiB(1));
     EXPECT_EQ(block.currentBytes(), 0);
     EXPECT_EQ(storage.total, 0);
+}
+
+TEST(OmniBlockAllocationListener, FreesRetainBoundedSlackBeforeRepaying) {
+    CountingListener delegate;
+    gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.allocationChanged(MiB(12));
+    ASSERT_EQ(delegate.calls, 1);
+
+    // Usage wobbling across 1 MiB steps below the reservation never calls Spark.
+    for (int i = 0; i < 10; ++i) {
+        wrap.allocationChanged(-MiB(3) / 2);
+        wrap.allocationChanged(MiB(3) / 2);
+    }
+    EXPECT_EQ(delegate.calls, 1);
+    EXPECT_EQ(delegate.total, MiB(12));
+
+    // Draining step by step repays once the slack reaches 8 MiB, down to the
+    // quantized usage, and the final free to zero repays the remainder.
+    for (int i = 0; i < 7; ++i) {
+        wrap.allocationChanged(-MiB(1));
+    }
+    EXPECT_EQ(delegate.calls, 1);
+    EXPECT_EQ(delegate.total, MiB(12));
+    wrap.allocationChanged(-MiB(1)); // used 4 MiB, slack 8 MiB
+    EXPECT_EQ(delegate.calls, 2);
+    EXPECT_EQ(delegate.total, MiB(4));
+    wrap.allocationChanged(-MiB(4));
+    EXPECT_EQ(delegate.calls, 3);
+    EXPECT_EQ(delegate.total, 0);
+    EXPECT_EQ(wrap.currentBytes(), 0);
+}
+
+TEST(OmniBlockAllocationListener, GrowthReusesRetainedSlack) {
+    CountingListener delegate;
+    gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.allocationChanged(MiB(10));
+    wrap.allocationChanged(-MiB(6)); // used 4 MiB, 10 MiB retained
+    wrap.allocationChanged(MiB(5));  // used 9 MiB fits the retained reservation
+    EXPECT_EQ(delegate.calls, 1);
+    EXPECT_EQ(delegate.total, MiB(10));
+    wrap.allocationChanged(MiB(2));  // used 11 MiB grows past it
+    EXPECT_EQ(delegate.calls, 2);
+    EXPECT_EQ(delegate.total, MiB(11));
 }
