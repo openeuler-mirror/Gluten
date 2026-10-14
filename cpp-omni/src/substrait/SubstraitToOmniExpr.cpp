@@ -305,14 +305,9 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             if (len <= 0) {
                 OMNI_THROW("OMNI_ERROR:", "bloom string is invaild when process might_contain func in SubstraitToOmniExpr.");
             }
-            char *dataPtr = new char[len];
-
-            // dataPtr will be release in op::BloomFilter
-            std::memcpy(dataPtr, sp->c_str(), len);
-
-            // deserialize string to a BloomFilter tool for using its MightContain() method.
-            // args `true` means that dataPtr need to be released by BloomFilter.
-            std::unique_ptr<op::BloomFilter>bloomFilter = std::make_unique<op::BloomFilter>(dataPtr, true);
+            // Tasks probing the same runtime filter share one deserialized BloomFilter, so the
+            // address literal below, and with it the compiled filter cache key, stays stable.
+            std::shared_ptr<op::BloomFilter> bloomFilter = op::BloomFilter::GetShared(sp->data(), len);
             LiteralExpr *nChildExpr = new LiteralExpr(reinterpret_cast<intptr_t>(bloomFilter.get()), LongType());
             BloomFilterFuncExpr *bfFuncExpr = new BloomFilterFuncExpr(funcName, {nChildExpr, args[1]}, outputType, std::move(bloomFilter));
             delete childExpr;
