@@ -259,6 +259,11 @@ class Splitter : public omniruntime::op::SpillableOperator {
     // SplitByRow) hold reclaimMutex_ across the reservation, so the scratch
     // reuse is serialized with its only writer.
     mutable std::vector<uint8_t> fixed_column_has_null_scratch_;
+    // Row shuffle sizes its pre-reservation from the largest per-batch
+    // average serialized row length written so far, instead of serializing
+    // every row a second time just to measure it. Zero until the first row
+    // batch is written; that first batch is still measured row by row.
+    uint64_t row_estimate_max_avg_bytes_ = 0;
     int32_t *partition_buffer_size_; // 各分区的buffer大小
     int32_t *partition_buffer_idx_base_; //当前已缓存的各partition行数据记录，用于定位缓冲buffer当前可用位置
     int32_t *partition_buffer_idx_offset_; //split定长列时用于统计offset的临时变量

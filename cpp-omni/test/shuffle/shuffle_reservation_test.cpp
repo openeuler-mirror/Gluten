@@ -362,6 +362,29 @@ TEST_F(ShuffleReservationTest, RowFanoutReservesForRowsInsteadOfColumnarCapacity
     }
 }
 
+TEST_F(ShuffleReservationTest, RowFanoutLaterBatchesReserveFromObservedRowSize)
+{
+    // Only the first row batch is measured row by row; later batches size the
+    // pre-reservation from the observed average row length. The result must
+    // stay within the same bound and still drain to zero.
+    tmpShuffleFilePath = tmpTestingDir + "/shuffle_row_fanout_estimate";
+    constexpr int partitions = 200;
+    CappedAllocationListener delegate(16 * kMiB);
+    gluten::OmniBlockAllocationListener blockListener(&delegate);
+    gluten::OmniPoolAllocationListener poolListenerBridge(blockListener);
+    omniruntime::mem::OmniTaskMemoryPool pool(&poolListenerBridge);
+    auto splitter = MakeWideLongSplitter(partitions, tmpShuffleFilePath, &pool);
+    for (int batch = 0; batch < 3; ++batch) {
+        EXPECT_NO_THROW(splitter->SplitByRow(CreateWideLongBatch(partitions, partitions)));
+    }
+    EXPECT_GT(pool.currentBytes(), 0);
+    EXPECT_LE(delegate.peakBytes(), 16 * kMiB);
+    EXPECT_NO_THROW(splitter->StopByRow());
+    splitter.reset();
+    EXPECT_EQ(pool.currentBytes(), 0);
+    EXPECT_EQ(delegate.currentBytes(), 0);
+}
+
 TEST_F(ShuffleReservationTest, ForeignThreadReclaimDoesNotWaitForReservationCallback)
 {
     class CallbackListener final : public gluten::AllocationListener {

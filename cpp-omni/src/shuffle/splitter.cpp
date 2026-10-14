@@ -2075,26 +2075,45 @@ int64_t Splitter::EstimateSplitReservation(VectorBatch& vb)
     };
 
     if (!columnarMode_) {
-        // Row shuffle never allocates columnar capacity buffers. Measure the
-        // serialized rows instead; this also handles dictionary/constant and
-        // variable-width values using the same encoders as SplitByRow.
-        const int firstColumn = singlePartitionFlag ? 0 : 1;
-        std::vector<DataTypeId> types;
-        std::vector<Encoding> encodings;
-        for (int col = firstColumn; col < vb.GetVectorCount(); ++col) {
-            types.push_back(vb.Get(col)->GetTypeId());
-            encodings.push_back(vb.Get(col)->GetEncoding());
-        }
-        RowBuffer rowBuffer(types, encodings);
+        // Row shuffle never allocates columnar capacity buffers; it needs the
+        // serialized bytes each partition will receive.
         std::vector<uint64_t> partitionBytes(num_partitions_, 0);
-        for (int row = 0; row < vb.GetRowCount(); ++row) {
-            rowBuffer.TransValue(vb.GetVectors() + firstColumn, row);
-            const int32_t length = rowBuffer.CalculateCompactLength(types.size());
-            if (length < 0) {
-                throw std::overflow_error("Serialized shuffle row length overflow");
+        if (row_estimate_max_avg_bytes_ > 0) {
+            // Like Velox ensureInputFits(), size from an estimate rather than
+            // serializing the batch twice: rows per partition times the
+            // largest per-batch average row length seen so far. The actual
+            // pool-backed arena growth stays authoritative if a batch runs
+            // larger than the estimate.
+            if (singlePartitionFlag) {
+                partitionBytes[0] = multiply(static_cast<uint64_t>(vb.GetRowCount()),
+                    row_estimate_max_avg_bytes_);
+            } else {
+                for (int pid = 0; pid < num_partitions_; ++pid) {
+                    partitionBytes[pid] = multiply(static_cast<uint64_t>(partition_id_cnt_cur_[pid]),
+                        row_estimate_max_avg_bytes_);
+                }
             }
-            const int pid = singlePartitionFlag ? 0 : partition_id_[row];
-            partitionBytes[pid] = add(partitionBytes[pid], static_cast<uint64_t>(length));
+        } else {
+            // First batch: no history yet, so measure the serialized rows with
+            // the same encoders as SplitByRow (dictionary/constant and
+            // variable-width values included).
+            const int firstColumn = singlePartitionFlag ? 0 : 1;
+            std::vector<DataTypeId> types;
+            std::vector<Encoding> encodings;
+            for (int col = firstColumn; col < vb.GetVectorCount(); ++col) {
+                types.push_back(vb.Get(col)->GetTypeId());
+                encodings.push_back(vb.Get(col)->GetEncoding());
+            }
+            RowBuffer rowBuffer(types, encodings);
+            for (int row = 0; row < vb.GetRowCount(); ++row) {
+                rowBuffer.TransValue(vb.GetVectors() + firstColumn, row);
+                const int32_t length = rowBuffer.CalculateCompactLength(types.size());
+                if (length < 0) {
+                    throw std::overflow_error("Serialized shuffle row length overflow");
+                }
+                const int pid = singlePartitionFlag ? 0 : partition_id_[row];
+                partitionBytes[pid] = add(partitionBytes[pid], static_cast<uint64_t>(length));
+            }
         }
         uint64_t growth = 0;
         for (int pid = 0; pid < num_partitions_; ++pid) {
@@ -2252,6 +2271,7 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
     ReserveForSplit(*vecBatch, "Splitter::SplitByRow");
     NonReclaimableSection nonReclaimable(this);
     int32_t rowCount = vecBatch->GetRowCount();
+    uint64_t batchRowBytes = 0;
     for (int pid = 0; pid < num_partitions_; ++pid) {
         auto needCapacity = partition_rows[pid].size() + rowCount;
         if (partition_rows[pid].capacity() < needCapacity) {
@@ -2275,6 +2295,7 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
             RowInfo *rowInfo = rowBatch->Get(i);
             partition_rows[0].emplace_back(std::unique_ptr<RowInfo>(rowInfo));
             total_input_size += rowInfo->length;
+            batchRowBytes += static_cast<uint64_t>(rowInfo->length);
         }
         delete vecBatch;
     } else {
@@ -2301,11 +2322,16 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
                 auto oneRowLen = rowBuffer->FillBuffer(partition_arena_[pid]);
                 partition_rows[pid].emplace_back(std::make_unique<RowInfo>(rowBuffer->TakeRowBuffer(), oneRowLen));
                 total_input_size += oneRowLen;
+                batchRowBytes += static_cast<uint64_t>(oneRowLen);
             }
         }
 
         delete vecBatch;
         delete tmpVectorBatch;
+    }
+    if (rowCount > 0) {
+        const uint64_t batchAvg = (batchRowBytes + rowCount - 1) / static_cast<uint64_t>(rowCount);
+        row_estimate_max_avg_bytes_ = std::max(row_estimate_max_avg_bytes_, batchAvg);
     }
 
     // spill
