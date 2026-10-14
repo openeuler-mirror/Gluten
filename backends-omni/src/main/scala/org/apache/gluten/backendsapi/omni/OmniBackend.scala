@@ -35,6 +35,7 @@ import org.apache.gluten.validate.NativePlanValidationInfo
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator
 import org.apache.spark.shuffle.OmniShuffleUtil
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
+import org.apache.spark.sql.catalyst.plans.{JoinType, LeftOuter, RightOuter}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Average, Count, First, Last, Max, Min, StddevSamp, StddevPop, VarianceSamp, VariancePop, Sum}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, CurrentRow, CumeDist, DenseRank, Expression, Lag, Lead, Literal, NamedExpression, NthValue, NTile, Rank, PercentRank, RowNumber, SpecifiedWindowFrame, UnboundedFollowing, UnboundedPreceding, WindowExpression}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
@@ -95,6 +96,38 @@ object OmniBackendSettings extends BackendSettingsApi {
   override def primaryBatchType: Convention.BatchType = OmniBatch
 
   override def enableJoinKeysRewrite(): Boolean = false
+
+  /**
+   * Product default matches Spark Opposite (LEFT builds right, RIGHT builds left).
+   * Test knob omni.test.allowSameSideOuterShj also allows LEFT-build-left / RIGHT-build-right.
+   */
+  override def supportHashBuildJoinTypeOnLeft: JoinType => Boolean = {
+    t =>
+      if (super.supportHashBuildJoinTypeOnLeft(t)) {
+        true
+      } else if (GlutenConfig.get.omniTestAllowSameSideOuterShj) {
+        t match {
+          case LeftOuter => true
+          case _ => false
+        }
+      } else {
+        false
+      }
+  }
+
+  override def supportHashBuildJoinTypeOnRight: JoinType => Boolean = {
+    t =>
+      if (super.supportHashBuildJoinTypeOnRight(t)) {
+        true
+      } else if (GlutenConfig.get.omniTestAllowSameSideOuterShj) {
+        t match {
+          case RightOuter => true
+          case _ => false
+        }
+      } else {
+        false
+      }
+  }
 
   override def validateScanExec(
       format: ReadFileFormat,

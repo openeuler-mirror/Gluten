@@ -26,6 +26,7 @@ import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.api.python.EvalPythonExecTransformer
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
+import org.apache.spark.sql.catalyst.plans.{LeftOuter, RightOuter}
 import org.apache.spark.sql.catalyst.plans.logical.Join
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
@@ -132,6 +133,17 @@ object OffloadJoin {
 
     assert(leftBuildable || rightBuildable)
 
+    // Same-side test hook. It must run before the opposite-side early returns, which
+    // would send RightOuter (not right-buildable) to BuildLeft.
+    if (!GlutenConfig.get.shuffledHashJoinOptimizeBuildSide &&
+        GlutenConfig.get.omniTestAllowSameSideOuterShj) {
+      shj.joinType match {
+        case LeftOuter => return BuildLeft
+        case RightOuter => return BuildRight
+        case _ => // fall through
+      }
+    }
+
     if (!leftBuildable) {
       return BuildRight
     }
@@ -141,7 +153,6 @@ object OffloadJoin {
 
     // Both left and right are buildable. Find out the better one.
     if (!GlutenConfig.get.shuffledHashJoinOptimizeBuildSide) {
-      // User disabled build side re-optimization. Return original build side from vanilla Spark.
       return shj.buildSide
     }
     shj.logicalLink

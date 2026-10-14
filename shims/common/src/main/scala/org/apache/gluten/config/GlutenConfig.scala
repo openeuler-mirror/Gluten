@@ -518,6 +518,10 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarSpillMemPctThreshold: Int = conf.getConf(COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD)
 
+  /** Test-only: allow LEFT-build-left / RIGHT-build-right SHJ. Product default stays Opposite. */
+  def omniTestAllowSameSideOuterShj: Boolean =
+    conf.getConf(COLUMNAR_OMNI_TEST_ALLOW_SAMESIDE_OUTER_SHJ)
+
   def enableOmniExpCheck : Boolean = conf.getConf(ENABLE_OMNI_EXP_CHECK)
 
   def enableOmniUnixTimeFunc: Boolean = conf.getConf(ENABLE_OMNI_UNIXTIME_FUNCTION)
@@ -823,6 +827,7 @@ object GlutenConfig {
       GLUTEN_DEFAULT_SESSION_TIMEZONE.key,
       COLUMNAR_OMNI_SPILL_MEM_PCT_THRESHOLD.key,
       ENABLE_OMNI_AGGREGATION_SPILL.key,
+      ENABLE_OMNI_JOIN_SPILL.key,
       ENABLE_OMNI_EXP_CHECK.key,
       ENABLE_OMNI_UNIXTIME_FUNCTION.key,
       ENABLE_COLUMNAR_TOP_N_SORT.key,
@@ -2459,10 +2464,25 @@ object GlutenConfig {
       .intConf
       .createWithDefault(90)
 
+  val COLUMNAR_OMNI_TEST_ALLOW_SAMESIDE_OUTER_SHJ =
+    buildConf("spark.gluten.sql.columnar.backend.omni.test.allowSameSideOuterShj")
+      .internal()
+      .doc("Test-only. When true, Omni SHJ may build LEFT on LeftOuter and RIGHT on RightOuter. " +
+        "Product default is false (Opposite only). Do not set in join-spill-reclaim.conf.")
+      .booleanConf
+      .createWithDefault(false)
+
   val ENABLE_OMNI_AGGREGATION_SPILL =
     buildConf("spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled")
       .internal()
       .doc("enable omni aggregation spill")
+      .booleanConf
+      .createWithDefault(true)
+
+  val ENABLE_OMNI_JOIN_SPILL =
+    buildConf("spark.gluten.sql.columnar.backend.omni.joinSpillEnabled")
+      .internal()
+      .doc("enable omni hash join spill; default on, same as aggregation spill")
       .booleanConf
       .createWithDefault(true)
 

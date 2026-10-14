@@ -16,6 +16,7 @@
  */
 package org.apache.gluten.extension
 
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.extension.columnar.offload.OffloadJoin
 
@@ -27,8 +28,9 @@ import org.apache.spark.sql.execution.joins.{ShuffledHashJoinExec, SortMergeJoin
 
 case class OmniRewriteJoin() extends Rule[SparkPlan] with JoinSelectionHelper {
     private def getSmjBuildSide(join: SortMergeJoinExec): Option[BuildSide] = {
-        val leftBuildable = canBuildShuffledHashJoinLeft(join.joinType)
-        val rightBuildable = canBuildShuffledHashJoinRight(join.joinType)
+        val settings = BackendsApiManager.getSettings
+        val leftBuildable = settings.supportHashBuildJoinTypeOnLeft(join.joinType)
+        val rightBuildable = settings.supportHashBuildJoinTypeOnRight(join.joinType)
         if (!leftBuildable && !rightBuildable) {
             return None
         }
