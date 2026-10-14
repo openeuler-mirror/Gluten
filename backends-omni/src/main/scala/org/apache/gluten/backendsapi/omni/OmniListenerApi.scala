@@ -77,6 +77,8 @@ class OmniListenerApi extends ListenerApi with Logging {
     }
 
     SparkDirectoryUtil.init(conf)
+    // Executors run native UDAF code, so they must load the UDF/UDAF configuration.
+    UDFResolver.resolveUdfConf(conf, isDriver = false)
     initialize(conf, isDriver = false)
   }
 

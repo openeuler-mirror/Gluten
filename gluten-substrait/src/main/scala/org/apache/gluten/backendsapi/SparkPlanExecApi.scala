@@ -716,6 +716,28 @@ trait SparkPlanExecApi {
     HiveUDFTransformer.replaceWithExpressionTransformer(expr, attributeSeq)
   }
 
+  def genScalaUDFTransformer(
+      expr: Expression,
+      attributeSeq: Seq[Attribute]): ExpressionTransformer = {
+    expr match {
+      case udf: ScalaUDF =>
+        if (udf.udfName.isEmpty) {
+          throw new GlutenNotSupportException("UDF name is not found!")
+        }
+        UDFMappings.scalaUDFMap.get(udf.udfName.get) match {
+          case Some(name) =>
+            GenericExpressionTransformer(
+              name,
+              replaceWithExpressionTransformer(udf.children, attributeSeq),
+              udf)
+          case _ =>
+            throw new GlutenNotSupportException(s"Not supported scala udf: $udf.")
+        }
+      case _ =>
+        throw new GlutenNotSupportException(s"Expression $expr is not a ScalaUDF")
+    }
+  }
+
   def genStringSplitTransformer(
       substraitExprName: String,
       srcExpr: ExpressionTransformer,

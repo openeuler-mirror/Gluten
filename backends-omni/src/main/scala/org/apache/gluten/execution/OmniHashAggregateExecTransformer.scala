@@ -37,6 +37,8 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedEx
 import org.apache.spark.internal.Logging
 
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.expression.UDFResolver
+import org.apache.spark.sql.hive.HiveUDAFInspector
 import org.apache.spark.sql.types._
 
 import java.util.{ArrayList => JArrayList, List => JList}
@@ -103,7 +105,7 @@ abstract class HashAggregateExecTransformer(
           }
           AggregateFunctionsBuilder.createWithName(args, name, inputTypes)
         case None =>
-          AggregateFunctionsBuilder.create(args, aggregateFunction)
+          OmniAggregateFunctionsBuilder.create(args, aggregateFunction, aggregateMode)
       }
       aggregateNodeList.add(
         ExpressionBuilder.makeAggregateFunction(
@@ -128,7 +130,7 @@ abstract class HashAggregateExecTransformer(
             else aggregateFunction.inputAggBufferAttributes.map(_.dataType)
             AggregateFunctionsBuilder.createWithName(args, name, inputTypes)
           case None =>
-            AggregateFunctionsBuilder.create(args, aggregateFunction)
+            OmniAggregateFunctionsBuilder.create(args, aggregateFunction, aggregateMode)
         }
         aggregateNodeList.add(
           ExpressionBuilder.makeAggregateFunction(
@@ -173,6 +175,13 @@ abstract class HashAggregateExecTransformer(
         sparkTypeToOmniTypeWithComplex(attr.dataType, attr.metadata)
     }
 
+    def isRegisteredHiveUdaf: Boolean = {
+      HiveUDAFInspector.getUDAFClassName(agg.aggregateFunction) match {
+        case Some(udafClass) => UDFResolver.UDAFNames.contains(udafClass)
+        case None => false
+      }
+    }
+
     if (supported.exists(_.isInstance(agg.aggregateFunction)) ||
       SparkShimLoader.getSparkShims.isTrySum(agg.aggregateFunction)) {
       agg.aggregateFunction match {
@@ -189,6 +198,10 @@ abstract class HashAggregateExecTransformer(
       }
     } else if (OmniExpressionAdaptor.isRegrAggregateByClassName(agg.aggregateFunction)) {
       toOmniAggFunType(agg)
+      true
+    } else if (isRegisteredHiveUdaf) {
+      // Dynamic UDAFs are resolved by OmniAggregateFunctionsBuilder while building Substrait.
+      // They are not part of the static OmniExpressionAdaptor.toOmniAggFunType table.
       true
     } else {
       false

@@ -130,6 +130,8 @@ public:
     static op::FunctionType ParseFunctionType(
         const std::string &funcName, std::vector<substrait::Expression> &expressionNodes, bool isMergeCount);
 
+    static std::string ResolveUdafName(const std::string &funcName);
+
     static void AddStructDataType(
         const ::substrait::Type &substraitType, std::vector<omniruntime::type::DataTypePtr> &outputDataTypes);
 

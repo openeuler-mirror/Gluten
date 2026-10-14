@@ -58,7 +58,17 @@ public:
 
     std::unordered_set<std::shared_ptr<UdfSignature>> getRegisteredUdfSignatures();
 
-    void registerUdf() const;
+    void registerUdf();
+
+    std::unordered_set<std::string> getRegisteredUdafNames();
+
+    std::unordered_set<std::string> getRegisteredUdfNames();
+
+    static bool isRegisteredUdf(const std::string &name);
+
+    static bool isRegisteredUdaf(const std::string &name);
+
+    static std::string getRegisteredUdafIntermediateType(const std::string &name);
 
 private:
     void loadUdfLibrariesInternal(const std::vector<std::string> &libPaths);
@@ -75,6 +85,7 @@ private:
     omniruntime::OmniToSubstraitTypeConvertor convertor_{};
 
     std::unordered_set<std::shared_ptr<UdfSignature>> signatures_;
-    std::unordered_set<std::string> names_;
+    std::unordered_set<std::string> udafNames_;
+    std::unordered_set<std::string> udfNames_;
 };
 } // namespace gluten
