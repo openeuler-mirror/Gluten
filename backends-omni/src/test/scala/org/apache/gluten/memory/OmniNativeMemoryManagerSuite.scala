@@ -64,6 +64,18 @@ class OmniNativeMemoryManagerSuite extends AnyFunSuite {
     override def resourceName(): String = "fake-omni-nmm"
   }
 
+  private class TrackedFakeNmm(released: AtomicLong)
+    extends FakeNmm(released)
+    with OmniNativeMemoryManager.ReleaseTracked {
+    @volatile private var done = false
+    override def isReleased: Boolean = done
+    override def release(): Unit = {
+      done = true
+      OmniNativeMemoryManager.forgetCached(this)
+      super.release()
+    }
+  }
+
   private object FakeNmm {
     val nextHandle = new AtomicLong(0L)
   }
@@ -89,6 +101,36 @@ class OmniNativeMemoryManagerSuite extends AnyFunSuite {
     }
 
     assert(released.get() == 1L)
+  }
+
+  test("repeated lookups in one task skip the TaskResources registry") {
+    val created = new AtomicLong(0L)
+    val released = new AtomicLong(0L)
+    var first: OmniNativeMemoryManager = null
+
+    TaskResources.runUnsafe {
+      def create(): OmniNativeMemoryManager.ManagedNmm = {
+        created.incrementAndGet()
+        new TrackedFakeNmm(released)
+      }
+
+      first = OmniNativeMemoryManager.contextInstanceWithFactory("omni", () => create())
+      // A throwing factory proves the second lookup is served from the memo.
+      val second = OmniNativeMemoryManager.contextInstanceWithFactory(
+        "omni",
+        () => throw new IllegalStateException("registry consulted again"))
+      assert(first eq second)
+      assert(created.get() == 1L)
+    }
+    assert(released.get() == 1L)
+
+    // A new task on the same thread must not see the released NMM.
+    TaskResources.runUnsafe {
+      val next = OmniNativeMemoryManager.contextInstanceWithFactory(
+        "omni",
+        () => new TrackedFakeNmm(released))
+      assert(!(next eq first))
+    }
   }
 
   test("backend remains part of the task memory-domain key") {

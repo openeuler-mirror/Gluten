@@ -23,6 +23,7 @@ import org.apache.gluten.memory.memtarget.{MemoryTarget, Spiller, Spillers}
 import org.apache.gluten.proto.MemoryUsageStats
 import org.apache.gluten.utils.ConfigUtil
 
+import org.apache.spark.TaskContext
 import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
 import org.apache.spark.task.{TaskResource, TaskResources}
 
@@ -72,6 +73,23 @@ object OmniNativeMemoryManager {
   private val SHARED_RESOURCE_NAME = "omni-shared-nmm"
   private[memory] type ManagedNmm = OmniNativeMemoryManager with TaskResource
 
+  /** A managed NMM that can say whether TaskResources already released it. */
+  private[memory] trait ReleaseTracked {
+    def isReleased: Boolean
+  }
+
+  private final class CachedNmm(
+      val context: TaskContext,
+      val backendName: String,
+      val nmm: ManagedNmm with ReleaseTracked)
+
+  // contextInstance() runs for every vector batch (pool-address lookup). Going
+  // through TaskResources each time takes the executor-wide registry monitor,
+  // which all task threads contend on. A TaskContext is unique per task
+  // attempt, so remembering the last lookup per thread is safe across thread
+  // reuse; a released NMM is never served from here.
+  private val cachedNmm = new ThreadLocal[CachedNmm]
+
   // Keep the whole callback lazy so SHRINK cannot enter JNI or mutate the
   // reservation ledger, even if a caller presents a positive byte request.
   private[memory] def spillInPhase(phase: Spiller.Phase)(spill: => Long): Long = {
@@ -94,7 +112,8 @@ object OmniNativeMemoryManager {
 
   private class Impl(backendName: String, name: String)
     extends OmniNativeMemoryManager
-    with TaskResource {
+    with TaskResource
+    with ReleaseTracked {
     private val LOGGER = LoggerFactory.getLogger(classOf[OmniNativeMemoryManager])
     // The native handle is created with this appendable container, then the
     // spill callback is installed once the handle is available.
@@ -167,11 +186,14 @@ object OmniNativeMemoryManager {
     override def hold(): Unit = OmniNativeMemoryManagerJniWrapper.hold(handle)
     override def getPoolAddress(): Long = poolAddress
 
+    override def isReleased: Boolean = released.get()
+
     override def release(): Unit = {
       if (!released.compareAndSet(false, true)) {
         throw new GlutenException(
           s"Memory manager instance already released: $handle, ${resourceName()}, ${priority()}")
       }
+      forgetCached(this)
       OmniNativeMemoryManagerJniWrapper.release(handle)
       if (rl.getUsedBytes != 0) {
         LOGGER.warn(
@@ -204,10 +226,31 @@ object OmniNativeMemoryManager {
     if (!TaskResources.inSparkTask()) {
       throw new IllegalStateException("This method must be called in a Spark task.")
     }
+    val context = TaskResources.getLocalTaskContext()
+    val cached = cachedNmm.get()
+    if (cached != null && (cached.context eq context) && cached.backendName == backendName &&
+      !cached.nmm.isReleased) {
+      return cached.nmm
+    }
     // Keep this key outside OmniRuntimes' `backend:name` namespace so a runtime
     // name can never accidentally alias the task-shared memory manager.
     val resourceId = s"${classOf[OmniNativeMemoryManager].getName}:$backendName"
-    TaskResources.addResourceIfNotRegistered(resourceId, factory)
+    val nmm: ManagedNmm = TaskResources.addResourceIfNotRegistered(resourceId, factory)
+    nmm match {
+      case tracked: ReleaseTracked if !tracked.isReleased =>
+        cachedNmm.set(
+          new CachedNmm(context, backendName, nmm.asInstanceOf[ManagedNmm with ReleaseTracked]))
+      case _ =>
+    }
+    nmm
+  }
+
+  /** Drop this thread's memo so a finished task does not pin its NMM. */
+  private[memory] def forgetCached(nmm: OmniNativeMemoryManager): Unit = {
+    val cached = cachedNmm.get()
+    if (cached != null && (cached.nmm eq nmm)) {
+      cachedNmm.remove()
+    }
   }
 
   /** Compatibility entry point. The name identifies a runtime, not a memory domain. */
