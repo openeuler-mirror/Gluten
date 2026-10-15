@@ -32,34 +32,27 @@
 namespace gluten {
 
 namespace {
-constexpr int64_t kMiB = int64_t{1} << 20;
-
-int64_t QuantizedSize(int64_t size) {
-    const auto roundUp = [](int64_t value, int64_t quantum) {
-        if (value > std::numeric_limits<int64_t>::max() - (quantum - 1)) {
-            throw std::overflow_error("OmniBlockAllocationListener: quantized reservation overflow");
-        }
-        return ((value + quantum - 1) / quantum) * quantum;
-    };
-    if (size < 16 * kMiB) {
-        return roundUp(size, kMiB);
+int64_t RoundUpToBlock(int64_t value, int64_t block) {
+    if (value > std::numeric_limits<int64_t>::max() - (block - 1)) {
+        throw std::overflow_error("OmniBlockAllocationListener: block reservation overflow");
     }
-    if (size < 64 * kMiB) {
-        constexpr int64_t kQuantum = 4 * kMiB;
-        return roundUp(size, kQuantum);
+    if (block > 0) {
+        return ((value + block - 1) / block) * block;
     }
-    constexpr int64_t kQuantum = 8 * kMiB;
-    return roundUp(size, kQuantum);
+    throw std::invalid_argument("OmniBlockAllocationListener: block size must be positive");
 }
-
-// Unused reservation kept on frees before it is repaid to Spark. Every repay
-// or borrow is a JNI call through Spark's executor-wide memory lock, so usage
-// that wobbles across a 1 MiB step (or drains operator by operator at
-// teardown) must not round-trip on every step. Velox goes further and keeps
-// its whole pool capacity until arbitration shrinks it; this bounds the
-// retained slack per task instead. Reaching zero usage still repays all.
-constexpr int64_t kRepaySlack = 8 * kMiB;
 } // namespace
+
+void OmniBlockAllocationListener::setBlockSize(int64_t blockSize) {
+    if (blockSize <= 0) {
+        throw std::invalid_argument("OmniBlockAllocationListener: block size must be positive");
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (reservationBytes_ != 0 || pendingReservationBytes_ != 0) {
+        throw std::logic_error("OmniBlockAllocationListener: block size set after reserving");
+    }
+    blockSize_ = blockSize;
+}
 
 OmniBlockAllocationListener::ReservationUpdate
 OmniBlockAllocationListener::updateReservation(int64_t diff) {
@@ -75,11 +68,11 @@ OmniBlockAllocationListener::updateReservation(int64_t diff) {
         throw std::underflow_error("OmniBlockAllocationListener: usedBytes_ underflow");
     }
     const int64_t newCommittedUsed = committedUsed + diff;
-    int64_t target = newCommittedUsed == 0 ? 0 : QuantizedSize(newCommittedUsed);
+    int64_t target = newCommittedUsed == 0 ? 0 : RoundUpToBlock(newCommittedUsed, blockSize_);
     if (target < committedReservation && newCommittedUsed > 0 &&
-        (diff > 0 || committedReservation - target < kRepaySlack)) {
-        // Growth never repays retained slack; a free repays only once the
-        // slack reaches kRepaySlack, and then down to the quantized usage.
+        (diff > 0 || committedReservation - target < blockSize_)) {
+        // Growth never repays retained slack; a free repays only once a whole
+        // unused block has accumulated, and then down to the block-rounded usage.
         target = committedReservation;
     }
     const int64_t granted = target - committedReservation;

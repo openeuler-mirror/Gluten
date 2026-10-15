@@ -68,6 +68,14 @@ void BindOmniSparkListener(gluten::MemoryManager* mm, gluten::OmniSparkAllocatio
     static_cast<gluten::OmniMemoryManager*>(mm)->setSparkListener(listener);
 }
 
+void SetOmniReservationBlockSize(gluten::MemoryManager* mm, int64_t blockSize)
+{
+    if (!IsOmniMemoryManager(mm)) {
+        throw std::invalid_argument("Memory manager is not an OmniMemoryManager");
+    }
+    static_cast<gluten::OmniMemoryManager*>(mm)->setReservationBlockSize(blockSize);
+}
+
 void ReconcileExternalRepay(
     gluten::MemoryManager *mm, int64_t nativeFreed, int64_t repaid)
 {
@@ -104,8 +112,8 @@ namespace gluten {
 OmniMemoryManager::OmniMemoryManager(const std::string& kind, std::unique_ptr<AllocationListener> listener)
     : MemoryManager(kind), listener_(std::move(listener))
 {
-    // Coalesce JNI listener traffic with Velox's tiered reservation policy:
-    // 1 MiB below 16 MiB, 4 MiB below 64 MiB, then 8 MiB.
+    // Move reservation to and from Spark in whole blocks (8 MiB unless
+    // SetOmniReservationBlockSize applies spark.gluten.memory.reservationBlockSize).
     blockWrap_ = std::make_unique<OmniBlockAllocationListener>(listener_.get());
 
     // Bridge the two independently owned interfaces without relying on vtable
@@ -142,6 +150,11 @@ OmniMemoryManager::~OmniMemoryManager()
             (long long)arrowCur, (long long)arrowMax);
     fflush(stderr);
 #endif
+}
+
+void OmniMemoryManager::setReservationBlockSize(int64_t blockSize)
+{
+    blockWrap_->setBlockSize(blockSize);
 }
 
 void OmniMemoryManager::setSparkListener(OmniSparkAllocationListener* listener)

@@ -2228,9 +2228,9 @@ int64_t Splitter::EstimateSplitReservation(VectorBatch& vb)
     // 8 MiB request even when an existing fixed buffer can absorb the batch.
     const uint64_t incrementalPeak = add(fixedBufferGrowth, binaryLocationGrowth);
     // Match Velox MemoryPoolImpl::maybeReserve(): explicit pre-reservation is
-    // rounded once to an 8 MiB growth quantum. The listener must not add a
-    // second fixed quantum; it only propagates normal usage with Velox's
-    // tiered 1/4/8 MiB quantization.
+    // rounded once to an 8 MiB growth quantum. The listener then moves whole
+    // reservation blocks (8 MiB by default), which an 8 MiB-aligned request
+    // already is, so no second quantum is added.
     const int64_t quantized = omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(
         static_cast<int64_t>(incrementalPeak));
     return quantized < 0 ? std::numeric_limits<int64_t>::max() : quantized;

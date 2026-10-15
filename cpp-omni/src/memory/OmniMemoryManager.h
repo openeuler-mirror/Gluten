@@ -85,6 +85,8 @@ public:
 
     void reconcileExternalRepay(int64_t nativeFreed, int64_t repaid);
     void setSparkListener(OmniSparkAllocationListener* listener);
+    // Spark-facing reservation block; call before the first allocation.
+    void setReservationBlockSize(int64_t blockSize);
 
     // Omni-specific accessors — SparkJniWrapper.cpp reaches through these to
     // find the per-task pool from the jlong nmmHandle.
@@ -99,7 +101,7 @@ private:
     // allocationChanged(-residual) which delegates to listener_'s up-call.
     // blockWrap_ MUST outlive pool_; listener_ MUST outlive blockWrap_.
     std::unique_ptr<AllocationListener> listener_;                       // OWNS (matches VeloxMemoryManager.h:80)
-    std::unique_ptr<OmniBlockAllocationListener> blockWrap_;             // Velox-style 1/4/8 MiB coalescing wrapper
+    std::unique_ptr<OmniBlockAllocationListener> blockWrap_;             // whole-block Spark reservation wrapper
     std::unique_ptr<OmniPoolAllocationListener> poolListener_;
     std::unique_ptr<omniruntime::mem::OmniTaskMemoryPool> pool_;          // OWNS — created with poolListener_.get()
     OmniSparkAllocationListener* sparkListener_{nullptr}; // non-owning alias of listener_

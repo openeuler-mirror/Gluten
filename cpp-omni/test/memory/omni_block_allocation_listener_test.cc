@@ -16,7 +16,7 @@
  */
 /*
  * OmniBlockAllocationListener unit tests:
- *   - TieredQuantization: Velox-style 1/4/8 MiB coalescing math
+ *   - Block reservation: whole 8 MiB blocks, like Gluten's Velox arbitrator
  *   - CurrentBytesReportsCoalesced: the bug fix
  *   - PeakBytesReportsHighWatermark: high-watermark tracking
  *
@@ -53,24 +53,28 @@ class ThrowingListener final : public gluten::AllocationListener {
 
 constexpr int64_t MiB(int64_t value) { return value << 20; }
 
-TEST(OmniBlockAllocationListener, TieredQuantizationMatchesVelox) {
+TEST(OmniBlockAllocationListener, ReservesWholeBlocksLikeVeloxArbitrator) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
 
-    wrap.allocationChanged(1);          // first byte -> 1 MiB
-    EXPECT_EQ(delegate.total, MiB(1));
-    wrap.allocationChanged(MiB(15) - 1); // exactly 15 MiB -> 15 MiB
-    EXPECT_EQ(delegate.total, MiB(15));
-
-    wrap.allocationChanged(1);          // crosses to 15 MiB + 1 -> 16 MiB
+    wrap.allocationChanged(1);              // first byte -> one 8 MiB block
+    EXPECT_EQ(delegate.total, MiB(8));
+    wrap.allocationChanged(MiB(8) - 1);     // exactly 8 MiB still fits
+    EXPECT_EQ(delegate.total, MiB(8));
+    EXPECT_EQ(delegate.calls, 1);
+    wrap.allocationChanged(1);              // 8 MiB + 1 -> second block
     EXPECT_EQ(delegate.total, MiB(16));
-    wrap.allocationChanged(MiB(1));     // above 16 MiB -> next 4 MiB tier = 20 MiB
-    EXPECT_EQ(delegate.total, MiB(20));
+    EXPECT_EQ(delegate.calls, 2);
+}
 
-    wrap.allocationChanged(MiB(44) - 2); // exactly 60 MiB -> 60 MiB
-    EXPECT_EQ(delegate.total, MiB(60));
-    wrap.allocationChanged(MiB(4) + 2); // above 64 MiB -> next 8 MiB tier = 72 MiB
-    EXPECT_EQ(delegate.total, MiB(72));
+TEST(OmniBlockAllocationListener, BlockSizeIsConfigurableBeforeFirstReservation) {
+    CountingListener delegate;
+    gluten::OmniBlockAllocationListener wrap(&delegate);
+    EXPECT_THROW(wrap.setBlockSize(0), std::invalid_argument);
+    wrap.setBlockSize(MiB(2));
+    wrap.allocationChanged(MiB(3));
+    EXPECT_EQ(delegate.total, MiB(4));
+    EXPECT_THROW(wrap.setBlockSize(MiB(8)), std::logic_error);
 }
 
 TEST(OmniBlockAllocationListener, CurrentBytesReportsCoalesced_ReqList04) {
@@ -98,6 +102,7 @@ TEST(OmniBlockAllocationListener, PeakBytesReportsHighWatermark) {
 TEST(OmniBlockAllocationListener, ExactExternalRepaySupportsLaterBlockCrossingsAndZero) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.setBlockSize(MiB(1));
     wrap.allocationChanged(MiB(2)); // reservation 2 MiB
     // `self.repay(3)` has already credited Spark/the delegate before the
     // ledger-only native reconciliation callback arrives.
@@ -111,9 +116,9 @@ TEST(OmniBlockAllocationListener, ExactExternalRepaySupportsLaterBlockCrossingsA
     wrap.allocationChanged(MiB(1)); // used 2.5 MiB -> reservation 3 MiB
     EXPECT_EQ(delegate.total, MiB(3));
     EXPECT_EQ(wrap.currentBytes(), MiB(3));
-    wrap.allocationChanged(-MiB(1)); // used 1.5 MiB -> 1.5 MiB slack is retained
-    EXPECT_EQ(delegate.total, MiB(3));
-    EXPECT_EQ(wrap.currentBytes(), MiB(3));
+    wrap.allocationChanged(-MiB(1)); // used 1.5 MiB -> one unused block repaid
+    EXPECT_EQ(delegate.total, MiB(2));
+    EXPECT_EQ(wrap.currentBytes(), MiB(2));
     wrap.allocationChanged(-MiB(3) / 2); // free-to-zero returns exact remainder
     EXPECT_EQ(delegate.total, 0);
     EXPECT_EQ(wrap.currentBytes(), 0);
@@ -122,6 +127,7 @@ TEST(OmniBlockAllocationListener, ExactExternalRepaySupportsLaterBlockCrossingsA
 TEST(OmniBlockAllocationListener, RejectsOverReconcileWithoutChangingLedger) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.setBlockSize(MiB(1));
     wrap.allocationChanged(MiB(1));
     EXPECT_THROW(wrap.reconcileExternalRepay(MiB(1) + 1), std::underflow_error);
     EXPECT_EQ(wrap.currentBytes(), MiB(1));
@@ -174,19 +180,18 @@ TEST(OmniBlockAllocationListener, ReentrantExternalRepaySurvivesDeniedBorrow) {
     }
 }
 
-TEST(OmniBlockAllocationListener, NestedFreeCannotRepayProvisionalTierRounding) {
+TEST(OmniBlockAllocationListener, NestedFreeCannotRepayProvisionalBlockRounding) {
     ReentrantCountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.setBlockSize(MiB(1));
     wrap.allocationChanged(MiB(15));
     delegate.onBorrow = [&] {
         wrap.allocationChanged(-MiB(3));
         throw std::runtime_error("denied");
     };
     EXPECT_THROW(wrap.allocationChanged(MiB(2)), std::runtime_error);
-    // The nested free stays inside the repay slack, so the committed 15 MiB
-    // reservation is retained; the denied borrow's rounding is not.
-    EXPECT_EQ(wrap.currentBytes(), MiB(15));
-    EXPECT_EQ(delegate.total, MiB(15));
+    EXPECT_EQ(wrap.currentBytes(), MiB(12));
+    EXPECT_EQ(delegate.total, MiB(12));
     wrap.allocationChanged(-MiB(12));
     EXPECT_EQ(delegate.total, 0);
 }
@@ -226,6 +231,7 @@ TEST(OmniBlockAllocationListenerTest, ExternalRepaymentCommitsOnlyAfterDownstrea
 {
     CountingListener storage;
     gluten::OmniBlockAllocationListener block(&storage);
+    block.setBlockSize(MiB(1));
     block.allocationChanged(MiB(2));
     EXPECT_THROW(block.reconcileExternalRepay(MiB(1), [] {
         throw std::underflow_error("downstream ledger rejected repayment");
@@ -244,45 +250,45 @@ TEST(OmniBlockAllocationListenerTest, ExternalRepaymentCommitsOnlyAfterDownstrea
     EXPECT_EQ(storage.total, 0);
 }
 
-TEST(OmniBlockAllocationListener, FreesRetainBoundedSlackBeforeRepaying) {
+TEST(OmniBlockAllocationListener, FreesRetainOneBlockBeforeRepaying) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
-    wrap.allocationChanged(MiB(12));
+    wrap.allocationChanged(MiB(12));         // two blocks
     ASSERT_EQ(delegate.calls, 1);
+    ASSERT_EQ(delegate.total, MiB(16));
 
-    // Usage wobbling across 1 MiB steps below the reservation never calls Spark.
+    // Usage wobbling inside the reservation never calls Spark.
     for (int i = 0; i < 10; ++i) {
         wrap.allocationChanged(-MiB(3) / 2);
         wrap.allocationChanged(MiB(3) / 2);
     }
     EXPECT_EQ(delegate.calls, 1);
-    EXPECT_EQ(delegate.total, MiB(12));
 
-    // Draining step by step repays once the slack reaches 8 MiB, down to the
-    // quantized usage, and the final free to zero repays the remainder.
-    for (int i = 0; i < 7; ++i) {
-        wrap.allocationChanged(-MiB(1));
+    // Draining repays only once a whole block is unused, and free-to-zero
+    // repays the rest.
+    for (int i = 0; i < 3; ++i) {
+        wrap.allocationChanged(-MiB(1)); // used 11, 10, 9 MiB
     }
     EXPECT_EQ(delegate.calls, 1);
-    EXPECT_EQ(delegate.total, MiB(12));
-    wrap.allocationChanged(-MiB(1)); // used 4 MiB, slack 8 MiB
+    EXPECT_EQ(delegate.total, MiB(16));
+    wrap.allocationChanged(-MiB(1));     // used 8 MiB: one block unused
     EXPECT_EQ(delegate.calls, 2);
-    EXPECT_EQ(delegate.total, MiB(4));
-    wrap.allocationChanged(-MiB(4));
+    EXPECT_EQ(delegate.total, MiB(8));
+    wrap.allocationChanged(-MiB(8));
     EXPECT_EQ(delegate.calls, 3);
     EXPECT_EQ(delegate.total, 0);
     EXPECT_EQ(wrap.currentBytes(), 0);
 }
 
-TEST(OmniBlockAllocationListener, GrowthReusesRetainedSlack) {
+TEST(OmniBlockAllocationListener, GrowthReusesRetainedReservation) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
-    wrap.allocationChanged(MiB(10));
-    wrap.allocationChanged(-MiB(6)); // used 4 MiB, 10 MiB retained
-    wrap.allocationChanged(MiB(5));  // used 9 MiB fits the retained reservation
+    wrap.allocationChanged(MiB(10));   // 16 MiB reserved
+    wrap.allocationChanged(-MiB(1));   // 9 MiB used, nothing repaid
+    wrap.allocationChanged(MiB(6));    // 15 MiB fits the reservation
     EXPECT_EQ(delegate.calls, 1);
-    EXPECT_EQ(delegate.total, MiB(10));
-    wrap.allocationChanged(MiB(2));  // used 11 MiB grows past it
+    EXPECT_EQ(delegate.total, MiB(16));
+    wrap.allocationChanged(MiB(2));    // 17 MiB needs a third block
     EXPECT_EQ(delegate.calls, 2);
-    EXPECT_EQ(delegate.total, MiB(11));
+    EXPECT_EQ(delegate.total, MiB(24));
 }

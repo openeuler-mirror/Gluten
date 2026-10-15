@@ -64,6 +64,7 @@
 #include "memory/MemoryManager.h"           // gluten::MemoryManager, MemoryManager::create/release
 #include "memory/AllocationListener.h"      // gluten::AllocationListener (base for our local SparkListener)
 #include "memory.pb.h"                       // gluten::MemoryUsageStats — wire format for collectUsage
+#include "config.pb.h"                       // gluten::ConfigMap — NMM creation settings
 
 // Promoted listener (replaces inline LocalSparkAllocationListener).
 #include "OmniSparkAllocationListener.h"
@@ -194,7 +195,7 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
     jclass,
     jstring jBackendType,
     jobject jListener,
-    jbyteArray /*sessionConf*/,
+    jbyteArray jSessionConf,
     jstring jRunId,
     jstring jQueryId,
     jstring jRound,
@@ -232,8 +233,23 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
         const std::string queryId = JStringToStdString(env, jQueryId, "unknown");
         const std::string round = JStringToStdString(env, jRound, "unknown");
 
-        // sessionConf is currently unused: no per-backend conf affects NMM
-        // construction.
+        // The JVM sends only the settings NMM construction needs (not the
+        // whole session conf): currently spark.gluten.memory.reservationBlockSize.
+        int64_t reservationBlockSize = 0;
+        if (jSessionConf != nullptr) {
+            const jsize length = env->GetArrayLength(jSessionConf);
+            std::vector<jbyte> bytes(static_cast<size_t>(length));
+            env->GetByteArrayRegion(jSessionConf, 0, length, bytes.data());
+            gluten::ConfigMap conf;
+            if (length > 0 && !conf.ParseFromArray(bytes.data(), length)) {
+                gluten::ThrowJavaExceptionIfNone(env, runtimeExceptionClass, "Malformed memory manager conf");
+                return -1L;
+            }
+            const auto it = conf.configs().find("spark.gluten.memory.reservationBlockSize");
+            if (it != conf.configs().end()) {
+                reservationBlockSize = std::stoll(it->second);
+            }
+        }
 
         // Use promoted gluten::OmniSparkAllocationListener (ExceptionClear +
         // GetEnv short-circuit discipline).
@@ -248,6 +264,9 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
             gluten::MemoryManager::create(backendType, std::move(listener)),
             &gluten::MemoryManager::release);
         omniruntime::BindOmniSparkListener(mm.get(), sparkListener);
+        if (reservationBlockSize > 0) {
+            omniruntime::SetOmniReservationBlockSize(mm.get(), reservationBlockSize);
+        }
         omniruntime::SetOmniTaskTelemetryContext(
             mm.get(),
             runId,

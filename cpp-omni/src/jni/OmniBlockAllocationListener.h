@@ -84,6 +84,10 @@ class OmniBlockAllocationListener final : public AllocationListener {
         return peakBytes_;
     }
 
+    // Spark-facing reservation granularity, Gluten's spark.gluten.memory.
+    // reservationBlockSize. Must be set before the first reservation.
+    void setBlockSize(int64_t blockSize);
+
     // Reconcile bytes already repaid directly by the JVM MemoryTarget. This is
     // deliberately ledger-only: calling the delegate here would credit Spark a
     // second time. Exact repayments may leave a non-block-aligned reservation.
@@ -106,6 +110,11 @@ class OmniBlockAllocationListener final : public AllocationListener {
     AllocationListener* const delegated_;
     int64_t usedBytes_{0};
     int64_t peakBytes_{0};
+    // Reservation moves to and from Spark in whole blocks, like Gluten's
+    // ListenableArbitrator for Velox (memoryPoolTransferCapacity =
+    // reservationBlockSize, 8 MiB default). One unused block is retained on
+    // frees before repaying; free-to-zero repays everything.
+    int64_t blockSize_{int64_t{8} << 20};
     int64_t reservationBytes_{0};    // actually written by reserve() here; upstream omits the write
     // In-flight delegate calls are provisional. Nested calls coalesce against
     // committed usage/reservation, so a free cannot repay an ungranted borrow.

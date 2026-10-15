@@ -58,6 +58,9 @@ mem::OmniTaskMemoryPool *ToOmniTaskPoolOrNull(gluten::MemoryManager *mm);
 // Bind the manager-owned Spark listener for ledger-only external repayments.
 void BindOmniSparkListener(gluten::MemoryManager* mm, gluten::OmniSparkAllocationListener* listener);
 
+// Apply spark.gluten.memory.reservationBlockSize before the pool allocates.
+void SetOmniReservationBlockSize(gluten::MemoryManager* mm, int64_t blockSize);
+
 // Adjust both listeners after the JVM has already repaid Spark and restore
 // any unrepaid part of the native shrink offer to the pool reservation marker.
 void ReconcileExternalRepay(

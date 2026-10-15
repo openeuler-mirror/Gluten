@@ -24,7 +24,6 @@ import org.apache.gluten.proto.MemoryUsageStats
 import org.apache.gluten.utils.ConfigUtil
 
 import org.apache.spark.TaskContext
-import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
 import org.apache.spark.task.{TaskResource, TaskResources}
 
 import org.slf4j.LoggerFactory
@@ -131,9 +130,12 @@ object OmniNativeMemoryManager {
     private val handle = OmniNativeMemoryManagerJniWrapper.create(
       backendName,
       rl,
+      // Only what native NMM construction reads; the whole session conf was
+      // parsed and serialized here for every task without being used.
       ConfigUtil.serialize(
-        GlutenConfig
-          .getOmniConf(backendName, GlutenConfigUtil.parseConfig(SQLConf.get.getAllConfs))),
+        java.util.Collections.singletonMap(
+          GlutenConfig.COLUMNAR_MEMORY_RESERVATION_BLOCK_SIZE.key,
+          GlutenConfig.get.memoryReservationBlockSize.toString)),
       taskProperty("omni.telemetry.run_id"),
       taskProperty("omni.telemetry.qid"),
       taskProperty("omni.telemetry.round"),
