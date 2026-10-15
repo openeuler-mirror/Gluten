@@ -22,7 +22,7 @@ import org.apache.gluten.exception.GlutenException
 import org.apache.gluten.memory.OmniNativeMemoryManager
 import org.apache.gluten.utils.ConfigUtil
 
-import org.apache.spark.SparkEnv
+import org.apache.spark.{SparkEnv, TaskContext}
 import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
 import org.apache.spark.task.TaskResource
 
@@ -44,6 +44,37 @@ trait OmniRuntime {
 }
 
 object OmniRuntime {
+  private final class CachedConf(
+      val context: TaskContext,
+      val backendName: String,
+      val bytes: Array[Byte])
+
+  // Every runtime of a task (plan evaluator, shuffle writer/reader, serializer)
+  // serializes the same SparkConf + SQLConf. Build it once per task attempt on
+  // each thread instead of once per runtime; TaskContext identity is unique per
+  // attempt, so a pooled thread rebuilds it for its next task.
+  private val cachedConf = new ThreadLocal[CachedConf]
+
+  private[runtime] def runtimeConfBytes(backendName: String): Array[Byte] = {
+    val context = TaskContext.get()
+    val cached = cachedConf.get()
+    if (context != null && cached != null && (cached.context eq context) &&
+      cached.backendName == backendName) {
+      return cached.bytes
+    }
+    // SQLConf in executor task threads may omit application SparkConf entries.
+    // Keep SparkConf as the base and let explicit SQL session settings win.
+    val runtimeConf =
+      Option(SparkEnv.get).map(_.conf.getAll.toMap).getOrElse(Map.empty[String, String]) ++
+        SQLConf.get.getAllConfs
+    val bytes = ConfigUtil.serialize(
+      GlutenConfig.getOmniConf(backendName, GlutenConfigUtil.parseConfig(runtimeConf)))
+    if (context != null) {
+      cachedConf.set(new CachedConf(context, backendName, bytes))
+    }
+    bytes
+  }
+
   private[runtime] def apply(backendName: String, name: String): OmniRuntime with TaskResource = {
     new RuntimeImpl(backendName, name)
   }
@@ -56,18 +87,10 @@ object OmniRuntime {
     // all Runtime resources (priority=20) and their pool-bound buffers are released.
     private val nmm: OmniNativeMemoryManager = OmniNativeMemoryManager.contextInstance(backendName)
 
-    // SQLConf in executor task threads may omit application SparkConf entries.
-    // Keep SparkConf as the base and let explicit SQL session settings win.
-    private val runtimeConf =
-      Option(SparkEnv.get).map(_.conf.getAll.toMap).getOrElse(Map.empty[String, String]) ++
-        SQLConf.get.getAllConfs
-
     private val handle = OmniRuntimeJniWrapper.createRuntime(
       backendName,
       nmm.getHandle(),
-      ConfigUtil.serialize(
-        GlutenConfig
-          .getOmniConf(backendName, GlutenConfigUtil.parseConfig(runtimeConf)))
+      runtimeConfBytes(backendName)
     )
 
     private val released: AtomicBoolean = new AtomicBoolean(false)
