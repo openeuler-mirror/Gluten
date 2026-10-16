@@ -66,6 +66,42 @@ public class SparkJniWrapper {
       long shuffleTaskSpillMemoryThreshold,
       long shuffleExecutorSpillMemoryThreshold);
 
+  public long makeForRSS(
+      NativePartitioning part,
+      int bufferSize,
+      String codec,
+      long shuffleCompressBlockSize,
+      int shuffleSpillBatchRowNum,
+      long shuffleTaskSpillMemoryThreshold,
+      long shuffleExecutorSpillMemoryThreshold,
+      Object partitionPusher) {
+    return nativeMakeForRSS(
+        part.getShortName(),
+        part.getNumPartitions(),
+        new String(part.getRequiredFields()),
+        part.getSchema().length,
+        bufferSize,
+        codec,
+        shuffleCompressBlockSize,
+        shuffleSpillBatchRowNum,
+        shuffleTaskSpillMemoryThreshold,
+        shuffleExecutorSpillMemoryThreshold,
+        partitionPusher);
+  }
+
+  public native long nativeMakeForRSS(
+      String shortName,
+      int numPartitions,
+      String inputTypes,
+      int numCols,
+      int bufferSize,
+      String codec,
+      long shuffleCompressBlockSize,
+      int shuffleSpillBatchRowNum,
+      long shuffleTaskSpillMemoryThreshold,
+      long shuffleExecutorSpillMemoryThreshold,
+      Object partitionPusher);
+
   /**
    * Split one record batch represented by bufAddrs and bufSizes into several batches. The batch is
    * split according to the first column as partition id. During splitting, the data in native

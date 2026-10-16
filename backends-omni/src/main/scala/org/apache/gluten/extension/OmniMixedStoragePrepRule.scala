@@ -47,7 +47,7 @@ object OmniMixedStoragePrepRule {
 case class OmniMixedStoragePrepRule(session: SparkSession) extends Rule[SparkPlan] {
 
   override def apply(plan: SparkPlan): SparkPlan = {
-    if (!GlutenConfig.get.enableMixedStorage) {
+    if (!isMixedStorageEnabled) {
       return plan
     }
 
