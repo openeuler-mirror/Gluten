@@ -815,6 +815,7 @@
       </modules>
       <properties>
         <backend_type>omni</backend_type>
+        <omniruntime.version>2.2.0</omniruntime.version>
       </properties>
     </profile>
     <profile>
