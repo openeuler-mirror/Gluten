@@ -103,10 +103,10 @@ object ColumnarBatchToInternalRow {
       numOutputRows: SQLMetric, numInputBatches: SQLMetric,
       rowToOmniColumnarTime: SQLMetric,
       mayPartialFetch: Boolean = true): Iterator[InternalRow] = {
-    val startTime = System.nanoTime()
     val toUnsafe = UnsafeProjection.create(output, output)
 
     val batchIter = batches.flatMap { batch =>
+      val batchStartTime = System.nanoTime()
 
       // toClosedVecs closed case: [Deprcated]
       // 1) all rows of batch fetched and closed
@@ -123,13 +123,20 @@ object ColumnarBatchToInternalRow {
 
       numInputBatches += 1
       val iter = batch.rowIterator().asScala.map(toUnsafe)
-      rowToOmniColumnarTime += NANOSECONDS.toMillis(System.nanoTime() - startTime)
+      var conversionTimeRecorded = false
+      def recordConversionTime(): Unit = {
+        if (!conversionTimeRecorded) {
+          rowToOmniColumnarTime += NANOSECONDS.toMillis(System.nanoTime() - batchStartTime)
+          conversionTimeRecorded = true
+        }
+      }
 
       new Iterator[InternalRow] {
         val numOutputRowsMetric: SQLMetric = numOutputRows
 
 
         SparkMemoryUtils.addLeakSafeTaskCompletionListener { _ =>
+          recordConversionTime()
           toClosedVecs.foreach { vec =>
             vec.close()
           }
@@ -139,6 +146,7 @@ object ColumnarBatchToInternalRow {
           val has = iter.hasNext
           // fetch all rows
           if (!has) {
+            recordConversionTime()
             toClosedVecs.foreach { vec =>
               vec.close()
               toClosedVecs.remove(toClosedVecs.indexOf(vec))
