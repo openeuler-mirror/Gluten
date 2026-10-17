@@ -1035,18 +1035,54 @@ void Splitter::AppendStringToArrow(BaseVector *vector, std::vector<uint32_t> row
     int32_t* offsets = reinterpret_cast<int32_t*>(acc.offsets->mutable_data());
     int32_t base = static_cast<int32_t>(acc.valueBytesCursor);
 
+    // ORC varchar inside struct/array/map is often dictionary-encoded. Reading it as a flat
+    // LargeStringContainer treats dictionary ids as string offsets and yields empty strings.
+    const auto encoding = vector->GetEncoding();
+    ConstVector<std::string_view> *constVec = nullptr;
+    Vector<DictionaryContainer<std::string_view, LargeStringContainer>> *dictVec = nullptr;
+    Vector<LargeStringContainer<std::string_view>> *stringVec = nullptr;
+    bool constIsNull = false;
+    std::string_view constValue;
+    if (encoding == OMNI_ENCODING_CONST) {
+        constVec = reinterpret_cast<ConstVector<std::string_view> *>(vector);
+        constIsNull = constVec->HasNull() && constVec->IsNull(0);
+        if (!constIsNull) {
+            constValue = constVec->GetConstValue();
+        }
+    } else if (encoding == OMNI_DICTIONARY) {
+        dictVec = reinterpret_cast<Vector<DictionaryContainer<std::string_view, LargeStringContainer>> *>(vector);
+    } else if (encoding == OMNI_FLAT) {
+        stringVec = reinterpret_cast<Vector<LargeStringContainer<std::string_view>> *>(vector);
+    } else {
+        throw std::runtime_error(
+            std::string("AppendStringToArrow: unsupported vector encoding ") +
+            std::to_string(static_cast<int>(encoding)));
+    }
+
     int32_t cur = base;
     for (int32_t i = 0; i < numRows; ++i) {
         auto rowId = row_ids[i];
-        bool isNull = vector->IsNull(rowId);
+        bool isNull = false;
+        std::string_view sv;
+        if (encoding == OMNI_ENCODING_CONST) {
+            isNull = constIsNull;
+            sv = constValue;
+        } else if (encoding == OMNI_DICTIONARY) {
+            isNull = dictVec->IsNull(rowId);
+            if (!isNull) {
+                sv = dictVec->GetValue(rowId);
+            }
+        } else {
+            isNull = stringVec->IsNull(rowId);
+            if (!isNull) {
+                sv = stringVec->GetValue(rowId);
+            }
+        }
         if (isNull) {
             acc.AppendValidBit(false);
             offsets[acc.rowCursor + i + 1] = cur;
         } else {
             acc.AppendValidBit(true);
-            // Get string value
-            auto stringVec = reinterpret_cast<Vector<LargeStringContainer<std::string_view>>*>(vector);
-            auto sv = stringVec->GetValue(rowId);
             int32_t len = static_cast<int32_t>(sv.size());
             if (len > 0) {
                 int64_t needBytes = acc.valueBytesCursor + len;
