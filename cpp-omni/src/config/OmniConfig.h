@@ -198,6 +198,9 @@ const std::string KAdaptivePartialAggregationRatio = "spark.gluten.sql.columnar.
 const std::string KPreferVectorizationExpression = "spark.gluten.sql.columnar.backend.omni.preferVectorizationExpression";
 const std::string kHashAggNormalizedKeyEnabled =
     "spark.gluten.sql.columnar.backend.omni.hashAgg.normalizedKey.enabled";
+const std::string kTaperEnabled = "spark.gluten.sql.columnar.backend.omni.taper.enabled";
+const std::string kSveJoinEnabled = "spark.gluten.sql.columnar.backend.omni.sveJoin.enabled";
+const std::string kSveHashAggEnabled = "spark.gluten.sql.columnar.backend.omni.sveHashAgg.enabled";
 
 const std::string KEnableMixedStorage = "spark.gluten.sql.columnar.backend.omni.mixedStorage.enabled";
 
