@@ -58,6 +58,7 @@ import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.execution.datasources.text.TextFileFormat
 import org.apache.spark.sql.hive.{OmniHiveUDFTransformer, OmniScalaUDFTransformer}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.expression.UserDefinedAggregateFunction
@@ -113,6 +114,26 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       function: ExpressionTransformer,
       expr: MapFilter): ExpressionTransformer =
     GenericExpressionTransformer(substraitExprName, Seq(argument, function), expr)
+
+  override def genStringToMapTransformer(
+      substraitExprName: String,
+      children: Seq[ExpressionTransformer],
+      expr: Expression): ExpressionTransformer = {
+    val mapKeyDedupPolicy = SQLConf.get.getConf(SQLConf.MAP_KEY_DEDUP_POLICY).toString
+    val isLastWin =
+      if (mapKeyDedupPolicy == SQLConf.MapKeyDedupPolicy.LAST_WIN.toString) {
+        true
+      } else if (mapKeyDedupPolicy == SQLConf.MapKeyDedupPolicy.EXCEPTION.toString) {
+        false
+      } else {
+        throw new GlutenNotSupportException(
+          s"Unsupported ${SQLConf.MAP_KEY_DEDUP_POLICY.key}: $mapKeyDedupPolicy")
+      }
+    GenericExpressionTransformer(
+      substraitExprName,
+      if (isLastWin) children :+ LiteralTransformer(true) else children,
+      expr)
+  }
 
   /**
    * Generate Alias transformer
