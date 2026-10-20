@@ -22,16 +22,42 @@ import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LeafNode, Statistics}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
+import org.apache.spark.sql.types._
 
 object ExtendedAggUtils {
+  /** Map/Array/Struct cannot be grouping keys for DedupLeftSemiJoin (Spark normalize + Omni native). */
+  def containsUnsupportedDedupType(dt: DataType): Boolean = dt match {
+    case _: MapType | _: ArrayType | _: StructType => true
+    case _ => false
+  }
+
+  def supportsDedupLeftSemiJoinKeys(keys: Seq[Expression]): Boolean = {
+    !keys.exists(k => containsUnsupportedDedupType(k.dataType))
+  }
+
+  def supportsDedupLeftSemiJoinGrouping(groupingExpressions: Seq[NamedExpression]): Boolean = {
+    !groupingExpressions.exists(e => containsUnsupportedDedupType(e.dataType))
+  }
+
   def normalizeGroupingExpressions(groupingExpressions: Seq[NamedExpression]): Seq[NamedExpression] = {
     groupingExpressions.map {
       e =>
-        NormalizeFloatingNumbers.normalize(e) match {
-          case n: NamedExpression => n
-          case other => Alias(other, e.name)(exprId = e.exprId)
+        if (!containsUnsupportedDedupType(e.dataType) && needsFloatingNormalize(e.dataType)) {
+          NormalizeFloatingNumbers.normalize(e) match {
+            case n: NamedExpression => n
+            case other => Alias(other, e.name)(exprId = e.exprId)
+          }
+        } else {
+          e
         }
     }
+  }
+
+  private def needsFloatingNormalize(dt: DataType): Boolean = dt match {
+    case FloatType | DoubleType => true
+    case StructType(fields) => fields.exists(f => needsFloatingNormalize(f.dataType))
+    case ArrayType(elementType, _) => needsFloatingNormalize(elementType)
+    case _: MapType | _ => false
   }
 
   def supportsFilterPropagation(a: Aggregate): Boolean = {

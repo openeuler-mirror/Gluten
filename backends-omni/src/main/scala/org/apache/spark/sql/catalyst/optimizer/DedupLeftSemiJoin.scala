@@ -39,7 +39,9 @@ case class DedupLeftSemiJoin(session: SparkSession) extends Rule[SparkPlan] {
     shj.joinType match {
       case LeftSemi
           if enableDedupLeftSemiJoin && shj.condition.isEmpty && shj.right.isInstanceOf[
-            ShuffleExchangeExec] && (shj.right.output.size >= dedupLeftSemiJoinThreshold) =>
+            ShuffleExchangeExec] && (shj.right.output.size >= dedupLeftSemiJoinThreshold) &&
+            ExtendedAggUtils.supportsDedupLeftSemiJoinKeys(shj.leftKeys) &&
+            ExtendedAggUtils.supportsDedupLeftSemiJoinKeys(shj.rightKeys) =>
         true
       case _ => false
     }
@@ -51,11 +53,12 @@ case class DedupLeftSemiJoin(session: SparkSession) extends Rule[SparkPlan] {
       case shj: ShuffledHashJoinExec if matchDedupLeftSemiJoinCondition(shj) =>
         val shuffleExchange = shj.right.asInstanceOf[ShuffleExchangeExec]
         val toAddAggPlan = shuffleExchange.child
-        val partialAgg = PhysicalAggregation.unapply(
+        PhysicalAggregation.unapply(
           Aggregate(toAddAggPlan.output, toAddAggPlan.output, toAddAggPlan.logicalLink.get)) match {
           case Some((groupingExpressions, aggExpressions, resultExpressions, _))
-              if aggExpressions.forall(expr => expr.isInstanceOf[AggregateExpression]) =>
-            ExtendedAggUtils
+              if aggExpressions.forall(expr => expr.isInstanceOf[AggregateExpression]) &&
+                ExtendedAggUtils.supportsDedupLeftSemiJoinGrouping(groupingExpressions) =>
+            val partialAgg = ExtendedAggUtils
               .planPartialAggregateWithoutDistinct(
                 ExtendedAggUtils.normalizeGroupingExpressions(groupingExpressions),
                 aggExpressions.map(_.asInstanceOf[AggregateExpression]),
@@ -63,8 +66,9 @@ case class DedupLeftSemiJoin(session: SparkSession) extends Rule[SparkPlan] {
                 toAddAggPlan
               )
               .asInstanceOf[HashAggregateExec]
+            shj.copy(right = shuffleExchange.copy(child = partialAgg))
+          case _ => shj
         }
-        shj.copy(right = shuffleExchange.copy(child = partialAgg))
     }
   }
 }
