@@ -177,7 +177,7 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         }
         configs[config::QueryConfig::kAggregationSpillEnabled] = BoolToString(
             omniCfg_->Get<bool>(kAggregationSpillEnabled, true));
-        // Preserve the fraction text; QueryConfig parses and validates it as double.
+        // Fraction in (0, 1], default 0.9. Join spill reads this same key; do not inject a percent.
         configs[config::QueryConfig::kMemFraction] = getSpillMemoryFraction(kMemFraction);
         configs[config::QueryConfig::kJoinSpillEnabled] = BoolToString(omniCfg_->Get<bool>(kJoinSpillEnabled, true));
         configs[config::QueryConfig::kOrderBySpillEnabled] = BoolToString(omniCfg_->Get<bool>(kOrderBySpillEnabled,
@@ -185,16 +185,14 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
         configs[config::QueryConfig::kMaxSpillLevel] = std::to_string(omniCfg_->Get<int32_t>(kMaxSpillLevel, 4));
         configs[config::QueryConfig::kMaxSpillFileSize] = std::to_string(
             omniCfg_->Get<uint64_t>(kMaxSpillFileSize, 1L * 1024 * 1024 * 1024));
-        configs[config::QueryConfig::kMaxSpillRunRows] = std::to_string(
-            omniCfg_->Get<uint64_t>(kMaxSpillRunRows, 3L * 1024 * 1024));
         configs[config::QueryConfig::kMaxSpillBytes] = std::to_string(omniCfg_->Get<uint64_t>(kMaxSpillBytes,
             107374182400LL));
         configs[config::QueryConfig::kSpillStartPartitionBit] = std::to_string(
-            omniCfg_->Get<uint8_t>(kSpillStartPartitionBit, 29));
+            omniCfg_->Get<int32_t>(kSpillStartPartitionBit, 29));
         configs[config::QueryConfig::kSpillNumPartitionBits] = std::to_string(
-            omniCfg_->Get<uint8_t>(kSpillPartitionBits, 3));
+            omniCfg_->Get<int32_t>(kSpillPartitionBits, kSpillPartitionBitsDefault));
         configs[config::QueryConfig::kSpillableReservationGrowthPct] = std::to_string(
-            omniCfg_->Get<uint8_t>(kSpillableReservationGrowthPct, 25));
+            omniCfg_->Get<int32_t>(kSpillableReservationGrowthPct, 25));
         configs[config::QueryConfig::kSpillPrefixSortEnabled] = omniCfg_->Get<std::string>(kSpillPrefixSortEnabled,
             "false");
         configs[config::QueryConfig::KSpillHashAggRowThreshold] = std::to_string(

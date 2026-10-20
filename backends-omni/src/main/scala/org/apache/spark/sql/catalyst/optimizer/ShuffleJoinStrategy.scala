@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
 import org.apache.spark.sql.Strategy
 import org.apache.spark.sql.catalyst.SQLConfHelper
@@ -84,8 +85,9 @@ object ShuffleJoinStrategy extends Strategy
                     planLater(right)))
               }.getOrElse(Nil)
           } else {
-            var leftBuildable = canBuildShuffledHashJoinLeft(joinType)
-            var rightBuildable = canBuildShuffledHashJoinRight(joinType)
+            val settings = BackendsApiManager.getSettings
+            var leftBuildable = settings.supportHashBuildJoinTypeOnLeft(joinType)
+            var rightBuildable = settings.supportHashBuildJoinTypeOnRight(joinType)
             getBuildSide(
               leftBuildable,
               rightBuildable,

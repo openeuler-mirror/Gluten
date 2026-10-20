@@ -340,7 +340,11 @@ class OmniMetricsApiImpl extends MetricsApi with Logging {
 
       "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
       "numOutputVectorBatches" -> SQLMetrics.createMetric(sparkContext, "number of output vecBatches"),
-      "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes")
+      "numOutputBytes" -> SQLMetrics.createMetric(sparkContext, "number of output bytes"),
+
+      "numSpilledBytes" -> SQLMetrics.createSizeMetric(sparkContext, "number of spilled bytes"),
+      "numSpilledRows" -> SQLMetrics.createMetric(sparkContext, "number of spilled rows"),
+      "numSpilledFiles" -> SQLMetrics.createMetric(sparkContext, "number of native spill files")
     )
 
   override def genHashJoinTransformerMetricsUpdater(
