@@ -2774,6 +2774,27 @@ object GlutenConfig {
       .booleanConf
       .createWithDefault(false)
 
+  val TAPER_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.omni.taper.enabled")
+      .internal()
+      .doc("Enable Taper hash tables as the default implementation for Omni joins.")
+      .booleanConf
+      .createWithDefault(true)
+
+  val SVE_JOIN_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.omni.sveJoin.enabled")
+      .internal()
+      .doc("Enable the SVE hash table for eligible Omni hash joins.")
+      .booleanConf
+      .createWithDefault(true)
+
+  val SVE_HASHAGG_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.omni.sveHashAgg.enabled")
+      .internal()
+      .doc("Enable the SVE hash table for eligible Omni hash aggregation.")
+      .booleanConf
+      .createWithDefault(true)
+
   val ENABLE_MIXED_STORAGE = buildConf("spark.gluten.sql.columnar.backend.omni.mixedStorage.enabled")
     .internal()
     .doc("enable or disable mixed storage")
