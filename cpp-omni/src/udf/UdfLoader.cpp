@@ -17,8 +17,14 @@
 
 #include <dlfcn.h>
 #include <google/protobuf/arena.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <limits.h>
+#include <stdexcept>
+#include <string>
 #include <vector>
-#include <filesystem>
 
 #include "Udf.h"
 #include "UdfLoader.h"
@@ -30,6 +36,46 @@
 #define GLUTEN_CONCAT(x, y) x##y
 
 namespace {
+bool pathExists(const std::string &p)
+{
+    struct stat st {};
+    return stat(p.c_str(), &st) == 0;
+}
+
+bool isPosixAbsolutePath(const std::string &p)
+{
+    return !p.empty() && p[0] == '/';
+}
+
+std::string getCurrentWorkingDir()
+{
+    std::vector<char> buf(static_cast<std::size_t>(PATH_MAX > 0 ? PATH_MAX : 4096));
+    while (getcwd(buf.data(), buf.size()) == nullptr) {
+        if (errno != ERANGE) {
+            throw std::runtime_error(std::string("getcwd failed: ") + std::strerror(errno));
+        }
+        if (buf.size() > buf.max_size() / 2) {
+            throw std::length_error("Current working directory path is too long");
+        }
+        buf.resize(buf.size() * 2);
+    }
+    return std::string(buf.data());
+}
+
+std::string joinDirAndRelative(const std::string &dir, const std::string &rel)
+{
+    if (dir.empty()) {
+        return rel;
+    }
+    if (!rel.empty() && rel[0] == '/') {
+        return rel;
+    }
+    if (!dir.empty() && dir.back() == '/') {
+        return dir + rel;
+    }
+    return dir + '/' + rel;
+}
+
 void *loadSymFromLibrary(void *handle, const std::string &libPath, const std::string &func, bool throwIfNotFound = true)
 {
     void *sym = dlsym(handle, func.c_str());
@@ -65,16 +111,15 @@ std::vector<std::string> splitPaths(const std::string &s, bool checkExists)
     }
     auto splits = splitByDelim(s, ',');
     std::vector<std::string> paths;
-    for (auto i = 0; i < splits.size(); ++i) {
+    for (std::size_t i = 0; i < splits.size(); ++i) {
         if (!splits[i].empty()) {
-            std::filesystem::path path(splits[i]);
-            if (checkExists && !std::filesystem::exists(path)) {
-                throw std::runtime_error("File path not exists: " + splits[i]);
+            const std::string &raw = splits[i];
+            if (checkExists && !pathExists(raw)) {
+                throw std::runtime_error("File path not exists: " + raw);
             }
-            if (path.is_relative()) {
-                path = std::filesystem::current_path() / path;
-            }
-            paths.push_back(path.lexically_normal().generic_string());
+            std::string resolved =
+                isPosixAbsolutePath(raw) ? raw : joinDirAndRelative(getCurrentWorkingDir(), raw);
+            paths.push_back(std::move(resolved));
         }
     }
     return paths;

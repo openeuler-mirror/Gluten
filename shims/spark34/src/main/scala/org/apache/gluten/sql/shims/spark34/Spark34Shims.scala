@@ -17,6 +17,7 @@
 package org.apache.gluten.sql.shims.spark34
 
 import org.apache.gluten.config.GlutenConfig.ENABLE_FILES_SPLIT_SINGLE_FILE
+import org.apache.gluten.execution.datasource.GlutenFormatFactory
 import org.apache.gluten.expression.{ExpressionNames, Sig}
 import org.apache.gluten.expression.ExpressionNames.KNOWN_NULLABLE
 import org.apache.gluten.sql.shims.{ShimDescriptor, SparkShims}
@@ -49,6 +50,7 @@ import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.datasources.v2.utils.CatalogUtil
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeLike
+import org.apache.spark.sql.execution.window.{WindowGroupLimitExec, WindowGroupLimitExecShim}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
@@ -284,7 +286,36 @@ class Spark34Shims extends SparkShims {
     (getLimit(plan.limit, plan.offset), plan.offset)
   }
 
-  override def getExtendedColumnarPostRules(): List[SparkSession => Rule[SparkPlan]] = List()
+  override def isWindowGroupLimitExec(plan: SparkPlan): Boolean = plan match {
+    case _: WindowGroupLimitExec => true
+    case _ => false
+  }
+
+  override def getWindowGroupLimitExecShim(plan: SparkPlan): WindowGroupLimitExecShim = {
+    val windowGroupLimitPlan = plan.asInstanceOf[WindowGroupLimitExec]
+    WindowGroupLimitExecShim(
+      windowGroupLimitPlan.partitionSpec,
+      windowGroupLimitPlan.orderSpec,
+      windowGroupLimitPlan.rankLikeFunction,
+      windowGroupLimitPlan.limit,
+      windowGroupLimitPlan.mode,
+      windowGroupLimitPlan.child
+    )
+  }
+
+  override def getWindowGroupLimitExec(windowGroupLimitPlan: SparkPlan): SparkPlan = {
+    val windowGroupLimitExecShim = windowGroupLimitPlan.asInstanceOf[WindowGroupLimitExecShim]
+    WindowGroupLimitExec(
+      windowGroupLimitExecShim.partitionSpec,
+      windowGroupLimitExecShim.orderSpec,
+      windowGroupLimitExecShim.rankLikeFunction,
+      windowGroupLimitExecShim.limit,
+      windowGroupLimitExecShim.mode,
+      windowGroupLimitExecShim.child
+    )
+  }
+
+  override def getExtendedColumnarPostRules(): List[SparkSession => Rule[SparkPlan]] = List(session => GlutenFormatFactory.getExtendedColumnarPostRule(session))
 
   override def writeFilesExecuteTask(
       description: WriteJobDescription,
@@ -512,7 +543,7 @@ class Spark34Shims extends SparkShims {
 
   override def extractExpressionArrayInsert(arrayInsert: Expression): Seq[Expression] = {
     val expr = arrayInsert.asInstanceOf[ArrayInsert]
-    Seq(expr.srcArrayExpr, expr.posExpr, expr.itemExpr, Literal(expr.legacyNegativeIndex))
+    Seq(expr.srcArrayExpr, expr.posExpr, expr.itemExpr)
   }
 
   override def getOperatorId(plan: QueryPlan[_]): Option[Int] = {
@@ -533,6 +564,6 @@ class Spark34Shims extends SparkShims {
       output: Seq[Attribute],
       isStreaming: Boolean,
       tatsOpt: Option[Statistics] = None): CTERelationRef = {
-    CTERelationRef(cteId, resolved, output, isStreaming, tatsOpt)
+    CTERelationRef(cteId, resolved, output, tatsOpt)
   }
 }

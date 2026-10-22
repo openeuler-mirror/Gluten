@@ -34,8 +34,8 @@ import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.collection.BitSet
 import io.substrait.proto.NamedStruct
-import org.apache.spark.sql.catalyst.util.RebaseDateTime
-import org.apache.spark.sql.internal.{LegacyBehaviorPolicy, SQLConf}
+import org.apache.spark.sql.execution.datasources.OmniRebaseSpecShim
+import org.apache.spark.sql.internal.SQLConf
 import scala.Option
 
 import scala.collection.JavaConverters._
@@ -126,20 +126,8 @@ case class OmniFileSourceScanExecTransformer(
         val datetimeRebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
         val int96RebaseModeStr = session.sessionState.conf.getConf(SQLConf.PARQUET_INT96_REBASE_MODE_IN_READ)
 
-        def toLegacyBehaviorPolicy(modeStr: String): LegacyBehaviorPolicy.Value = {
-          modeStr match {
-            case "LEGACY" => LegacyBehaviorPolicy.LEGACY
-            case "CORRECTED" => LegacyBehaviorPolicy.CORRECTED
-            case "EXCEPTION" => LegacyBehaviorPolicy.EXCEPTION
-            case _ => LegacyBehaviorPolicy.LEGACY
-          }
-        }
-
-        val datetimeRebaseMode = toLegacyBehaviorPolicy(datetimeRebaseModeStr)
-        val int96RebaseMode = toLegacyBehaviorPolicy(int96RebaseModeStr)
-
-        val datetimeRebaseSpec = new RebaseDateTime.RebaseSpec(datetimeRebaseMode, scala.None)
-        val int96RebaseSpec = new RebaseDateTime.RebaseSpec(int96RebaseMode, scala.None)
+        val datetimeRebaseSpec = OmniRebaseSpecShim.create(datetimeRebaseModeStr)
+        val int96RebaseSpec = OmniRebaseSpecShim.create(int96RebaseModeStr)
 
         val parquetBuilder = new ParquetPushFilterBuilder(relation.dataSchema, requiredSchema,
           datetimeRebaseSpec, int96RebaseSpec)

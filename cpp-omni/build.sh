@@ -49,7 +49,7 @@ install_fmt() {
 
 install_folly() {
   echo "Start build folly"
-  local folly_tag="v2024.07.01.00"
+  local folly_tag="v2020.10.12.00"
   local folly_repo="https://gitee.com/mirrors/folly.git"
   local open_source_dir="open_source"
   local workspace=$(readlink -f $(dirname "$BASH_SOURCE"))

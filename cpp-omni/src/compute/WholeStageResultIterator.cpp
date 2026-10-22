@@ -308,7 +308,7 @@ void WholeStageResultIterator::CollectMetrics()
         if (planStats.find(nodeId) == planStats.end()) {
             if (omittedNodeIds_.find(nodeId) == omittedNodeIds_.end()) {
                 LogsWarn("Not found node id: %d", nodeId);
-                throw std::runtime_error("Node id cannot be found in plan status.");
+                // throw std::runtime_error("Node id cannot be found in plan status.");
             }
             // Special handing for Filter over Project case. Filter metrics areomitted.
             statsNum += 1;
