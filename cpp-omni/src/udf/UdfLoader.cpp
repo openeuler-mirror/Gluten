@@ -50,15 +50,16 @@ bool isPosixAbsolutePath(const std::string &p)
 std::string getCurrentWorkingDir()
 {
     std::vector<char> buf(static_cast<std::size_t>(PATH_MAX > 0 ? PATH_MAX : 4096));
-    while (true) {
-        if (getcwd(buf.data(), buf.size()) != nullptr) {
-            return std::string(buf.data());
-        }
+    while (getcwd(buf.data(), buf.size()) == nullptr) {
         if (errno != ERANGE) {
             throw std::runtime_error(std::string("getcwd failed: ") + std::strerror(errno));
         }
+        if (buf.size() > buf.max_size() / 2) {
+            throw std::length_error("Current working directory path is too long");
+        }
         buf.resize(buf.size() * 2);
     }
+    return std::string(buf.data());
 }
 
 std::string joinDirAndRelative(const std::string &dir, const std::string &rel)
