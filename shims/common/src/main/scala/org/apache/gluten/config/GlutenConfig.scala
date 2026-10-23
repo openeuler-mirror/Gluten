@@ -841,6 +841,7 @@ object GlutenConfig {
       GLUTEN_DEFAULT_SESSION_TIMEZONE.key,
       COLUMNAR_OMNI_SPILL_MEMORY_FRACTION.key,
       ENABLE_OMNI_AGGREGATION_SPILL.key,
+      ENABLE_OMNI_JOIN_SPILL.key,
       ENABLE_OMNI_EXP_CHECK.key,
       ENABLE_OMNI_UNIXTIME_FUNCTION.key,
       ENABLE_COLUMNAR_TOP_N_SORT.key,
@@ -2516,7 +2517,8 @@ object GlutenConfig {
   val COLUMNAR_OMNI_SPILL_MEMORY_FRACTION =
     buildConf("spark.gluten.sql.columnar.backend.omni.memFraction")
       .internal()
-      .doc("Fraction of spark.memory.offHeap.size used as the spill threshold, in (0, 1].")
+      .doc("Fraction of spark.memory.offHeap.size used as the spill threshold, in (0, 1]. " +
+        "Shared by HashAgg, Window, and HashJoin.")
       .doubleConf
       .checkValue(v => v > 0 && v <= 1, "Spill memory fraction must be in (0, 1]")
       .createWithDefault(0.9)
@@ -2525,6 +2527,13 @@ object GlutenConfig {
     buildConf("spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled")
       .internal()
       .doc("enable omni aggregation spill")
+      .booleanConf
+      .createWithDefault(true)
+
+  val ENABLE_OMNI_JOIN_SPILL =
+    buildConf("spark.gluten.sql.columnar.backend.omni.joinSpillEnabled")
+      .internal()
+      .doc("enable omni hash join spill; default on, same as aggregation spill")
       .booleanConf
       .createWithDefault(true)
 

@@ -544,10 +544,10 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
                 joinRel.advanced_extension(), "buildHashTableId=");
         }
 
-        // Create HashJoinNode node
-        // FIX ME param isShuffle is not used, please delete.
-        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin, false,
-            leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType, keys,
+        // SHJ sets isShuffle so HashBuilder join spill can arm. BHJ stays isShuffle=false and
+        // carries buildHashTableId for the executor-level hash table cache.
+        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin,
+            !isBroadcast, leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType, keys,
             isBroadcast, std::move(buildHashTableId));
     }
 }
