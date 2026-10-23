@@ -135,6 +135,10 @@ class HashJoinMetricsUpdater(override val metrics: Map[String, SQLMetric])
     numOutputRows += lookupOutputRows
     numOutputBytes += lookupOutputBytes
     numOutputVectorBatches += lookupNumOutputVecBatches
+    OmniRowCountPerVecBatchMetrics.update(
+      metrics,
+      numOutputRows.value,
+      numOutputVectorBatches.value)
     numSpilledBytes += spilledBytes
     numSpilledRows += spilledRows
     numSpilledFiles += spilledFiles
