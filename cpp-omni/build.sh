@@ -62,6 +62,12 @@ install_folly() {
     echo ">>>>> FOLLY_HOME not set, start to clone folly-${folly_tag} source code and build..."
     rm -rf ${folly_source_dir} && mkdir -p ${folly_source_dir}
     git clone --branch ${folly_tag} --depth=1 ${folly_repo} ${folly_source_dir}
+    # Keep Folly 2020 compatible with current system headers and dependencies.
+    local folly_patch
+    for folly_patch in folly-runtime-sigstack.patch folly-system-deps.patch; do
+      git -C "${folly_source_dir}" apply --check "${CURRENT_DIR}/patches/${folly_patch}"
+      git -C "${folly_source_dir}" apply "${CURRENT_DIR}/patches/${folly_patch}"
+    done
     cd ${folly_source_dir} && mkdir -p build && cd build
     cmake .. -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
     make -j$(nproc)

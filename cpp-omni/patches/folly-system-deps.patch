@@ -1,0 +1,43 @@
+--- a/CMake/FindLibDwarf.cmake
++++ b/CMake/FindLibDwarf.cmake
+@@ -15,7 +15,7 @@
+ # dwarf.h is typically installed in a libdwarf/ subdirectory on Debian-style
+ # Linux distributions.  It is not installed in a libdwarf/ subdirectory on Mac
+ # systems when installed with Homebrew.  Search for it in both locations.
+-find_path(LIBDWARF_INCLUDE_DIR NAMES dwarf.h PATH_SUFFIXES libdwarf)
++find_path(LIBDWARF_INCLUDE_DIR NAMES dwarf.h PATH_SUFFIXES libdwarf libdwarf-0)
+ mark_as_advanced(LIBDWARF_INCLUDE_DIR)
+ 
+ find_library(LIBDWARF_LIBRARY NAMES dwarf)
+--- a/folly/init/Init.cpp
++++ b/folly/init/Init.cpp
+@@ -32,6 +32,20 @@
+ DEFINE_string(logging, "", "Logging configuration");
+ 
+ namespace folly {
++#if FOLLY_USE_SYMBOLIZER
++namespace {
++// Some glog versions require the noreturn attribute on the callback type.
++#if defined(__GNUC__)
++__attribute__((noreturn))
++#else
++[[noreturn]]
++#endif
++void abortOnLoggingFailure() {
++  abort();
++}
++} // namespace
++#endif
++
+ const unsigned long kAllFatalSignals =
+ #ifndef _WIN32
+     symbolizer::kAllFatalSignals;
+@@ -74,7 +88,7 @@
+ 
+ #if FOLLY_USE_SYMBOLIZER
+   // Don't use glog's DumpStackTraceAndExit; rely on our signal handler.
+-  google::InstallFailureFunction(abort);
++  google::InstallFailureFunction(abortOnLoggingFailure);
+ 
+   // Actually install the callbacks into the handler.
+   folly::symbolizer::installFatalSignalCallbacks();
