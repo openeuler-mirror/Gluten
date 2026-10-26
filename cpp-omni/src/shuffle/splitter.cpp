@@ -2039,6 +2039,13 @@ int Splitter::Split(VectorBatch& vb )
         if (taskMemoryPool_ != nullptr) {
             taskMemoryPool_->releaseUnusedReservation();
         }
+        // DoSplit may already have cached this batch's string vectors; the
+        // splitter owns those now. Release the rest here so the JNI error path
+        // does not free the cached vectors a second time.
+        if (GetInputVecBatch() == &vb) {
+            ReleaseVectorBatch(&vb);
+            ResetInputVecBatch();
+        }
         throw;
     }
     return 0;
