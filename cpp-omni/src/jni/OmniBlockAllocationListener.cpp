@@ -75,6 +75,12 @@ OmniBlockAllocationListener::updateReservation(int64_t diff) {
         // unused block has accumulated, and then down to the block-rounded usage.
         target = committedReservation;
     }
+    if (diff < 0 && target > committedReservation) {
+        // A free never borrows. After an exact external repayment the
+        // reservation can sit below the block-rounded usage; topping it up here
+        // would let Spark deny a deallocation, which often runs in a destructor.
+        target = committedReservation;
+    }
     const int64_t granted = target - committedReservation;
     if (granted > 0 && reservationBytes_ > std::numeric_limits<int64_t>::max() - granted) {
         throw std::overflow_error("OmniBlockAllocationListener: reservation overflow");

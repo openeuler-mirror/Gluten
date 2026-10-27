@@ -124,6 +124,52 @@ TEST(OmniBlockAllocationListener, ExactExternalRepaySupportsLaterBlockCrossingsA
     EXPECT_EQ(wrap.currentBytes(), 0);
 }
 
+TEST(OmniBlockAllocationListener, FreeAfterExactExternalRepayNeverBorrows) {
+    CountingListener delegate;
+    gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.setBlockSize(MiB(1));
+    wrap.allocationChanged(MiB(3) / 4);      // used 0.75 MiB, reservation 1 MiB
+    delegate.total -= MiB(1) / 2;
+    wrap.reconcileExternalRepay(MiB(1) / 2); // used 0.25 MiB, reservation 0.5 MiB
+    const int callsBeforeFree = delegate.calls;
+
+    // Block-rounding 0.125 MiB of usage would ask for 1 MiB; a free must not.
+    wrap.allocationChanged(-MiB(1) / 8);
+    EXPECT_EQ(delegate.calls, callsBeforeFree);
+    EXPECT_EQ(delegate.total, MiB(1) / 2);
+    EXPECT_EQ(wrap.currentBytes(), MiB(1) / 2);
+
+    wrap.allocationChanged(MiB(1));          // growth tops up to whole blocks again
+    EXPECT_EQ(delegate.total, MiB(2));
+    wrap.allocationChanged(-MiB(9) / 8);     // free-to-zero repays everything
+    EXPECT_EQ(delegate.total, 0);
+}
+
+TEST(OmniBlockAllocationListener, FreeAfterExactExternalRepaySurvivesSparkDenial) {
+    class DenyingAfterSwitch final : public gluten::AllocationListener {
+     public:
+        void allocationChanged(int64_t diff) override {
+            if (deny && diff > 0) throw std::runtime_error("denied");
+            total += diff;
+        }
+        int64_t currentBytes() override { return total; }
+        int64_t peakBytes() override { return total; }
+        bool deny = false;
+        int64_t total = 0;
+    } delegate;
+    gluten::OmniBlockAllocationListener wrap(&delegate);
+    wrap.setBlockSize(MiB(1));
+    wrap.allocationChanged(MiB(3) / 4);
+    delegate.total -= MiB(1) / 2;
+    wrap.reconcileExternalRepay(MiB(1) / 2);
+
+    delegate.deny = true; // Spark is out of memory; frees must still succeed
+    EXPECT_NO_THROW(wrap.allocationChanged(-MiB(1) / 8));
+    EXPECT_NO_THROW(wrap.allocationChanged(-MiB(1) / 16));
+    EXPECT_EQ(wrap.currentBytes(), MiB(1) / 2);
+    EXPECT_THROW(wrap.allocationChanged(MiB(1)), std::runtime_error);
+}
+
 TEST(OmniBlockAllocationListener, RejectsOverReconcileWithoutChangingLedger) {
     CountingListener delegate;
     gluten::OmniBlockAllocationListener wrap(&delegate);
