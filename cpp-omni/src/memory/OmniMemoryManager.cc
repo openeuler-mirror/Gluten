@@ -21,7 +21,7 @@
 #include "jni/OmniBlockAllocationListener.h"
 #include "jni/OmniSparkAllocationListener.h"
 #include "memory/omni_task_telemetry.h"
-#include "reclaim_context.h"
+#include "operator/reclaim_context.h"
 
 #include <atomic>
 #include <chrono>

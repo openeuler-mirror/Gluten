@@ -37,9 +37,9 @@
 
 // Full pool definition for
 // getBoundAllocator() called from Split_Init. Resolves via this TU's
-// per-file _OMNI_CORE_ONLY_INCLUDES scope (cpp-omni/src/CMakeLists.txt).
+// installed Omni include tree (OMNI_HOME/lib/include).
 #include "memory/omni_task_memory_pool.h"
-#include "reclaim_context.h"
+#include "operator/reclaim_context.h"
 #include "util/omni_exception.h"
 
 using namespace omniruntime::vec;

@@ -42,7 +42,7 @@
 #include "substrait/SubstraitToOmniPlan.h"
 #include "SparkJniWrapper.hh"
 #include "compute/OmniBackend.h"
-#include "broadcast_hash_table_cache_control.h"
+#include "operator/join/broadcast_hash_table_cache_control.h"
 #include "JniUdf.h"
 #include "shuffle/omni_rss_push_client.h"
 

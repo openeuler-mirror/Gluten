@@ -135,62 +135,35 @@ target_include_directories(${PROJ_TARGET} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
 option(BUILD_CPP_UDAF_EXAMPLES "Build sample libmyudaf/libmyextraudaf under cpp-omni" OFF)
 
-# The new gluten/cpp-omni/src/memory/OmniMemoryManager.cc
-# needs ${GLUTEN_HOME}/cpp/core and ${OMNI_HOME}/lib/include on its compile include
-# path so it can find gluten-core memory headers (#include "memory/MemoryManager.h"
-# etc.) and the omni per-task pool header (#include "memory/omni_task_memory_pool.h").
+# The new gluten/cpp-omni/src/memory/OmniMemoryManager.cc and the listener/JNI
+# TUs below need ${GLUTEN_HOME}/cpp/core on their compile include path so they
+# can find gluten-core memory headers (#include "memory/MemoryManager.h" etc.).
+# Omni headers (memory/omni_task_memory_pool.h, operator/reclaim_context.h, ...)
+# come from the installed tree on CPLUS_INCLUDE_PATH (${OMNI_HOME}/lib/include),
+# never from an OmniOperator source checkout: CI builds Gluten without one.
 #
 # CRITICAL: we DO NOT add cpp/core to the *target-wide* include path — doing so
 # shadows OmniOperator's /opt/Adaptor/lib/include/compute/ResultIterator.h with
 # gluten's cpp/core/compute/ResultIterator.h, breaking every other cpp-omni TU
 # that references the unqualified ResultIterator (omniruntime::ResultIterator).
 #
-# Therefore: scope the include path to *just this one source file* via
+# Therefore: scope the include path to *just these source files* via
 # set_source_files_properties + INCLUDE_DIRECTORIES. A proper cross-target link
 # contract (e.g. a gluten_core library that cpp-omni links against) would let
 # this per-file scoping be retired.
-get_filename_component(_OMNI_CENTRAL_ROOT ${GLUTEN_HOME} DIRECTORY)
-set(_OMNI_CORE_INCLUDE ${_OMNI_CENTRAL_ROOT}/omni/core/src)
-get_filename_component(_OMNI_CONTAINER_CORE_INCLUDE
-    ${CMAKE_SOURCE_DIR}/../../OmniOperator/core/src ABSOLUTE)
-if(EXISTS ${_OMNI_CONTAINER_CORE_INCLUDE})
-    set(_OMNI_CORE_INCLUDE ${_OMNI_CONTAINER_CORE_INCLUDE})
-endif()
-set(_OMNI_SPLITTER_OPERATOR_INCLUDE ${_OMNI_CENTRAL_ROOT}/omni/core/src/operator)
-get_filename_component(_OMNI_CONTAINER_SPLITTER_OPERATOR_INCLUDE
-    ${CMAKE_SOURCE_DIR}/../../OmniOperator/core/src/operator ABSOLUTE)
-if(EXISTS ${_OMNI_CONTAINER_SPLITTER_OPERATOR_INCLUDE})
-    set(_OMNI_SPLITTER_OPERATOR_INCLUDE ${_OMNI_CONTAINER_SPLITTER_OPERATOR_INCLUDE})
-endif()
-set(_OMNI_PER_TASK_POOL_INCLUDES
+set(_GLUTEN_CORE_INCLUDES
     ${GLUTEN_HOME}/cpp/core
-    ${_OMNI_CORE_INCLUDE}
-    ${_OMNI_SPLITTER_OPERATOR_INCLUDE}
-)
-# Runtime.cpp / SparkJniWrapper.cpp need omni-core (for
-# omni_task_memory_pool.h / RuntimeMemoryHelper.h) but NOT gluten/cpp/core
-# (would transitively shadow compute/ResultIterator.h via OmniOperator's
-# compute/task.h chain). Per-task memory is reached via the Velox-style const
-# pool_ on each buffer, not thread-local state.
-set(_OMNI_CORE_ONLY_INCLUDES
-    ${_OMNI_CORE_INCLUDE}
 )
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/memory/OmniMemoryManager.cc)
     set_source_files_properties(
         memory/OmniMemoryManager.cc
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_PER_TASK_POOL_INCLUDES}"
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
     )
 endif()
 set_source_files_properties(
     compute/OmniBackend.cpp
     jni/SparkJniWrapperGlobalMemory.cpp
-    PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_PER_TASK_POOL_INCLUDES}"
-)
-set_source_files_properties(
-    jni/SparkJniWrapper.cpp
-    # Keep the search path narrow: Omni core has a different shuffle.pb.h and
-    # adding its root here shadows Gluten's generated shuffle types.
-    PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_CORE_INCLUDE}/operator/join"
+    PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
 )
 
 # SparkJniWrapperMemory.cpp holds the JNI entry points
@@ -202,7 +175,7 @@ set_source_files_properties(
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/SparkJniWrapperMemory.cpp)
     set_source_files_properties(
         jni/SparkJniWrapperMemory.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_PER_TASK_POOL_INCLUDES}"
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
     )
 endif()
 # Register OmniSparkAllocationListener TU for cpp/core include scope
@@ -211,7 +184,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/OmniSparkAllocationListener.cpp)
     # the compute/ResultIterator.h shadowing described above).
     set_source_files_properties(
         jni/OmniSparkAllocationListener.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_PER_TASK_POOL_INCLUDES}"
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
     )
 endif()
 # Register OmniBlockAllocationListener TU for cpp/core include scope
@@ -220,7 +193,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/OmniBlockAllocationListener.cpp)
     # the compute/ResultIterator.h shadowing described above).
     set_source_files_properties(
         jni/OmniBlockAllocationListener.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_PER_TASK_POOL_INCLUDES}"
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
     )
 endif()
 # The compiled-in gluten-core MemoryManager.cc needs
@@ -230,38 +203,10 @@ set_source_files_properties(
     ${GLUTEN_HOME}/cpp/core/memory/MemoryManager.cc
     PROPERTIES INCLUDE_DIRECTORIES "${GLUTEN_HOME}/cpp/core"
 )
-# compute/Runtime.cpp needs omni-core (for memory/omni_task_memory_pool.h and
-# RuntimeMemoryHelper.h) but not gluten/cpp/core: the task-pool lookup is a free
-# function declared in memory/RuntimeMemoryHelper.h and defined in
-# OmniMemoryManager.cc.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/compute/Runtime.cpp)
-    set_source_files_properties(
-        compute/Runtime.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_CORE_ONLY_INCLUDES}"
-    )
-endif()
-# compute/WholeStageResultIterator.cpp includes omni-core headers for the
-# OmniTaskMemoryPool accessor while avoiding the compute/ResultIterator.h
-# shadowing from gluten/cpp/core, hence the per-file include scope.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/compute/WholeStageResultIterator.cpp)
-    set_source_files_properties(
-        compute/WholeStageResultIterator.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_CORE_ONLY_INCLUDES}"
-    )
-endif()
-# Splitter's row-mode safe boundary uses only the standalone reclaim_context.h.
-# Scope its directory to this TU so source-tree vector headers do not shadow the
-# installed Omni ABI headers used by cpp-omni.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shuffle/splitter.cpp)
-    set_source_files_properties(
-        shuffle/splitter.cpp
-        PROPERTIES INCLUDE_DIRECTORIES "${_OMNI_SPLITTER_OPERATOR_INCLUDE}"
-    )
-endif()
 # The OmniMemoryManager downcast that GetTaskMemoryPool() needs lives inside
 # OmniMemoryManager.cc as a free function (omniruntime::ToOmniTaskPoolOrNull);
 # see memory/RuntimeMemoryHelper.h. OmniMemoryManager.cc already has
-# _OMNI_PER_TASK_POOL_INCLUDES applied above.
+# _GLUTEN_CORE_INCLUDES applied above.
 
 add_subdirectory(udf/examples)
 
