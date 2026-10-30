@@ -1398,7 +1398,8 @@ int Splitter::SplitFixedWidthValidityBuffer(VectorBatch& vb){
     return 0;
 }
 
-int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
+int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers, arrow::MemoryPool *bufferPool) {
+    arrow::MemoryPool *pool = bufferPool != nullptr ? bufferPool : arrow_pool_.get();
     // 定宽列改用 Arrow buffer 缓存批（Task 9: 阶段A —— 一个缓存批 = 一帧，零拷贝引用）
     // Task 11: 也须处理仅有复杂类型数据的情况（fixed_width_array_idx_ 可能为空）
     bool hasFixedData = (partition_buffer_idx_base_[partition_id] > 0 && fixed_width_array_idx_.size() > 0);
@@ -1486,7 +1487,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         std::shared_ptr<arrow::Buffer> arrow_validity = nullptr;
                         if (hasNull && gatherRows > 0) {
                             int32_t byteCount = (gatherRows + 7) / 8;
-                            auto vr = arrow::AllocateResizableBuffer(byteCount, arrow_pool_.get());
+                            auto vr = arrow::AllocateResizableBuffer(byteCount, pool);
                             if (!vr.ok()) {
                                 throw std::runtime_error(
                                     "CacheVectorBatch Arrow varchar validity alloc failed: " + vr.status().ToString());
@@ -1499,7 +1500,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
 
                         // --- offsets: int32 数组，(gatherRows+1) × 4 字节 ---
                         int64_t offsetsSize = static_cast<int64_t>(gatherRows + 1) * sizeof(int32_t);
-                        auto orStatus = arrow::AllocateResizableBuffer(offsetsSize, arrow_pool_.get());
+                        auto orStatus = arrow::AllocateResizableBuffer(offsetsSize, pool);
                         if (!orStatus.ok()) {
                             throw std::runtime_error(
                                 "CacheVectorBatch Arrow varchar offsets alloc failed: " + orStatus.status().ToString());
@@ -1508,7 +1509,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         int32_t* offsets = reinterpret_cast<int32_t*>(offsetsBuf->mutable_data());
 
                         // --- values: 拼接字符串体 ---
-                        auto vr2 = arrow::AllocateResizableBuffer(totalValuesSize, arrow_pool_.get());
+                        auto vr2 = arrow::AllocateResizableBuffer(totalValuesSize, pool);
                         if (!vr2.ok()) {
                             throw std::runtime_error(
                                 "CacheVectorBatch Arrow varchar values alloc failed: " + vr2.status().ToString());
@@ -1559,7 +1560,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         arrow_batch.buffers.push_back(nullptr);  // validity 全有效
 
                         int32_t offsetsLen = (num_rows + 1) * static_cast<int32_t>(sizeof(int32_t));
-                        auto offsetsR = arrow::AllocateBuffer(offsetsLen, arrow_pool_.get());
+                        auto offsetsR = arrow::AllocateBuffer(offsetsLen, pool);
                         if (!offsetsR.ok()) {
                             throw std::runtime_error("CacheVectorBatch empty offsets alloc failed: "
                                                      + offsetsR.status().ToString());
@@ -1568,7 +1569,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         std::memset(emptyOffsetsBuf->mutable_data(), 0, static_cast<size_t>(offsetsLen));
                         arrow_batch.buffers.push_back(std::move(emptyOffsetsBuf));  // offsets 全 0
 
-                        auto valuesR = arrow::AllocateBuffer(0, arrow_pool_.get());
+                        auto valuesR = arrow::AllocateBuffer(0, pool);
                         if (!valuesR.ok()) {
                             throw std::runtime_error("CacheVectorBatch empty values alloc failed: "
                                                      + valuesR.status().ToString());
@@ -1639,7 +1640,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
 
                         if (has_null) {
                             int32_t byte_count = (num_rows + 7) / 8;
-                            auto vr = arrow::AllocateResizableBuffer(byte_count, arrow_pool_.get());
+                            auto vr = arrow::AllocateResizableBuffer(byte_count, pool);
                             if (!vr.ok()) {
                                 throw std::runtime_error(
                                     "CacheVectorBatch Arrow validity alloc failed: " + vr.status().ToString());
@@ -1675,8 +1676,11 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         // AllocatePartitionBuffers 时 Resize(needed_size) 保留了完整容量，
                         // 这里 Resize(actual_data_size) 确保 size() = 实际写入字节数，
                         // 使 WriteColumnarBatch 用 b->size() 写出正确的字节数（不多写垃圾）。
-                        // actual_data_size <= capacity（由 CheckCapacityAndAllocate 保证），不会触发 Reallocate。
-                        arrow_values->Resize(actual_data_size);
+                        // actual_data_size <= capacity（由 CheckCapacityAndAllocate 保证）。
+                        // Shrinking to fit reallocates, which takes the smaller buffer before freeing
+                        // the old one. A reclaim spill writes and releases this batch right away and
+                        // has no headroom in the task pool, so it keeps the capacity.
+                        arrow_values->Resize(actual_data_size, /*shrink_to_fit=*/bufferPool == nullptr);
                         arrow_batch.buffers.push_back(arrow_values);
                     } else {
                         arrow_batch.buffers.push_back(nullptr);
@@ -2393,7 +2397,7 @@ std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
     return ptrPartitionOffsets;
 }
 
-int Splitter::WriteDataFileArrow() {
+int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
     // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
@@ -2420,11 +2424,19 @@ int Splitter::WriteDataFileArrow() {
     // 顺序写入每个partition（每批自带 [4B大端size][文件头][batch帧]，
     // headerAlreadyWritten 参数不再控制文件头写出——serializer 内部每批都写文件头）
     for (auto pid = 0; pid < num_partitions_; ++pid) {
+        if (reclaimCachePool != nullptr) {
+            CacheVectorBatch(pid, true, reclaimCachePool);
+            partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+        }
         auto written = ArrowWriteColumnarPartition(
             pid, *arrowOut, header, partition_arrow_batch_,
             /*headerAlreadyWritten=*/true);
         total_bytes_spilled_ += written;
         partition_serialization_size_[pid] = written;
+        if (reclaimCachePool != nullptr) {
+            // Release the partition's buffers before building the next one.
+            partition_arrow_batch_[pid].clear();
+        }
     }
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
@@ -2764,14 +2776,18 @@ int Splitter::DeleteSpilledTmpFile() {
     return 0;
 }
 
-int Splitter::SpillToTmpFile() {
-    for (auto pid = 0; pid < num_partitions_; ++pid) {
-        CacheVectorBatch(pid, true);
-        partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+int Splitter::SpillToTmpFile(bool inReclaim) {
+    if (!inReclaim) {
+        for (auto pid = 0; pid < num_partitions_; ++pid) {
+            CacheVectorBatch(pid, true);
+            partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+        }
     }
 
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileArrow();
+    // Inside reclaim the task pool has no headroom left: build each partition's buffers outside
+    // it, right before that partition is written.
+    WriteDataFileArrow(inReclaim ? reclaim_spill_pool_.get() : nullptr);
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     ReleaseVarcharVector();
@@ -2899,7 +2915,7 @@ int64_t Splitter::reclaim(int64_t targetBytes)
         }
     } else {
         if (columnarMode_) {
-            SpillToTmpFile();
+            SpillToTmpFile(/*inReclaim=*/true);
         } else {
             SpillToTmpFileByRow();
             total_input_size = 0;
@@ -2910,10 +2926,11 @@ int64_t Splitter::reclaim(int64_t targetBytes)
     const int64_t freed = std::max<int64_t>(0, before - after);
     if (IsReclaimSuccessTelemetryEnabled()) {
         std::fprintf(stderr,
-            "[OMNI-SHUFFLE] event=pool_reclaim target=%ld estimated=%lu writer_pool=%p before=%ld after=%ld freed=%ld\n",
+            "[OMNI-SHUFFLE] event=pool_reclaim target=%ld estimated=%lu writer_pool=%p before=%ld after=%ld freed=%ld scratch_peak=%ld\n",
             static_cast<long>(targetBytes), static_cast<unsigned long>(estimated),
             static_cast<void *>(taskMemoryPool_), static_cast<long>(before),
-            static_cast<long>(after), static_cast<long>(freed));
+            static_cast<long>(after), static_cast<long>(freed),
+            static_cast<long>(ReclaimSpillScratchPeakBytes()));
     }
     return freed;
 }
@@ -2951,6 +2968,7 @@ Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_
     LogsDebug("Input Schema colNum: %d", num_cols);
     ToSplitterTypeId(num_cols);
     arrow_pool_ = std::make_shared<OmniMemoryPoolAdapter>(options_.allocator);
+    reclaim_spill_pool_ = std::make_shared<OmniMemoryPoolAdapter>(&unpooledAllocator_);
     partition_arrow_batch_.resize(num_partitions_);
 }
 

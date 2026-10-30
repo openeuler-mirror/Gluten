@@ -128,7 +128,8 @@ class Splitter : public omniruntime::op::SpillableOperator {
 
     virtual int DoSplit(VectorBatch& vb);
 
-    int WriteDataFileArrow();
+    // reclaimCachePool != nullptr: cache each partition with that pool right before writing it.
+    int WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool = nullptr);
 
     int WriteDataFileArrowByRow();
 
@@ -167,7 +168,8 @@ class Splitter : public omniruntime::op::SpillableOperator {
     template<bool HasNull>
     void SplitBinaryVector(BaseVector *varcharVector, int col_schema);
 
-    int CacheVectorBatch(int32_t partition_id, bool reset_buffers);
+    // bufferPool: where newly built buffers come from; nullptr means arrow_pool_.
+    int CacheVectorBatch(int32_t partition_id, bool reset_buffers, arrow::MemoryPool *bufferPool = nullptr);
 
     void ToSplitterTypeId(int num_cols);
 
@@ -277,6 +279,11 @@ class Splitter : public omniruntime::op::SpillableOperator {
 
     // --- Arrow 化新增成员 (Task 9: 定宽列散列改 Arrow ResizableBuffer) ---
     std::shared_ptr<OmniMemoryPoolAdapter> arrow_pool_;                            // Arrow 内存统一记账适配器
+    // A reclaim spill runs inside Spark's spill of this task, when the task pool has no headroom
+    // left, so the buffers it builds to write a partition come from here: outside the task pool,
+    // released as soon as that partition is written.
+    Allocator unpooledAllocator_{nullptr};
+    std::shared_ptr<OmniMemoryPoolAdapter> reclaim_spill_pool_;
     std::vector<std::vector<std::shared_ptr<arrow::ResizableBuffer>>> partition_fixed_width_arrow_buffers_; // [col][pid] 定宽列 Arrow 值缓冲
     std::vector<std::vector<ArrowColumnarCachedBatch>> partition_arrow_batch_;     // [pid][batchIdx] Arrow 化缓存批
 
@@ -373,7 +380,7 @@ public:
 
     int StopByRow();
 
-    int SpillToTmpFile();
+    int SpillToTmpFile(bool inReclaim = false);
 
     int SpillToTmpFileByRow();
 
@@ -415,6 +422,9 @@ public:
     int64_t TotalBytesWritten() const { return total_bytes_written_; }
 
     int64_t TotalBytesSpilled() const { return total_bytes_spilled_; }
+
+    // Largest working memory a reclaim spill held outside the task pool. Reported only.
+    int64_t ReclaimSpillScratchPeakBytes() const { return reclaim_spill_pool_->max_memory(); }
 
     // Testing helper: force spill and set isSpill flag so Stop() calls MergeSpilled()
     void TestForceSpill();

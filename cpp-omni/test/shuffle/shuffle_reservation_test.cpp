@@ -14,6 +14,7 @@
 #include "memory/OmniPoolAllocationListener.h"
 #include "memory/reservation_denied.h"
 #include "common/OmniStlAllocator.h"
+#include "shuffle/arrow_frame.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -22,6 +23,8 @@
 #include <thread>
 
 #include <algorithm>
+#include <cstring>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -91,6 +94,32 @@ private:
     int64_t current_{0};
     int64_t peak_{0};
     int64_t callCount_{0};
+};
+
+// While denyGrowth is set, denies growth above the usage it was set at, like Spark while it is
+// spilling this task.
+class DenyGrowthAllocationListener final : public gluten::AllocationListener {
+public:
+    void DenyGrowth(bool deny)
+    {
+        denyGrowth_ = deny;
+        ceiling_ = current_;
+    }
+
+    void allocationChanged(int64_t diff) override
+    {
+        if (diff > 0 && denyGrowth_ && current_ + diff > ceiling_) {
+            throw omniruntime::mem::ReservationDenied("test growth denied during reclaim");
+        }
+        current_ += diff;
+    }
+
+    int64_t currentBytes() override { return current_; }
+
+private:
+    bool denyGrowth_{false};
+    int64_t ceiling_{0};
+    int64_t current_{0};
 };
 
 class RejectFirstPositiveAllocationListener final : public gluten::AllocationListener {
@@ -163,6 +192,80 @@ std::unique_ptr<Splitter> MakeWideLongSplitter(
     options.data_file = dataFile;
     return std::unique_ptr<Splitter>(Splitter::Make(
         "hash", inputDataTypes, 10, numPartitions, std::move(options), pool));
+}
+
+std::unique_ptr<Splitter> MakeVarcharSplitter(
+    int32_t numPartitions,
+    const std::string &dataFile,
+    omniruntime::mem::OmniTaskMemoryPool *pool)
+{
+    static int32_t inputVecTypeIds[2] = {OMNI_VARCHAR, OMNI_LONG};
+    static uint32_t precisions[2] = {256, 0};
+    static uint32_t scales[2] = {};
+    InputDataTypes inputDataTypes;
+    inputDataTypes.inputVecTypeIds = inputVecTypeIds;
+    inputDataTypes.inputDataPrecisions = precisions;
+    inputDataTypes.inputDataScales = scales;
+
+    setenv("NATIVESQL_SPARK_LOCAL_DIRS", tmpTestingDir.c_str(), 1);
+    auto options = SplitOptions::Defaults();
+    options.buffer_size = 4096;
+    options.compression_type = GetCompressionType("uncompressed"); // CountColumnarRows reads raw frames
+    options.data_file = dataFile;
+    return std::unique_ptr<Splitter>(Splitter::Make(
+        "hash", inputDataTypes, 2, numPartitions, std::move(options), pool));
+}
+
+VectorBatch *CreateVarcharBatch(int32_t numPartitions, int32_t numRows, int32_t width)
+{
+    auto *batch = new VectorBatch(numRows);
+    auto *partitionIds = new Vector<int32_t>(numRows);
+    auto *strings = new Vector<LargeStringContainer<std::string_view>>(numRows);
+    auto *longs = new Vector<int64_t>(numRows);
+    std::string value(width, 'v');
+    for (int32_t row = 0; row < numRows; ++row) {
+        partitionIds->SetValue(row, row % numPartitions);
+        const std::string digits = std::to_string(row);
+        value.replace(0, digits.size(), digits);
+        strings->SetValue(row, std::string_view(value));
+        longs->SetValue(row, row);
+    }
+    batch->Append(partitionIds);
+    batch->Append(strings);
+    batch->Append(longs);
+    return batch;
+}
+
+// Rows in a columnar shuffle data file: each batch is [4-byte size][file header][batch frame].
+int64_t CountColumnarRows(const std::string &path)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return -1;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(file.tellg()));
+    file.seekg(0);
+    file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    const auto size = static_cast<int64_t>(bytes.size());
+    int64_t consumed = 0;
+    int64_t rows = 0;
+    while (consumed + 4 <= size) {
+        consumed += 4;
+        int64_t headerConsumed = 0;
+        auto header = ReadFileHeader(bytes.data() + consumed, size - consumed, &headerConsumed);
+        if (!header.ok()) {
+            return -1;
+        }
+        consumed += headerConsumed;
+        int64_t batchConsumed = 0;
+        auto batch = ReadColumnarBatch(bytes.data() + consumed, size - consumed, (*header).schema, &batchConsumed);
+        if (!batch.ok()) {
+            return -1;
+        }
+        consumed += batchConsumed;
+        rows += (*batch).rowCount;
+    }
+    return consumed == size ? rows : -1;
 }
 
 VectorBatch *CreateWideLongBatch(int32_t numPartitions, int32_t numRows)
@@ -383,6 +486,45 @@ TEST_F(ShuffleReservationTest, RowFanoutLaterBatchesReserveFromObservedRowSize)
     splitter.reset();
     EXPECT_EQ(pool.currentBytes(), 0);
     EXPECT_EQ(delegate.currentBytes(), 0);
+}
+
+TEST_F(ShuffleReservationTest, ReclaimSpillBuildsBuffersOutsideTheTaskPool)
+{
+    // 64 partitions x 625 rows of 200-byte strings: 8 MiB of string bodies, below buffer_size, so
+    // nothing has been cached before reclaim. Reclaim runs inside Spark's spill of this task with
+    // no headroom left, so any growth of the task pool there is denied (mt_case q3 stage 9).
+    tmpShuffleFilePath = tmpTestingDir + "/varchar-reclaim-spill";
+    DenyGrowthAllocationListener delegate;
+    gluten::OmniPoolAllocationListener poolListenerBridge(delegate);
+    omniruntime::mem::OmniTaskMemoryPool pool(&poolListenerBridge);
+    constexpr int32_t kPartitions = 64;
+    constexpr int32_t kBatches = 4;
+    constexpr int32_t kRowsPerBatch = 10000;
+    auto splitter = MakeVarcharSplitter(kPartitions, tmpShuffleFilePath, &pool);
+    for (int32_t batch = 0; batch < kBatches; ++batch) {
+        auto *vb = CreateVarcharBatch(kPartitions, kRowsPerBatch, 200);
+        ASSERT_EQ(splitter->Split(*vb), 0);
+    }
+
+    // Spark spills a task when it has no headroom left: drop the split pre-reservation so any
+    // growth during reclaim reaches the listener.
+    pool.releaseUnusedReservation();
+    const int64_t before = pool.currentBytes();
+    const int64_t peakBefore = pool.peakBytes();
+    ASSERT_GT(splitter->reclaimableBytes(), 0u);
+    delegate.DenyGrowth(true);
+    int64_t freed = 0;
+    EXPECT_NO_THROW(freed = splitter->reclaim(1));
+    delegate.DenyGrowth(false);
+    EXPECT_GT(freed, 0);
+    EXPECT_EQ(pool.peakBytes(), peakBefore) << "reclaim grew the task pool from " << before;
+    EXPECT_GT(splitter->TotalBytesSpilled(), 0);
+    EXPECT_GT(splitter->ReclaimSpillScratchPeakBytes(), 0);
+
+    EXPECT_NO_THROW(splitter->Stop());
+    EXPECT_EQ(CountColumnarRows(tmpShuffleFilePath), int64_t{kBatches} * kRowsPerBatch);
+    splitter.reset();
+    EXPECT_EQ(pool.currentBytes(), 0);
 }
 
 TEST_F(ShuffleReservationTest, ForeignThreadReclaimDoesNotWaitForReservationCallback)
