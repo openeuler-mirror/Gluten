@@ -1530,32 +1530,31 @@ object OmniExpressionAdaptor extends Logging {
   }
 
   def procCaseWhenExpression(caseWhen: CaseWhen, exprsIndexMap: Map[ExprId, Int]): JsonObject = {
-    var jsonObject = new JsonObject()
-    for (i <- caseWhen.branches.indices.reverse) {
-      val outerJson = new JsonObject()
-        .put("exprType", "IF")
-        .addOmniExpJsonType("returnType", caseWhen.dataType)
+    // Emit SWITCH_GENERAL (the omni SwitchExpr) instead of a nested-IF chain so
+    // the native side evaluates CASE lazily with its optimized switch evaluator
+    // (shrinking row sets, null propagation, EQ(field, const) fast path).
+    // Format consumed by JSONParser::ParseJSONSwitchGeneral:
+    //   {"exprType":"SWITCH_GENERAL","returnType":R,"numOfCases":N,
+    //    "Case1":{"when":<cond>,"result":<res>},...,"else":<else>}
+    val jsonObject = new JsonObject()
+      .put("exprType", "SWITCH_GENERAL")
+      .addOmniExpJsonType("returnType", caseWhen.dataType)
+      .put("numOfCases", caseWhen.branches.length)
+    var elseValue = caseWhen.elseValue
+    if (elseValue.isEmpty) {
+      elseValue = Some(Literal(null, caseWhen.dataType))
+    }
+    for (i <- caseWhen.branches.indices) {
+      val caseJson = new JsonObject()
         .put(
-          "condition",
+          "when",
           rewriteToOmniJsonExpressionLiteralJsonObject(caseWhen.branches(i)._1, exprsIndexMap))
         .put(
-          "if_true",
+          "result",
           rewriteToOmniJsonExpressionLiteralJsonObject(caseWhen.branches(i)._2, exprsIndexMap))
-
-      if (i != caseWhen.branches.length - 1) {
-        val innerJson = new JsonObject().addAll(jsonObject)
-        outerJson.put("if_false", innerJson)
-      } else {
-        var elseValue = caseWhen.elseValue
-        if (elseValue.isEmpty) {
-          elseValue = Some(Literal(null, caseWhen.dataType))
-        }
-        outerJson.put(
-          "if_false",
-          rewriteToOmniJsonExpressionLiteralJsonObject(elseValue.get, exprsIndexMap))
-      }
-      jsonObject = outerJson
+      jsonObject.put("Case" + (i + 1), caseJson)
     }
+    jsonObject.put("else", rewriteToOmniJsonExpressionLiteralJsonObject(elseValue.get, exprsIndexMap))
     jsonObject
   }
 

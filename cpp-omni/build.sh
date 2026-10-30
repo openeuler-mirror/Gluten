@@ -62,7 +62,9 @@ install_folly() {
   rm -rf ${folly_source_dir} && mkdir -p ${folly_source_dir}
   git clone --branch ${folly_tag} --depth=1 ${folly_repo} ${folly_source_dir}
   cd ${folly_source_dir} && mkdir -p build && cd build
-  cmake .. -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  # PIC is required: OmniOperator links libfolly.a into shared libraries, and
+  # non-PIC objects (e.g. Conv.cpp.o) break those links with relocation errors.
+  cmake .. -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   make -j$(nproc)
   sudo make install
   echo ">>>>> folly-${folly_tag} build and install completed successfully."
