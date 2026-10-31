@@ -492,50 +492,77 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             DataTypePtr arrayType = std::make_shared<type::ArrayType>(elemType);
             return new FuncExpr("array", args, arrayType);
         }
+        case ::substrait::Expression_Literal::LiteralTypeCase::kMap: {
+            const auto &mapVal = substraitLit.map();
+            if (mapVal.key_values().empty()) {
+                OMNI_THROW(SUBSTRAIT_PARSE_ERROR, "Empty map literal is not supported without a default map type");
+            }
+            std::vector<Expr *> keys;
+            std::vector<Expr *> values;
+            keys.reserve(mapVal.key_values().size());
+            values.reserve(mapVal.key_values().size());
+            for (const auto &kv : mapVal.key_values()) {
+                keys.push_back(ToOmniExpr(kv.key(), nullptr));
+                values.push_back(ToOmniExpr(kv.value(), nullptr));
+            }
+            auto mapType = std::make_shared<type::MapType>(keys[0]->GetReturnType(), values[0]->GetReturnType());
+            auto keyArrayType = std::make_shared<type::ArrayType>(mapType->Key());
+            auto valueArrayType = std::make_shared<type::ArrayType>(mapType->Value());
+            auto keysArray = new FuncExpr("array", keys, std::move(keyArrayType));
+            auto valuesArray = new FuncExpr("array", values, std::move(valueArrayType));
+            return new FuncExpr("map_from_arrays", {keysArray, valuesArray}, std::move(mapType));
+        }
         default:
-            throw omniruntime::exception::OmniException(SUBSTRAIT_PARSE_ERROR,
-                "Substrait conversion not supported for type case '{}' " + std::to_string(typeCase));
+            OMNI_THROW(SUBSTRAIT_PARSE_ERROR, "Substrait conversion not supported for type case '{}'",
+                std::to_string(typeCase));
     }
 }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
     const ::substrait::Expression::IfThen &substraitIfThen, const DataTypesPtr &inputType, const int32_t index)
 {
+    // Build a flat SwitchExpr (CASE) instead of a nested IfExpr chain: the
+    // omni evaluator then runs the optimized lazy switch (shrinking row sets,
+    // null propagation, EQ(field, const) fast path) rather than a recursion of
+    // IF nodes. The index parameter is kept for signature compatibility; the
+    // whole IfThen is converted in one call.
     const auto& ifs = substraitIfThen.ifs();
-    Expr *cond = ToOmniExpr(ifs.Get(index).if_(), inputType);
-    if (cond == nullptr) {
+    auto fail = [](std::vector<std::pair<Expr *, Expr *>> &whenClause, Expr *elseExpr) -> TypedExprPtr {
+        for (auto &when : whenClause) {
+            delete when.first;
+            delete when.second;
+        }
+        delete elseExpr;
         return nullptr;
+    };
+    std::vector<std::pair<Expr *, Expr *>> whenClause;
+    for (const auto &ifThen : ifs) {
+        Expr *cond = ToOmniExpr(ifThen.if_(), inputType);
+        if (cond == nullptr) {
+            return fail(whenClause, nullptr);
+        }
+        Expr *thenExpr = ToOmniExpr(ifThen.then(), inputType);
+        if (thenExpr == nullptr) {
+            delete cond;
+            return fail(whenClause, nullptr);
+        }
+        whenClause.emplace_back(cond, thenExpr);
     }
-    Expr *trueExpr = ToOmniExpr(ifs.Get(index).then(), inputType);
-    if (trueExpr == nullptr) {
-        delete cond;
-        return nullptr;
-    }
-    Expr *falseExpr = nullptr;
-    if (index == ifs.size() - 1) {
-        falseExpr = ToOmniExpr(substraitIfThen.else_(), inputType);
-    } else {
-        falseExpr = ToOmniExpr(substraitIfThen, inputType, index + 1);
-    }
-    if (falseExpr == nullptr) {
-        delete cond;
-        delete trueExpr;
-        return nullptr;
+    Expr *elseExpr = ToOmniExpr(substraitIfThen.else_(), inputType);
+    if (elseExpr == nullptr) {
+        return fail(whenClause, nullptr);
     }
 
-    if (TypeUtil::IsStringType(falseExpr->GetReturnTypeId()) && falseExpr->GetType() == ExprType::LITERAL_E &&
-        static_cast<LiteralExpr *>(falseExpr)->stringVal->compare("null") == 0) {
-        delete falseExpr;
-        auto literalExpr = ParserHelper::GetDefaultValueForType(trueExpr->GetReturnTypeId());
+    if (TypeUtil::IsStringType(elseExpr->GetReturnTypeId()) && elseExpr->GetType() == ExprType::LITERAL_E &&
+        static_cast<LiteralExpr *>(elseExpr)->stringVal->compare("null") == 0) {
+        delete elseExpr;
+        auto literalExpr = ParserHelper::GetDefaultValueForType(whenClause[0].second->GetReturnTypeId());
         if (literalExpr == nullptr) {
-            delete cond;
-            delete trueExpr;
-            literalExpr->isNull = true;
-            OMNI_THROW("substrait_error", "the literal expression in substraitIfThen case is null here");
+            return fail(whenClause, nullptr);
         }
-        return new IfExpr(cond, trueExpr, literalExpr);
+        return new SwitchExpr(whenClause, literalExpr);
     }
-    return new IfExpr(cond, trueExpr, falseExpr);
+    return new SwitchExpr(whenClause, elseExpr);
 }
 
 TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
