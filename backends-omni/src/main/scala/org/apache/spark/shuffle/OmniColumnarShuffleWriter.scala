@@ -129,7 +129,8 @@ class OmniColumnarShuffleWriter[K, V](
         // Supply the task's NMM handle so
         // the native Splitter binds its SimpleArenaAllocators / AlignedBuffers
         // to the task pool. Decoded on the native side via jniCastOrThrow.
-        omniRuntime.getNmmHandle()
+        omniRuntime.getNmmHandle(),
+        GlutenConfig.get.taskOffHeapMemorySize
       )
     }
 

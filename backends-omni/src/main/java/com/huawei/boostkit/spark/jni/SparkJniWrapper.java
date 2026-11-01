@@ -39,7 +39,9 @@ public class SparkJniWrapper {
       // native side to obtain the OmniTaskMemoryPool that the Splitter binds its
       // allocators to. Sharing this pool across compute + shuffle (one per task)
       // eliminates the cross-pool free in Splitter::DoSplit::ReleaseVectorBatch.
-      long nmmHandle) {
+      long nmmHandle,
+      // The task's offheap share (offheap size / task slots), which sizes partition buffers.
+      long taskOffHeapBytes) {
     return nativeMake(
         part.getShortName(),
         part.getNumPartitions(),
@@ -54,7 +56,8 @@ public class SparkJniWrapper {
         shuffleSpillBatchRowNum,
         shuffleTaskSpillMemoryThreshold,
         shuffleExecutorSpillMemoryThreshold,
-        nmmHandle);
+        nmmHandle,
+        taskOffHeapBytes);
   }
 
   public native long nativeMake(
@@ -71,7 +74,8 @@ public class SparkJniWrapper {
       int shuffleSpillBatchRowNum,
       long shuffleTaskSpillMemoryThreshold,
       long shuffleExecutorSpillMemoryThreshold,
-      long nmmHandle);
+      long nmmHandle,
+      long taskOffHeapBytes);
 
   /**
    * Split one record batch represented by bufAddrs and bufSizes into several batches. The batch is

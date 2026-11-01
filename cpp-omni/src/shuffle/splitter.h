@@ -159,6 +159,14 @@ class Splitter : public omniruntime::op::SpillableOperator {
 
     int AllocatePartitionBuffers(int32_t partition_id, int32_t new_size);
 
+    // Growable buffers keep their rows while they grow, up to buffer_size rows.
+    bool GrowsInPlace(int32_t partition_id, int32_t rows) const;
+
+    // Capacity, in rows, of the buffer that takes `rows` more rows once the current one is full.
+    int32_t NextPartitionBufferRows(int32_t partition_id, int32_t rows) const;
+
+    int GrowPartitionBuffers(int32_t partition_id, int32_t new_size);
+
     int SplitFixedWidthValueBuffer(VectorBatch& vb);
 
     int SplitFixedWidthValidityBuffer(VectorBatch& vb);
@@ -254,6 +262,9 @@ class Splitter : public omniruntime::op::SpillableOperator {
     // value bytes added by one capacity unit, and the schema indices of the
     // SHUFFLE_BINARY columns whose VCLocation indexes grow per batch.
     uint64_t fixed_value_width_bytes_ = 0;
+    // Set by Split_Init() when full partition buffers would not fit the task's
+    // offheap share: buffers then start small and grow with the rows instead.
+    bool growPartitionBuffers_ = false;
     std::vector<int32_t> binary_value_column_idx_;
     // Reusable scratch for EstimateSplitReservation(): the per-batch HasNull
     // flags of the fixed-width columns. Sized once in Split_Init() so the

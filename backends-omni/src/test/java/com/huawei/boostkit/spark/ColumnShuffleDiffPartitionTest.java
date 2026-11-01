@@ -118,7 +118,8 @@ public class ColumnShuffleDiffPartitionTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         for (int i = 0; i < 99; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 999, partitionNum, true, pidVec);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

@@ -103,11 +103,11 @@ abstract class ColumnShuffleTest {
             public long nativeMake(String name, int partitions, String types, int columns,
                     int bufferSize, String codec, String dataFile, int subDirs, String localDirs,
                     long compressionBlockSize, int spillRows, long taskThreshold,
-                    long executorThreshold, long handle) {
+                    long executorThreshold, long handle, long taskOffHeapBytes) {
                 assertEquals(nmmHandle, handle);
                 long splitter = super.nativeMake(name, partitions, types, columns, bufferSize,
                         codec, dataFile, subDirs, localDirs, compressionBlockSize, spillRows,
-                        taskThreshold, executorThreshold, handle);
+                        taskThreshold, executorThreshold, handle, taskOffHeapBytes);
                 openSplitters.add(splitter);
                 return splitter;
             }

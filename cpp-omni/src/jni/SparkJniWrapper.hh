@@ -42,7 +42,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     // function and the symbol exports as C-mangled (Java_..._nativeMake) rather
     // than C++ mangled (_Z61Java_..._nativeMake...); a mismatch surfaces as
     // UnsatisfiedLinkError at runtime.
-    jlong nmmHandle);
+    jlong nmmHandle, jlong task_offheap_bytes);
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMakeForRSS(
     JNIEnv *env, jobject,

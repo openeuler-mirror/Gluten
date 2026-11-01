@@ -268,6 +268,105 @@ int64_t CountColumnarRows(const std::string &path)
     return consumed == size ? rows : -1;
 }
 
+std::unique_ptr<Splitter> MakeIntLongSplitter(
+    int32_t numPartitions,
+    const std::string &dataFile,
+    omniruntime::mem::OmniTaskMemoryPool *pool,
+    int64_t taskOffHeapBytes)
+{
+    static int32_t inputVecTypeIds[2] = {OMNI_INT, OMNI_LONG};
+    static uint32_t precisions[2] = {};
+    static uint32_t scales[2] = {};
+    InputDataTypes inputDataTypes;
+    inputDataTypes.inputVecTypeIds = inputVecTypeIds;
+    inputDataTypes.inputDataPrecisions = precisions;
+    inputDataTypes.inputDataScales = scales;
+
+    setenv("NATIVESQL_SPARK_LOCAL_DIRS", tmpTestingDir.c_str(), 1);
+    auto options = SplitOptions::Defaults();
+    options.buffer_size = 4096;
+    options.compression_type = GetCompressionType("uncompressed"); // ForEachShuffledIntLongRow reads raw frames
+    options.data_file = dataFile;
+    options.task_offheap_bytes = taskOffHeapBytes;
+    return std::unique_ptr<Splitter>(Splitter::Make(
+        "hash", inputDataTypes, 2, numPartitions, std::move(options), pool));
+}
+
+// Row ids firstRow.. go to partition id % numPartitions. The INT column holds the id, null when
+// nullEvery > 0 divides it; the LONG column holds 3 x id.
+VectorBatch *CreateIntLongBatch(int32_t numPartitions, int32_t firstRow, int32_t numRows, int32_t nullEvery)
+{
+    auto *batch = new VectorBatch(numRows);
+    auto *partitionIds = new Vector<int32_t>(numRows);
+    auto *ints = new Vector<int32_t>(numRows);
+    auto *longs = new Vector<int64_t>(numRows);
+    for (int32_t row = 0; row < numRows; ++row) {
+        const int32_t id = firstRow + row;
+        partitionIds->SetValue(row, id % numPartitions);
+        if (nullEvery > 0 && id % nullEvery == 0) {
+            ints->SetNull(row);
+        } else {
+            ints->SetValue(row, id);
+        }
+        longs->SetValue(row, int64_t{3} * id);
+    }
+    batch->Append(partitionIds);
+    batch->Append(ints);
+    batch->Append(longs);
+    return batch;
+}
+
+// Calls visit(partition, id, intIsNull, intValue) for every row of an uncompressed INT/LONG shuffle
+// data file, where id is the LONG value / 3. Returns the number of batches, or -1 when the file
+// does not parse into the splitter's partition lengths.
+int64_t ForEachShuffledIntLongRow(const std::string &path, const std::vector<int64_t> &partitionLengths,
+    const std::function<void(int32_t, int64_t, bool, int32_t)> &visit)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return -1;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(file.tellg()));
+    file.seekg(0);
+    file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    int64_t batches = 0;
+    int64_t partitionStart = 0;
+    for (int32_t pid = 0; pid < static_cast<int32_t>(partitionLengths.size()); ++pid) {
+        const int64_t end = partitionStart + partitionLengths[pid];
+        int64_t consumed = partitionStart;
+        while (consumed < end) {
+            consumed += 4;
+            int64_t headerConsumed = 0;
+            auto header = ReadFileHeader(bytes.data() + consumed, end - consumed, &headerConsumed);
+            if (!header.ok()) {
+                return -1;
+            }
+            consumed += headerConsumed;
+            int64_t batchConsumed = 0;
+            auto batch = ReadColumnarBatch(bytes.data() + consumed, end - consumed, (*header).schema, &batchConsumed);
+            if (!batch.ok()) {
+                return -1;
+            }
+            consumed += batchConsumed;
+            ++batches;
+            // Buffers: INT [validity][values], LONG [validity][values]. A null validity is all valid.
+            const auto &buffers = (*batch).buffers;
+            const uint8_t *intValidity = buffers[0] != nullptr ? buffers[0]->data() : nullptr;
+            const auto *ints = reinterpret_cast<const int32_t *>(buffers[1]->data());
+            const auto *longs = reinterpret_cast<const int64_t *>(buffers[3]->data());
+            for (int32_t row = 0; row < (*batch).rowCount; ++row) {
+                const bool isNull = intValidity != nullptr && (intValidity[row / 8] & (1u << (row % 8))) == 0;
+                visit(pid, longs[row] / 3, isNull, ints[row]);
+            }
+        }
+        if (consumed != end) {
+            return -1;
+        }
+        partitionStart = end;
+    }
+    return partitionStart == static_cast<int64_t>(bytes.size()) ? batches : -1;
+}
+
 VectorBatch *CreateWideLongBatch(int32_t numPartitions, int32_t numRows)
 {
     auto *batch = new VectorBatch(numRows);
@@ -576,4 +675,80 @@ TEST_F(ShuffleReservationTest, ForeignThreadReclaimDoesNotWaitForReservationCall
     EXPECT_EQ(estimate, 0);
     EXPECT_EQ(freed, 0);
     splitter->Stop();
+}
+
+TEST_F(ShuffleReservationTest, SmallTaskShareGrowsPartitionBuffersWithRows)
+{
+    // Full buffers for 600 partitions are 600 x 4096 rows x 14 bytes = 34 MB, mostly empty after
+    // one batch. That is more than a quarter of a 64 MB task share, so the buffers start small
+    // instead; with no share known they stay full size.
+    constexpr int32_t kPartitions = 600;
+    for (const int64_t taskOffHeapBytes : {int64_t{0}, 64 * kMiB}) {
+        tmpShuffleFilePath = tmpTestingDir + "/shuffle_growable_partition_buffers";
+        CappedAllocationListener delegate(256 * kMiB);
+        gluten::OmniBlockAllocationListener blockListener(&delegate);
+        gluten::OmniPoolAllocationListener poolListenerBridge(blockListener);
+        omniruntime::mem::OmniTaskMemoryPool pool(&poolListenerBridge);
+        auto splitter = MakeIntLongSplitter(kPartitions, tmpShuffleFilePath, &pool, taskOffHeapBytes);
+        ASSERT_EQ(splitter->Split(*CreateIntLongBatch(kPartitions, 0, 2 * kPartitions, 0)), 0);
+        if (taskOffHeapBytes == 0) {
+            EXPECT_GT(pool.currentBytes(), 16 * kMiB);
+        } else {
+            EXPECT_LT(pool.currentBytes(), 2 * kMiB);
+        }
+        EXPECT_NO_THROW(splitter->Stop());
+        splitter.reset();
+        EXPECT_EQ(pool.currentBytes(), 0);
+    }
+}
+
+TEST_F(ShuffleReservationTest, GrowablePartitionBuffersKeepEveryRow)
+{
+    // 200 rows per partition per batch: each partition's rows go through buffer growth, nulls that
+    // first appear when a buffer already holds rows, a reclaim spill, and full buffers that are
+    // cached and replaced.
+    tmpShuffleFilePath = tmpTestingDir + "/shuffle_growable_partition_rows";
+    CappedAllocationListener delegate(256 * kMiB);
+    gluten::OmniBlockAllocationListener blockListener(&delegate);
+    gluten::OmniPoolAllocationListener poolListenerBridge(blockListener);
+    omniruntime::mem::OmniTaskMemoryPool pool(&poolListenerBridge);
+    constexpr int32_t kPartitions = 50;
+    constexpr int32_t kBatches = 30;
+    constexpr int32_t kRowsPerBatch = 10000;
+    constexpr int32_t kFirstBatchWithNulls = 5;
+    constexpr int32_t kNullEvery = 7;
+    auto splitter = MakeIntLongSplitter(kPartitions, tmpShuffleFilePath, &pool, kMiB);
+    for (int32_t batch = 0; batch < kBatches; ++batch) {
+        const int32_t nullEvery = batch < kFirstBatchWithNulls ? 0 : kNullEvery;
+        ASSERT_EQ(splitter->Split(*CreateIntLongBatch(kPartitions, batch * kRowsPerBatch, kRowsPerBatch, nullEvery)), 0);
+        if (batch == 12) {
+            ASSERT_GT(splitter->reclaim(1), 0);
+        }
+    }
+    EXPECT_GT(splitter->TotalBytesSpilled(), 0);
+    ASSERT_EQ(splitter->Stop(), 0);
+
+    constexpr int64_t kRows = int64_t{kBatches} * kRowsPerBatch;
+    std::vector<bool> seen(kRows, false);
+    int64_t unexpected = 0;
+    int64_t misplaced = 0;
+    int64_t wrong = 0;
+    const int64_t batches = ForEachShuffledIntLongRow(tmpShuffleFilePath, splitter->PartitionLengths(),
+        [&](int32_t pid, int64_t id, bool isNull, int32_t value) {
+            if (id < 0 || id >= kRows || seen[id]) {
+                ++unexpected;
+                return;
+            }
+            seen[id] = true;
+            misplaced += id % kPartitions != pid;
+            const bool nullExpected = id >= int64_t{kFirstBatchWithNulls} * kRowsPerBatch && id % kNullEvery == 0;
+            wrong += isNull != nullExpected || (!isNull && value != id);
+        });
+    EXPECT_GT(batches, 0);
+    EXPECT_EQ(unexpected, 0);
+    EXPECT_EQ(misplaced, 0);
+    EXPECT_EQ(wrong, 0);
+    EXPECT_EQ(std::count(seen.begin(), seen.end(), true), kRows);
+    splitter.reset();
+    EXPECT_EQ(pool.currentBytes(), 0);
 }

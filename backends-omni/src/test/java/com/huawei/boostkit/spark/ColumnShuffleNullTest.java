@@ -97,7 +97,8 @@ public class ColumnShuffleNullTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         // 不能重复split同一个vb,接口有释放vb内存，重复split会导致重复释放内存而Core
         for (int i = 0; i < 1; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9, numPartition, true, true);
@@ -129,7 +130,8 @@ public class ColumnShuffleNullTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         // 不能重复split同一个vb,接口有释放vb内存，重复split会导致重复释放内存而Core
         for (int i = 0; i < 1; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9, numPartition, true, true);
@@ -162,7 +164,8 @@ public class ColumnShuffleNullTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         // 不能重复split同一个vb,接口有释放vb内存，重复split会导致重复释放内存而Core
         for (int i = 0; i < 1; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9, numPartition, true, true);
@@ -195,7 +198,8 @@ public class ColumnShuffleNullTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         for (int i = 0; i < 1; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 9999, numPartition, true, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

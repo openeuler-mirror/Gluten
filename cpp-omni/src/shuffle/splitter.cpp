@@ -47,6 +47,9 @@ using namespace omniruntime::vec::unsafe;
 using namespace omniruntime::type;
 
 namespace {
+// First capacity, in rows, of a growable partition buffer.
+constexpr int32_t kInitialGrowableBufferRows = 64;
+
 bool IsEnvironmentSwitchEnabled(const char *name)
 {
     const char *value = std::getenv(name);
@@ -252,6 +255,54 @@ int Splitter::AllocatePartitionBuffers(int32_t partition_id, int32_t new_size) {
         }
     }
 
+    partition_buffer_size_[partition_id] = new_size;
+    return 0;
+}
+
+bool Splitter::GrowsInPlace(int32_t partition_id, int32_t rows) const
+{
+    return growPartitionBuffers_ && partition_buffer_size_[partition_id] > 0 &&
+        partition_buffer_idx_base_[partition_id] + rows <= options_.buffer_size;
+}
+
+int32_t Splitter::NextPartitionBufferRows(int32_t partition_id, int32_t rows) const
+{
+    if (!growPartitionBuffers_) {
+        return std::max(rows, options_.buffer_size);
+    }
+    if (GrowsInPlace(partition_id, rows)) {
+        // Doubling keeps the copies linear in the rows a buffer ends up holding.
+        const int64_t needed = int64_t{partition_buffer_idx_base_[partition_id]} + rows;
+        const int64_t doubled = int64_t{2} * partition_buffer_size_[partition_id];
+        return static_cast<int32_t>(std::min<int64_t>(options_.buffer_size, std::max(needed, doubled)));
+    }
+    return std::max(rows, std::min(kInitialGrowableBufferRows, options_.buffer_size));
+}
+
+int Splitter::GrowPartitionBuffers(int32_t partition_id, int32_t new_size) {
+    const int32_t rows = partition_buffer_idx_base_[partition_id];
+    for (size_t col = 0; col < fixed_width_array_idx_.size(); ++col) {
+        const auto col_idx_schema = singlePartitionFlag ? fixed_width_array_idx_[col] : fixed_width_array_idx_[col] - 1;
+        const int64_t type_size = int64_t{1} << column_type_id_[col_idx_schema];
+        auto &values = partition_fixed_width_arrow_buffers_[col][partition_id];
+        auto st = values->Resize(new_size * type_size, /*shrink_to_fit=*/false);
+        if (!st.ok()) {
+            throw std::runtime_error("GrowPartitionBuffers Arrow resize failed: " + st.ToString());
+        }
+        partition_fixed_width_value_addrs_[col][partition_id] = values->mutable_data();
+
+        auto &validity = partition_fixed_width_buffers_[col][partition_id][0];
+        if (validity != nullptr) {
+            auto *grown = static_cast<uint8_t *>(options_.allocator->Alloc(new_size));
+            if (grown == nullptr) {
+                throw std::runtime_error("Allocator for ValidityBuffer Failed! ");
+            }
+            memcpy(grown, validity->data_, rows);
+            memset(grown + rows, 0, new_size - rows);
+            validity = std::make_shared<Buffer>(grown, rows, new_size, options_.allocator);
+            partition_fixed_width_validity_addrs_[col][partition_id] = grown;
+        }
+    }
     partition_buffer_size_[partition_id] = new_size;
     return 0;
 }
@@ -1340,9 +1391,8 @@ int Splitter::SplitFixedWidthValidityBuffer(VectorBatch& vb){
             for (auto pid = 0; pid < num_partitions_; ++pid) {
                 if (partition_id_cnt_cur_[pid] > 0 && dst_addrs[pid] == nullptr) {
                     // init bitmap if it's null
-                    auto new_size = partition_id_cnt_cur_[pid] > options_.buffer_size
-                        ? partition_id_cnt_cur_[pid]
-                        : options_.buffer_size;
+                    // Cover the whole value buffer: rows already in it before this batch read as valid.
+                    auto new_size = partition_buffer_size_[pid];
                     auto ptr_tmp = static_cast<uint8_t *>(options_.allocator->Alloc(new_size));
                     if (nullptr == ptr_tmp) {
                         throw std::runtime_error("Allocator for ValidityBuffer Failed! ");
@@ -1763,8 +1813,10 @@ int Splitter::DoSplit(VectorBatch& vb) {
         if ((hasFixed || hasComplex) &&
             partition_id_cnt_cur_[pid] > 0 &&
             partition_buffer_idx_base_[pid] + partition_id_cnt_cur_[pid] > partition_buffer_size_[pid]) {
-            auto new_size = partition_id_cnt_cur_[pid] > options_.buffer_size ? partition_id_cnt_cur_[pid] : options_.buffer_size;
-            if (partition_buffer_size_[pid] == 0) {
+            auto new_size = NextPartitionBufferRows(pid, partition_id_cnt_cur_[pid]);
+            if (GrowsInPlace(pid, partition_id_cnt_cur_[pid])) {
+                GrowPartitionBuffers(pid, new_size);
+            } else if (partition_buffer_size_[pid] == 0) {
                 AllocatePartitionBuffers(pid, new_size);
             } else {
                     CacheVectorBatch(pid, true);
@@ -1968,6 +2020,24 @@ int Splitter::Split_Init(){
             default:
                 break;
         }
+    }
+
+    // Velox (VeloxHashShuffleWriter::calculatePartitionBufferSize) gives preallocated partition
+    // buffers at most a quarter of the task's offheap share. A full buffer_size per partition
+    // outgrows that once partitions are many: 600 partitions x 8192 rows x 37 bytes is 182 MB
+    // against a 200 MB share. Those buffers are mostly empty when Spark spills the task, so a
+    // spill frees capacity rather than rows, the next batch allocates it again, and the writer is
+    // spilled every few batches with a handful of rows per partition. Buffers then start small
+    // and grow with the rows instead, so they hold rows rather than empty capacity. With a
+    // normal share full buffers fit and nothing changes.
+    const uint64_t bytesPerRow = fixed_value_width_bytes_ + fixed_width_array_idx_.size(); // values + validity
+    growPartitionBuffers_ = options_.task_offheap_bytes > 0 && bytesPerRow > 0 &&
+        bytesPerRow * static_cast<uint64_t>(options_.buffer_size) * static_cast<uint64_t>(num_partitions_) >
+        static_cast<uint64_t>(options_.task_offheap_bytes) / 4;
+    if (growPartitionBuffers_) {
+        LogsInfo("Splitter partition buffers grow with their rows: partitions=%d buffer_size=%d bytes_per_row=%lu "
+                 "task_offheap=%ld", num_partitions_, options_.buffer_size, bytesPerRow,
+                 static_cast<long>(options_.task_offheap_bytes));
     }
     auto num_fixed_width = fixed_width_array_idx_.size();
     fixed_column_has_null_scratch_.assign(num_fixed_width, 0);
@@ -2180,8 +2250,10 @@ int64_t Splitter::EstimateSplitReservation(VectorBatch& vb)
         const bool replacesValueBuffers =
             static_cast<uint64_t>(std::max(partition_buffer_idx_base_[pid], 0)) + count >
             static_cast<uint64_t>(std::max(partition_buffer_size_[pid], 0));
-        const uint64_t newCapacity = std::max<uint64_t>(
-            count, static_cast<uint64_t>(options_.buffer_size));
+        // A grown buffer holds the old one until its rows are copied, so it peaks at the new
+        // capacity too.
+        const uint64_t newCapacity = static_cast<uint64_t>(
+            NextPartitionBufferRows(pid, static_cast<int32_t>(count)));
         if (replacesValueBuffers) {
             fixedBufferGrowth = add(
                 fixedBufferGrowth, multiply(newCapacity, fixedValueWidth));

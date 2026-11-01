@@ -120,7 +120,8 @@ public class ColumnShuffleCompressionTest extends ColumnShuffleTest {
                 4096,
                 1024 * 1024 * 1024,
                 Long.MAX_VALUE,
-                nmmHandle);
+                nmmHandle,
+                0L);
         for (int i = 0; i < 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 1000, partitionNum, true, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

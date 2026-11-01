@@ -81,7 +81,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     // gluten::MemoryManager* and threaded into the Splitter as the per-task pool
     // so partition arenas allocate against the same pool as compute (one pool
     // per task across compute + shuffle).
-    jlong nmmHandle)
+    jlong nmmHandle, jlong task_offheap_bytes)
 {
     JNI_FUNC_START
         if (partitioning_name_jstr == nullptr) {
@@ -137,6 +137,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         if (buffer_size > 0) {
             splitOptions.buffer_size = buffer_size;
         }
+        splitOptions.task_offheap_bytes = task_offheap_bytes;
         if (num_sub_dirs > 0) {
             splitOptions.num_sub_dirs = num_sub_dirs;
         }

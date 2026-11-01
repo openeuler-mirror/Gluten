@@ -58,6 +58,8 @@ struct SplitOptions {
     uint64_t task_spill_mem_threshold = 2L * 1024 * 1024 * 1024; // default value
     uint64_t executor_spill_mem_threshold = spillThreshold * offHeapSize; // default value
     uint64_t compress_block_size = 64 * 1024; // default value
+    // The task's offheap share (offheap size / task slots); 0 when unknown.
+    int64_t task_offheap_bytes = 0;
 
     bool rss_mode = false;
 
