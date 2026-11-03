@@ -188,7 +188,7 @@ class Splitter : public omniruntime::op::SpillableOperator {
     void MergeSpilledByRow();
 
     // Task 15: mmap 零拷贝透传临时文件段（行/列共用），消除 C8 拷贝
-    void TransferSpilledSegments(ArrowOutputStream& out,
+    uint64_t TransferSpilledSegments(ArrowOutputStream& out,
                                  const std::string& tmpDataFilePath,
                                  uint64_t partitionOffset,
                                  uint64_t partitionSize);

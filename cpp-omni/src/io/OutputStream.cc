@@ -105,4 +105,12 @@ namespace spark {
     return dataSize;
   }
 
+  uint64_t BufferedOutputStream::writeThrough(const void* data, uint64_t len) {
+    const uint64_t flushed = flush();
+    if (len > 0) {
+      outputStream->write(data, static_cast<size_t>(len));
+    }
+    return flushed;
+  }
+
 }

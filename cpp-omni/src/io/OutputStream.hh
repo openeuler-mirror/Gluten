@@ -53,6 +53,11 @@ namespace spark {
     virtual std::string getName() const;
     virtual uint64_t getSize() const;
     virtual uint64_t flush();
+    // Flush what is pending (a compressing stream closes its current block), then write `len` bytes
+    // straight to the underlying stream, bypassing buffering and compression. Used to append data
+    // that is already in this stream's on-disk format, such as a compressed spill segment. Returns
+    // the bytes the flush wrote; the caller adds `len` for the passthrough bytes.
+    uint64_t writeThrough(const void* data, uint64_t len);
     virtual bool NextNBytes(void** data, int size);
 
     virtual bool isCompressed() const { return false; }

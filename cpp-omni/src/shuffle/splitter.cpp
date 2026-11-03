@@ -2472,7 +2472,10 @@ std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
 int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
-    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    // Spill files use the final shuffle codec. Each partition ends on a block boundary
+    // (ArrowWriteColumnarPartition flushes), so MergeSpilled appends the compressed segments
+    // to the final file as they are, instead of reading raw bytes back and compressing them
+    // then. partition_serialization_size_ and total_bytes_spilled_ are on-disk (compressed) bytes.
     ArrowFileHeader header;
     header.version = kArrowShuffleVersion;
     header.layout = ShuffleLayout::COLUMNAR;
@@ -2487,7 +2490,7 @@ int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
 
     auto arrowOut = ArrowOutputStream::Make(
         std::move(outStream),
-        CompressionKind_NONE,
+        options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
         options_.compress_block_size,
@@ -2522,7 +2525,7 @@ int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
 int Splitter::WriteDataFileArrowByRow() {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
-    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    // Spill files use the final shuffle codec; see WriteDataFileArrow.
     ArrowFileHeader header;
     header.version = kArrowShuffleVersion;
     header.layout = ShuffleLayout::ROW;
@@ -2537,7 +2540,7 @@ int Splitter::WriteDataFileArrowByRow() {
 
     auto arrowOut = ArrowOutputStream::Make(
         std::move(outStream),
-        CompressionKind_NONE,
+        options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
         options_.compress_block_size,
@@ -2564,14 +2567,17 @@ int Splitter::WriteDataFileArrowByRow() {
     return 0;
 }
 
-// Task 15: mmap 零拷贝透传临时文件段，消除 C8 "磁盘→临时内存"拷贝
-// spill 帧与最终写出帧同构，按 [offset, size) 字节段直接写入最终流，不解析帧内容
-void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
-                                       const std::string& tmpDataFilePath,
-                                       uint64_t partitionOffset,
-                                       uint64_t partitionSize) {
+// Append one partition's segment of a spill file to the final stream. The segment is a run of
+// complete compressed blocks in the final file's own format (the spill writer uses the same codec
+// and flushes per partition), so it is written through without decompressing or recompressing.
+// Returns the bytes added to the final file: the flush that closed the stream's pending block plus
+// the segment itself.
+uint64_t Splitter::TransferSpilledSegments(ArrowOutputStream& out,
+                                           const std::string& tmpDataFilePath,
+                                           uint64_t partitionOffset,
+                                           uint64_t partitionSize) {
     if (partitionSize == 0) {
-        return;
+        return 0;
     }
     auto mmapResult = arrow::io::MemoryMappedFile::Open(tmpDataFilePath, arrow::io::FileMode::READ);
     if (!mmapResult.ok()) {
@@ -2597,15 +2603,7 @@ void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
                                  readResult.status().ToString());
     }
     auto buffer = std::move(readResult).ValueOrDie();
-    auto st = out.Write(buffer->data(), static_cast<int64_t>(partitionSize));
-    if (!st.ok()) {
-        LogsError("TransferSpilledSegments Write failed: path=%s offset=%llu size=%llu msg=%s",
-                  tmpDataFilePath.c_str(),
-                  static_cast<unsigned long long>(partitionOffset),
-                  static_cast<unsigned long long>(partitionSize),
-                  st.ToString().c_str());
-        throw std::runtime_error("TransferSpilledSegments: Write failed: " + st.ToString());
-    }
+    const uint64_t flushed = out.WriteThrough(buffer->data(), static_cast<int64_t>(partitionSize));
     auto closeSt = mmapFile->Close();
     if (!closeSt.ok()) {
         LogsError("TransferSpilledSegments Close mmap failed: path=%s offset=%llu size=%llu msg=%s",
@@ -2615,6 +2613,7 @@ void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
                   closeSt.ToString().c_str());
         throw std::runtime_error("TransferSpilledSegments: Close mmap failed: " + closeSt.ToString());
     }
+    return flushed + partitionSize;
 }
 
 void Splitter::MergeSpilled() {
@@ -2663,11 +2662,10 @@ void Splitter::MergeSpilled() {
                                     - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
             LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
                       pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
-            // flush 获取压缩后字节数
-            uint64_t flushedBytes = arrowOut->FlushAndCount();
-            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
-            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
+            const uint64_t added = TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset,
+                tmpPartitionSize);
+            partition_lengths_[pid] += static_cast<int64_t>(added);
+            total_bytes_written_ += static_cast<int64_t>(added);
         }
     }
 
@@ -2728,11 +2726,10 @@ void Splitter::MergeSpilledByRow() {
                                     - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
             LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
                       pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
-            // flush 获取压缩后字节数
-            uint64_t flushedBytes = arrowOut->FlushAndCount();
-            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
-            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
+            const uint64_t added = TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset,
+                tmpPartitionSize);
+            partition_lengths_[pid] += static_cast<int64_t>(added);
+            total_bytes_written_ += static_cast<int64_t>(added);
         }
     }
 

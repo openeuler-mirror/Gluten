@@ -74,6 +74,14 @@ public:
         return buf_->flush();
     }
 
+    // Append bytes that are already in this stream's on-disk format (compressed blocks written by
+    // a stream of the same kind), without compressing them again. Flushes first so the current
+    // block is closed. Returns the bytes that flush wrote; the passthrough bytes are `nbytes`.
+    uint64_t WriteThrough(const void* data, int64_t nbytes) {
+        if (closed_) { return 0; }
+        return buf_->writeThrough(data, static_cast<uint64_t>(nbytes));
+    }
+
 private:
     // The buffer borrows the sink; destroy the buffer before its owned sink.
     std::unique_ptr<spark::OutputStream> ownedRaw_;
