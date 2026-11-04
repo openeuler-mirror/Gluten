@@ -1299,6 +1299,17 @@ object OmniExpressionAdaptor extends Logging {
             .put(jsonAttributeKey, omniTypeIdStr.toInt)
             .put("precision", dt.precision)
             .put("scale", dt.scale)
+        case a: ArrayType =>
+          jsonObject.put(jsonAttributeKey, omniTypeIdStr.toInt)
+          a.elementType match {
+            case _: ArrayType | _: MapType | _: StructType =>
+            case StringType =>
+              jsonObject
+                .put("elementType", sparkTypeToOmniExpType(StringType).toInt)
+                .put("width", DEFAULT_STRING_TYPE_LENGTH)
+            case _ =>
+              jsonObject.put("elementType", sparkTypeToOmniExpType(a.elementType).toInt)
+          }
         case _ =>
           jsonObject.put(jsonAttributeKey, omniTypeIdStr.toInt)
       }

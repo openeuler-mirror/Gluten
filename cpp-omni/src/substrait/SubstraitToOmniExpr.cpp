@@ -67,6 +67,23 @@ DataTypePtr GetScalarType(const ::substrait::Expression::Literal &literal)
             const auto &first = *list.values().begin();
             return std::make_shared<type::ArrayType>(GetScalarType(first));
         }
+        case ::substrait::Expression_Literal::LiteralTypeCase::kStruct: {
+            const auto &structVal = literal.struct_();
+            std::vector<type::DataTypePtr> fieldTypes;
+            std::vector<std::string> fieldNames;
+            fieldTypes.reserve(structVal.fields().size());
+            fieldNames.reserve(structVal.fields().size());
+            for (int i = 0; i < structVal.fields().size(); ++i) {
+                const auto &field = structVal.fields(i);
+                if (field.literal_type_case() == ::substrait::Expression_Literal::LiteralTypeCase::kNull) {
+                    fieldTypes.push_back(SubstraitParser::ParseType(field.null(), false, false));
+                } else {
+                    fieldTypes.push_back(GetScalarType(field));
+                }
+                fieldNames.push_back("field" + std::to_string(i));
+            }
+            return std::make_shared<type::RowType>(std::move(fieldTypes), std::move(fieldNames));
+        }
         case ::substrait::Expression_Literal::LiteralTypeCase::kString:
             return VarcharType();
         case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
@@ -213,6 +230,14 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             delete args[0];
             OMNI_THROW("SUBSTRAIT_ERROR:", "The args[1] in ScalarFunction is nullptr");
         }
+        const auto leftId = args[0]->GetReturnTypeId();
+        const auto rightId = args[1]->GetReturnTypeId();
+        const bool complexSame = (leftId == OMNI_ARRAY && rightId == OMNI_ARRAY) ||
+            (leftId == OMNI_ROW && rightId == OMNI_ROW);
+        if (complexSame && (op == expressions::Operator::EQ || op == expressions::Operator::NEQ)) {
+            const char *cmpName = op == expressions::Operator::EQ ? "equal" : "notEqual";
+            return new FuncExpr(cmpName, args, std::move(outputType));
+        }
         return new BinaryExpr(op, args[0], args[1], std::move(outputType));
     } else if (type == FUNCTION_OMNI_EXPR_TYPE) {
         if (funcName == "concat") {
@@ -292,6 +317,13 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             BloomFilterFuncExpr *bfFuncExpr = new BloomFilterFuncExpr(funcName, {nChildExpr, args[1]}, outputType, std::move(bloomFilter));
             delete childExpr;
             return bfFuncExpr;
+        }
+        // date_trunc(format, timestamp[, timeZoneId]): timezone comes from
+        // the session config (QueryConfig). Strip the optional third argument so
+        // that the 2-arg VectorFunction signature matches.
+        if (funcName == "date_trunc" && args.size() == 3) {
+            delete args[2];
+            args.resize(2);
         }
         // check the signature matches
         std::vector<DataTypeId> argTypes(args.size());
@@ -382,6 +414,14 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             auto retScale = static_cast<DecimalDataType *>(retType.get())->GetScale();
             auto retPrecision = static_cast<DecimalDataType *>(retType.get())->GetPrecision();
             if (argScale == retScale && argPrecision <= retPrecision) {
+                return expr;
+            }
+        } else if (retTypeId == OMNI_ARRAY) {
+            // array<int> and array<string> share OMNI_ARRAY. Keep the CAST when element types differ.
+            auto argArray = std::dynamic_pointer_cast<ArrayType>(argReturnType);
+            auto retArray = std::dynamic_pointer_cast<ArrayType>(retType);
+            if (argArray != nullptr && retArray != nullptr &&
+                argArray->ElementType()->GetId() == retArray->ElementType()->GetId()) {
                 return expr;
             }
         } else {
@@ -492,6 +532,30 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(const ::substrait::Expressio
             DataTypePtr arrayType = std::make_shared<type::ArrayType>(elemType);
             return new FuncExpr("array", args, arrayType);
         }
+        case ::substrait::Expression_Literal::LiteralTypeCase::kStruct: {
+            const auto &structVal = substraitLit.struct_();
+            std::vector<Expr *> args;
+            args.reserve(structVal.fields().size());
+            for (const auto &childExpr : structVal.fields()) {
+                args.push_back(ToOmniExpr(childExpr, nullptr));
+            }
+            if (args.empty()) {
+                DataTypePtr rowType = (defaultType != nullptr && defaultType->GetId() == type::OMNI_ROW)
+                    ? defaultType
+                    : std::make_shared<type::RowType>(std::vector<type::DataTypePtr>(), std::vector<std::string>());
+                return new LiteralExpr(0, rowType);
+            }
+            std::vector<type::DataTypePtr> fieldTypes;
+            std::vector<std::string> fieldNames;
+            fieldTypes.reserve(args.size());
+            fieldNames.reserve(args.size());
+            for (size_t i = 0; i < args.size(); ++i) {
+                fieldTypes.push_back(args[i]->GetReturnType());
+                fieldNames.push_back("field" + std::to_string(i));
+            }
+            DataTypePtr rowType = std::make_shared<type::RowType>(std::move(fieldTypes), std::move(fieldNames));
+            return new FuncExpr("name_struct", args, rowType);
+        }
         case ::substrait::Expression_Literal::LiteralTypeCase::kMap: {
             const auto &mapVal = substraitLit.map();
             if (mapVal.key_values().empty()) {
@@ -561,6 +625,11 @@ TypedExprPtr SubstraitOmniExprConverter::ToOmniExpr(
             return fail(whenClause, nullptr);
         }
         return new SwitchExpr(whenClause, literalExpr);
+    }
+    // A single WHEN is nullif/if. SwitchExpr has no vector function, so array and
+    // struct results fail validation. IfExpr is registered for those types.
+    if (whenClause.size() == 1) {
+        return new IfExpr(whenClause[0].first, whenClause[0].second, elseExpr);
     }
     return new SwitchExpr(whenClause, elseExpr);
 }
