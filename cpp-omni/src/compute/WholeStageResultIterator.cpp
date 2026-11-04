@@ -5,6 +5,8 @@
 #include "WholeStageResultIterator.h"
 #include "compute/reason.h"
 #include "util/config/QueryConfig.h"
+#include "util/telemetry.h"
+#include <algorithm>
 #include "config/OmniConfig.h"
 #include "compute/plannode_stats.h"
 #include "Runtime.h"
@@ -272,6 +274,27 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             omniCfg_->Get<int32_t>(KAdaptivePartialAggregationMinRows, 500000));
         configs[config::QueryConfig::KAdaptivePartialAggregationRatio] = std::to_string(
             omniCfg_->Get<double>(KAdaptivePartialAggregationRatio, 0.8));
+        {
+            // Cap an adaptive partial aggregation at a fraction of the task's off-heap
+            // share and flush it downstream when full (Velox maxPartialAggregationMemory),
+            // instead of growing it until Spark denies the next block and spilling the
+            // whole table. The task share is offHeap / task slots, set by GlutenPlugin.
+            const int64_t taskOffHeap = omniCfg_->Get<int64_t>(kSparkTaskOffHeapMemory, 0);
+            const double ratio = omniCfg_->Get<double>(KMaxPartialAggregationMemoryRatio, 0.1);
+            const double extendedRatio = omniCfg_->Get<double>(KMaxExtendedPartialAggregationMemoryRatio, 0.15);
+            const int64_t cap = taskOffHeap > 0 && ratio > 0 ? static_cast<int64_t>(taskOffHeap * ratio) : 0;
+            const int64_t extendedCap =
+                taskOffHeap > 0 && extendedRatio > 0 ? static_cast<int64_t>(taskOffHeap * extendedRatio) : 0;
+            configs[config::QueryConfig::KMaxPartialAggregationMemory] = std::to_string(cap);
+            configs[config::QueryConfig::KMaxExtendedPartialAggregationMemory] =
+                std::to_string(std::max(cap, extendedCap));
+            if (omniruntime::telemetry::IsReclaimVerboseEnabled()) {
+                std::fprintf(stderr,
+                    "[OMNI-HASHAGG] event=partial_flush_config task_offheap=%ld ratio=%.4f extended_ratio=%.4f cap=%ld extended_cap=%ld\n",
+                    static_cast<long>(taskOffHeap), ratio, extendedRatio, static_cast<long>(cap),
+                    static_cast<long>(std::max(cap, extendedCap)));
+            }
+        }
         configs[config::QueryConfig::KPreferVectorizationExpression] = BoolToString(
             omniCfg_->Get<bool>(KPreferVectorizationExpression, false));
         configs[config::QueryConfig::kPdqSortEnabled] = BoolToString(omniCfg_->Get<bool>(kPdqSortEnabled, false));

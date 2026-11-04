@@ -223,6 +223,12 @@ const std::string kBroadcastParallelBuildTargetBytesPerThread =
 
 const std::string KAdaptivePartialAggregationMinRows = "spark.gluten.sql.columnar.backend.omni.adaptivePartialAggregationMinRows";
 const std::string KAdaptivePartialAggregationRatio = "spark.gluten.sql.columnar.backend.omni.adaptivePartialAggregationRatio";
+// Memory-driven partial aggregation flush, as a fraction of the task's off-heap share
+// (spark.gluten.memory.task.offHeap.size.in.bytes). Velox parity: 0.1 / 0.15. 0 disables.
+const std::string KMaxPartialAggregationMemoryRatio =
+    "spark.gluten.sql.columnar.backend.omni.maxPartialAggregationMemoryRatio";
+const std::string KMaxExtendedPartialAggregationMemoryRatio =
+    "spark.gluten.sql.columnar.backend.omni.maxExtendedPartialAggregationMemoryRatio";
 
 const std::string KPreferVectorizationExpression = "spark.gluten.sql.columnar.backend.omni.preferVectorizationExpression";
 
