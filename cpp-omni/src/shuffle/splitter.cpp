@@ -2027,13 +2027,13 @@ int Splitter::Split_Init(){
     // outgrows that once partitions are many: 600 partitions x 8192 rows x 37 bytes is 182 MB
     // against a 200 MB share. Those buffers are mostly empty when Spark spills the task, so a
     // spill frees capacity rather than rows, the next batch allocates it again, and the writer is
-    // spilled every few batches with a handful of rows per partition. Buffers then start small
-    // and grow with the rows instead, so they hold rows rather than empty capacity. With a
-    // normal share full buffers fit and nothing changes.
+    // spilled every few batches with a handful of rows per partition. Buffers therefore start
+    // small and grow with the rows, so they hold rows rather than empty capacity. This is not
+    // limited to a small share: with a normal share the same empty capacity is what gets spilled
+    // whenever a sibling operator holds most of the task (q3 SF1000 st16: a pinned final
+    // aggregation, 4300 writer spills of 93 MB capacity per task for 2 MB of rows each).
     const uint64_t bytesPerRow = fixed_value_width_bytes_ + fixed_width_array_idx_.size(); // values + validity
-    growPartitionBuffers_ = options_.task_offheap_bytes > 0 && bytesPerRow > 0 &&
-        bytesPerRow * static_cast<uint64_t>(options_.buffer_size) * static_cast<uint64_t>(num_partitions_) >
-        static_cast<uint64_t>(options_.task_offheap_bytes) / 4;
+    growPartitionBuffers_ = options_.task_offheap_bytes > 0 && bytesPerRow > 0;
     if (growPartitionBuffers_) {
         LogsInfo("Splitter partition buffers grow with their rows: partitions=%d buffer_size=%d bytes_per_row=%lu "
                  "task_offheap=%ld", num_partitions_, options_.buffer_size, bytesPerRow,
