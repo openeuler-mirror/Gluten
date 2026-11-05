@@ -387,7 +387,7 @@ abstract class BaseDynamicPartitionDataWriter(
     }
 
     statsTrackers.foreach(_.newRow(currentWriter.path, record))
-    recordsInFile += record.asInstanceOf[FakeRow].batch.numRows()
+    recordsInFile += endPos - startPos
   }
 }
 
@@ -530,6 +530,16 @@ class DynamicPartitionDataConcurrentWriter(
   private val currentWriterId = WriterIndex(None, None)
 
   /**
+   * Columnar input (`FakeRow` batches) cannot fall back to the row sorter, so when the
+   * number of open writers reaches the limit the least recently used writer is closed
+   * instead. A partition whose writer was closed this way continues with the next file
+   * counter when it shows up again, so file names never collide.
+   */
+  private var useClock: Long = 0L
+  private val lastUse = mutable.HashMap[WriterIndex, Long]()
+  private val closedFileCounters = mutable.HashMap[WriterIndex, Int]()
+
+  /**
    * Release resources for all concurrent output writers.
    */
   override protected def releaseResources(): Unit = {
@@ -548,6 +558,10 @@ class DynamicPartitionDataConcurrentWriter(
   }
 
   override def write(record: InternalRow): Unit = {
+    if (record.isInstanceOf[FakeRow]) {
+      splitWrite(record)
+      return
+    }
     val nextPartitionValues = if (isPartitioned) Some(getPartitionValues(record)) else None
     val nextBucketId = if (isBucketed) Some(getBucketId(record)) else None
 
@@ -586,6 +600,112 @@ class DynamicPartitionDataConcurrentWriter(
       updateCurrentWriterStatusInMap()
     }
     writeRecord(record)
+  }
+
+  /**
+   * Writes one columnar batch: every maximal run of rows that share a partition (and bucket)
+   * goes to that partition's writer as one slice, in input order. The input does not have to be
+   * sorted, which is what lets the planner leave out the sort above a dynamic-partition write.
+   */
+  private def splitWrite(fakeRow: InternalRow): Unit = {
+    val batch = fakeRow.asInstanceOf[FakeRow].batch
+    try {
+      val numRows = batch.numRows()
+      var runStart = 0
+      var i = 0
+      while (i < numRows) {
+        val row = batch.getRow(i)
+        val nextPartitionValues = if (isPartitioned) Some(getPartitionValues(row)) else None
+        val nextBucketId = if (isBucketed) Some(getBucketId(row)) else None
+        if (currentWriterId.partitionValues != nextPartitionValues ||
+          currentWriterId.bucketId != nextBucketId) {
+          if (i > runStart) {
+            writeRecord(fakeRow, runStart, i)
+            runStart = i
+          }
+          switchWriterForColumnar(nextPartitionValues, nextBucketId)
+        } else if (description.maxRecordsPerFile > 0 &&
+          recordsInFile + (i - runStart) >= description.maxRecordsPerFile) {
+          if (i > runStart) {
+            writeRecord(fakeRow, runStart, i)
+            runStart = i
+          }
+          renewCurrentWriterIfTooManyRecords(currentWriterId.partitionValues, currentWriterId.bucketId)
+          updateCurrentWriterStatusInMap()
+        }
+        i += 1
+      }
+      if (runStart < numRows) {
+        writeRecord(fakeRow, runStart, numRows)
+      }
+    } finally {
+      if (batch != null) {
+        batch.close()
+      }
+    }
+  }
+
+  /**
+   * Moves the current writer to the one of the given partition / bucket, opening it when it is
+   * not open yet and closing the least recently used writer first when the limit is reached.
+   */
+  private def switchWriterForColumnar(
+      nextPartitionValues: Option[UnsafeRow],
+      nextBucketId: Option[Int]): Unit = {
+    if (currentWriter != null) {
+      updateCurrentWriterStatusInMap()
+    }
+    if (isBucketed) {
+      currentWriterId.bucketId = nextBucketId
+    }
+    if (isPartitioned && currentWriterId.partitionValues != nextPartitionValues) {
+      currentWriterId.partitionValues = Some(nextPartitionValues.get.copy())
+      if (!concurrentWriters.contains(currentWriterId) &&
+        !closedFileCounters.contains(currentWriterId)) {
+        statsTrackers.foreach(_.newPartition(currentWriterId.partitionValues.get))
+      }
+    }
+    useClock += 1
+    if (concurrentWriters.contains(currentWriterId)) {
+      val status = concurrentWriters(currentWriterId)
+      currentWriter = status.outputWriter
+      recordsInFile = status.recordsInFile
+      fileCounter = status.fileCounter
+    } else {
+      if (concurrentWriters.size >= concurrentOutputWriterSpec.maxWriters) {
+        closeLeastRecentlyUsedWriter()
+      }
+      fileCounter = closedFileCounters.get(currentWriterId).map(_ + 1).getOrElse(0)
+      assert(fileCounter < MAX_FILE_COUNTER,
+        s"File counter $fileCounter is beyond max value $MAX_FILE_COUNTER")
+      renewCurrentWriter(
+        currentWriterId.partitionValues,
+        currentWriterId.bucketId,
+        closeCurrentWriter = false)
+      concurrentWriters.put(
+        currentWriterId.copy(),
+        new WriterStatus(currentWriter, recordsInFile, fileCounter))
+    }
+    lastUse.put(currentWriterId.copy(), useClock)
+  }
+
+  private def closeLeastRecentlyUsedWriter(): Unit = {
+    val victim = concurrentWriters.keys.minBy(id => lastUse.getOrElse(id, 0L))
+    val status = concurrentWriters(victim)
+    if (status.outputWriter != null) {
+      try {
+        status.outputWriter.close()
+        statsTrackers.foreach(_.closeFile(status.outputWriter.path()))
+      } finally {
+        status.outputWriter = null
+      }
+    }
+    closedFileCounters.put(victim, status.fileCounter)
+    concurrentWriters.remove(victim)
+    lastUse.remove(victim)
+    logInfo(s"Number of concurrent writers reached ${concurrentOutputWriterSpec.maxWriters}; " +
+      s"closed the least recently used one (columnar input has no sort fallback). You may " +
+      s"change the threshold with configuration ${SQLConf.MAX_CONCURRENT_OUTPUT_FILE_WRITERS.key}")
   }
 
   /**
