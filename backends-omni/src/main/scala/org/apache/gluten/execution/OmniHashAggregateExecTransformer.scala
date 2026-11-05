@@ -157,6 +157,7 @@ abstract class HashAggregateExecTransformer(
       classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
       classOf[Average], classOf[First], classOf[Last], classOf[ApproximatePercentile],
       classOf[OmniCountDistinct],
+      classOf[OmniCollectSet], classOf[OmniCollectList],
     )
 
     val supported = mode match {

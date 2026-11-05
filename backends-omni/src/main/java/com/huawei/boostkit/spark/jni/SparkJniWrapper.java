@@ -17,10 +17,18 @@
 package com.huawei.boostkit.spark.jni;
 
 import com.huawei.boostkit.spark.vectorized.SplitResult;
+import org.apache.gluten.jni.JniLibLoader;
 import org.apache.gluten.vectorized.NativePartitioning;
 import org.apache.gluten.vectorized.JniByteInputStream;
 
 public class SparkJniWrapper {
+    static {
+        String libPath = System.getProperty("omni.lib.path");
+        if (libPath != null && !libPath.isEmpty()) {
+            JniLibLoader.loadFromPath(libPath);
+        }
+    }
+
   public SparkJniWrapper() {
   }
 
