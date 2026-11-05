@@ -3047,14 +3047,15 @@ int64_t Splitter::reclaim(int64_t targetBytes)
                 SpillToMemory();
             }
             ChargeMemorySpills();
-            // Tier 2 only when it settles the request: evicting a cache smaller
-            // than the shortfall costs a disk write and still leaves the request
-            // short (q3 SF1000 st16: 11 MB requests against 1 MB of rows, 14 000
-            // evictions of 0.3 MB). An open-ended request takes everything.
+            // Tier 2 only when it is worth a disk write: the cache covers the
+            // shortfall, or holds at least one reservation quantum. A smaller
+            // cache stays (q3 SF1000 st16: 11 MB and open-ended requests against
+            // 1 MB of rows evicted 0.3 MB segments 13 000 times per leg).
             const int64_t shortfall = targetBytes - (before - taskMemoryPool_->currentBytes());
-            constexpr int64_t kOpenEndedRequest = int64_t{1} << 40;
-            if (shortfall > 0 && !memory_spills_.empty() &&
-                (memory_spill_bytes_ >= shortfall || targetBytes >= kOpenEndedRequest)) {
+            const int64_t worthEvicting = std::min<int64_t>(
+                std::max<int64_t>(shortfall, 1),
+                omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(1));
+            if (shortfall > 0 && !memory_spills_.empty() && memory_spill_bytes_ >= worthEvicting) {
                 EvictMemorySpills();
             }
         } else {
