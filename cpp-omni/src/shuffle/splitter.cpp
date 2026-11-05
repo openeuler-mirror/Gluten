@@ -42,6 +42,28 @@
 #include "operator/reclaim_context.h"
 #include "util/omni_exception.h"
 
+namespace {
+// Growable in-memory sink for ArrowOutputStream: the compressed partition
+// segments of a memory spill land here in the spill-file layout.
+class VectorOutputStream : public spark::OutputStream {
+public:
+    uint64_t getLength() const override { return buffer_.size(); }
+    uint64_t getNaturalWriteSize() const override { return 128 * 1024; }
+    void write(const void *buf, size_t length) override
+    {
+        const auto *bytes = static_cast<const uint8_t *>(buf);
+        buffer_.insert(buffer_.end(), bytes, bytes + length);
+    }
+    const std::string &getName() const override { return name_; }
+    void close() override {}
+    std::vector<uint8_t> Release() { return std::move(buffer_); }
+
+private:
+    std::vector<uint8_t> buffer_;
+    std::string name_{"memory-spill"};
+};
+} // namespace
+
 using namespace omniruntime::vec;
 using namespace omniruntime::vec::unsafe;
 using namespace omniruntime::type;
@@ -2102,6 +2124,7 @@ int Splitter::Split(VectorBatch& vb )
     // consumes these counts; DoSplit reuses the same IDs instead of rescanning
     // the PID vector.
     TIME_NANO_OR_RAISE(total_compute_pid_time_, ComputeAndCountPartitionId(vb, false));
+    ChargeMemorySpills();
     ReserveForSplit(vb, "Splitter::Split");
     for (int32_t pid = 0; pid < num_partitions_; ++pid) {
         partition_id_cnt_cache_[pid] += static_cast<uint64_t>(partition_id_cnt_cur_[pid]);
@@ -2667,6 +2690,24 @@ void Splitter::MergeSpilled() {
             partition_lengths_[pid] += static_cast<int64_t>(added);
             total_bytes_written_ += static_cast<int64_t>(added);
         }
+        // Memory spills evicted to disk, then the ones still in memory (always
+        // the newest): compressed segments in this stream's format, passed through.
+        for (auto &file : evicted_spill_files_) {
+            const uint64_t added = TransferSpilledSegments(*arrowOut, file.path + ".data", file.offsets[pid],
+                file.offsets[pid + 1] - file.offsets[pid]);
+            partition_lengths_[pid] += static_cast<int64_t>(added);
+            total_bytes_written_ += static_cast<int64_t>(added);
+        }
+        for (auto &segment : memory_spills_) {
+            const uint64_t size = segment.offsets[pid + 1] - segment.offsets[pid];
+            if (size == 0) {
+                continue;
+            }
+            const uint64_t flushed = arrowOut->WriteThrough(segment.data.data() + segment.offsets[pid],
+                static_cast<int64_t>(size));
+            partition_lengths_[pid] += static_cast<int64_t>(flushed + size);
+            total_bytes_written_ += static_cast<int64_t>(flushed + size);
+        }
     }
 
     auto mergeCloseSt = arrowOut->Close();
@@ -2679,6 +2720,8 @@ void Splitter::MergeSpilled() {
     ReleaseVarcharVector();
     num_row_splited_ = 0;
     cached_vectorbatch_size_ = 0;
+    memory_spills_.clear();
+    UnchargeMemorySpills();
 }
 
 void Splitter::MergeSpilledByRow() {
@@ -2842,6 +2885,13 @@ int Splitter::DeleteSpilledTmpFile() {
     }
     // 释放内存空间，Reset spilled_tmp_files_info_, 这个地方是否有内存泄漏的风险？？？
     spilled_tmp_files_info_.clear();
+    for (auto &file : evicted_spill_files_) {
+        auto dataFilePath = file.path + ".data";
+        if (IsFileExist(dataFilePath)) {
+            remove(dataFilePath.c_str());
+        }
+    }
+    evicted_spill_files_.clear();
     return 0;
 }
 
@@ -2906,7 +2956,7 @@ uint64_t Splitter::reclaimableBytes() const
         return bytes;
     }
     if (num_row_splited_ == 0) {
-        return 0;
+        return static_cast<uint64_t>(std::max<int64_t>(0, memory_spill_bytes_));
     }
 
     // Count pool-backed allocations which SpillToTmpFile actually destroys.
@@ -2952,6 +3002,8 @@ uint64_t Splitter::reclaimableBytes() const
             bytes = addReclaimable(bytes, UnsafeStringVector::GetCapacityInBytes(varcharVector));
         }
     }
+    // Memory spills are written to disk by a reclaim the raw buffers cannot serve.
+    bytes = addReclaimable(bytes, static_cast<uint64_t>(std::max<int64_t>(0, memory_spill_bytes_)));
     return bytes;
 }
 
@@ -2984,7 +3036,18 @@ int64_t Splitter::reclaim(int64_t targetBytes)
         }
     } else {
         if (columnarMode_) {
-            SpillToTmpFile(/*inReclaim=*/true);
+            // Tier 1 (Velox: evict partition buffers): serialize the raw partition
+            // buffers into compressed segments kept in memory; this returns the
+            // raw bytes, the index and the retained input string vectors. Tier 2
+            // (Velox: evict cached payloads) writes those segments to disk only
+            // when tier 1 could not cover the request.
+            if (num_row_splited_ > 0) {
+                SpillToMemory();
+            }
+            ChargeMemorySpills();
+            if (before - taskMemoryPool_->currentBytes() < targetBytes && !memory_spills_.empty()) {
+                EvictMemorySpills();
+            }
         } else {
             SpillToTmpFileByRow();
             total_input_size = 0;
@@ -2995,13 +3058,120 @@ int64_t Splitter::reclaim(int64_t targetBytes)
     const int64_t freed = std::max<int64_t>(0, before - after);
     if (IsReclaimSuccessTelemetryEnabled()) {
         std::fprintf(stderr,
-            "[OMNI-SHUFFLE] event=pool_reclaim target=%ld estimated=%lu writer_pool=%p before=%ld after=%ld freed=%ld scratch_peak=%ld\n",
+            "[OMNI-SHUFFLE] event=pool_reclaim target=%ld estimated=%lu writer_pool=%p before=%ld after=%ld freed=%ld scratch_peak=%ld cached=%ld cached_total=%ld evicted_total=%ld spilled_total=%ld\n",
             static_cast<long>(targetBytes), static_cast<unsigned long>(estimated),
             static_cast<void *>(taskMemoryPool_), static_cast<long>(before),
             static_cast<long>(after), static_cast<long>(freed),
-            static_cast<long>(ReclaimSpillScratchPeakBytes()));
+            static_cast<long>(ReclaimSpillScratchPeakBytes()), static_cast<long>(memory_spill_bytes_),
+            static_cast<long>(total_bytes_cached_), static_cast<long>(total_bytes_evicted_),
+            static_cast<long>(total_bytes_spilled_));
     }
     return freed;
+}
+
+int Splitter::SpillToMemory()
+{
+    VectorOutputStream memOut;
+    auto header = BuildColumnarHeader();
+    auto arrowOut = ArrowOutputStream::Make(
+        memOut,
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    MemorySpillSegment segment;
+    segment.offsets.assign(static_cast<size_t>(num_partitions_) + 1, 0);
+    uint64_t offset = 0;
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        // Build each partition's buffers outside the task pool (no headroom
+        // inside reclaim), right before it is serialized, and release them after.
+        CacheVectorBatch(pid, true, reclaim_spill_pool_.get());
+        partition_buffer_size_[pid] = 0;
+        const auto written = ArrowWriteColumnarPartition(
+            pid, *arrowOut, header, partition_arrow_batch_,
+            /*headerAlreadyWritten=*/true);
+        segment.offsets[pid] = offset;
+        offset += static_cast<uint64_t>(written);
+        partition_serialization_size_[pid] = 0;
+        partition_arrow_batch_[pid].clear();
+    }
+    segment.offsets[num_partitions_] = offset;
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("SpillToMemory Close failed: msg=%s", closeSt.ToString().c_str());
+    }
+    if (memOut.getLength() != offset) {
+        LogsError("SpillToMemory segment size mismatch: stream=%llu partitions=%llu",
+                  static_cast<unsigned long long>(memOut.getLength()), static_cast<unsigned long long>(offset));
+        throw std::runtime_error("SpillToMemory: partition segments do not cover the stream");
+    }
+    segment.data = memOut.Release();
+    const auto bytes = static_cast<int64_t>(segment.data.size());
+    total_bytes_cached_ += bytes;
+    memory_spill_uncharged_ += bytes;
+    memory_spills_.push_back(std::move(segment));
+
+    memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
+    ReleaseVarcharVector();
+    num_row_splited_ = 0;
+    cached_vectorbatch_size_ = 0;
+    for (auto &batches : partition_arrow_batch_) {
+        batches.clear();
+    }
+    return 0;
+}
+
+int64_t Splitter::EvictMemorySpills()
+{
+    int64_t evicted = 0;
+    for (auto &segment : memory_spills_) {
+        EvictedSpillFile file;
+        file.path = CreateTempShuffleFile(NextSpilledFileDir());
+        auto out = writeLocalFile(file.path + ".data");
+        out->write(segment.data.data(), segment.data.size());
+        out->close();
+        file.offsets = std::move(segment.offsets);
+        const auto bytes = static_cast<int64_t>(segment.data.size());
+        total_bytes_spilled_ += bytes;
+        total_bytes_evicted_ += bytes;
+        evicted += bytes;
+        evicted_spill_files_.push_back(std::move(file));
+    }
+    memory_spills_.clear();
+    UnchargeMemorySpills();
+    return evicted;
+}
+
+void Splitter::ChargeMemorySpills()
+{
+    if (memory_spill_uncharged_ <= 0) {
+        return;
+    }
+    if (taskMemoryPool_ == nullptr) {
+        memory_spill_uncharged_ = 0;
+        return;
+    }
+    // The raw buffers this segment replaced were just freed, so the charge
+    // normally fits the pool's existing reservation. When it does not, keep the
+    // bytes pending and charge them from the next Split, outside reclaim.
+    try {
+        taskMemoryPool_->AddMemory(memory_spill_uncharged_);
+        memory_spill_bytes_ += memory_spill_uncharged_;
+        memory_spill_uncharged_ = 0;
+    } catch (const std::exception &e) {
+        LogsDebug("ChargeMemorySpills deferred %ld bytes: %s", static_cast<long>(memory_spill_uncharged_), e.what());
+    }
+}
+
+void Splitter::UnchargeMemorySpills()
+{
+    if (taskMemoryPool_ != nullptr && memory_spill_bytes_ > 0) {
+        taskMemoryPool_->SubMemory(memory_spill_bytes_);
+    }
+    memory_spill_bytes_ = 0;
+    memory_spill_uncharged_ = 0;
 }
 
 int Splitter::SpillToTmpFileByRow() {
@@ -3043,6 +3213,8 @@ Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_
 
 Splitter::~Splitter()
 {
+    memory_spills_.clear();
+    UnchargeMemorySpills();
     if (registeredWithTaskPool_ && taskMemoryPool_ != nullptr) {
         taskMemoryPool_->unregisterSpillable(this);
         registeredWithTaskPool_ = false;

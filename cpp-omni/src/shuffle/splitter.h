@@ -295,6 +295,29 @@ class Splitter : public omniruntime::op::SpillableOperator {
     // released as soon as that partition is written.
     Allocator unpooledAllocator_{nullptr};
     std::shared_ptr<OmniMemoryPoolAdapter> reclaim_spill_pool_;
+    // Compressed partition segments kept in memory instead of a spill file. A
+    // reclaim serializes the raw partition buffers (and the input string vectors
+    // they reference) into the spill-file layout in memory, like Velox's cached
+    // payloads, which is about a quarter of the raw bytes; only a later reclaim
+    // that the raw buffers cannot serve writes these segments to disk.
+    struct MemorySpillSegment {
+        std::vector<uint8_t> data;
+        std::vector<uint64_t> offsets; // num_partitions_ + 1 partition boundaries in data
+    };
+    std::vector<MemorySpillSegment> memory_spills_;
+    int64_t memory_spill_bytes_ = 0;          // bytes of memory_spills_ charged to the task pool
+    int64_t memory_spill_uncharged_ = 0;      // bytes of memory_spills_ not yet charged
+    int64_t total_bytes_cached_ = 0;          // telemetry: bytes serialized into memory_spills_
+    int64_t total_bytes_evicted_ = 0;         // telemetry: memory_spills_ bytes written to disk
+    struct EvictedSpillFile {
+        std::string path;
+        std::vector<uint64_t> offsets;
+    };
+    std::vector<EvictedSpillFile> evicted_spill_files_;
+    int SpillToMemory();
+    int64_t EvictMemorySpills();
+    void ChargeMemorySpills();
+    void UnchargeMemorySpills();
     std::vector<std::vector<std::shared_ptr<arrow::ResizableBuffer>>> partition_fixed_width_arrow_buffers_; // [col][pid] 定宽列 Arrow 值缓冲
     std::vector<std::vector<ArrowColumnarCachedBatch>> partition_arrow_batch_;     // [pid][batchIdx] Arrow 化缓存批
 
@@ -433,6 +456,8 @@ public:
     int64_t TotalBytesWritten() const { return total_bytes_written_; }
 
     int64_t TotalBytesSpilled() const { return total_bytes_spilled_; }
+    int64_t TotalBytesCached() const { return total_bytes_cached_; }
+    int64_t TotalBytesEvicted() const { return total_bytes_evicted_; }
 
     // Largest working memory a reclaim spill held outside the task pool. Reported only.
     int64_t ReclaimSpillScratchPeakBytes() const { return reclaim_spill_pool_->max_memory(); }
@@ -492,6 +517,8 @@ private:
 	partition_fixed_width_buffers_.clear();
 	partition_binary_builders_.clear();
 	spilled_tmp_files_info_.clear();
+	memory_spills_.clear();
+	evicted_spill_files_.clear();
     }
 
 public:
