@@ -2693,10 +2693,12 @@ void Splitter::MergeSpilled() {
         // Memory spills evicted to disk, then the ones still in memory (always
         // the newest): compressed segments in this stream's format, passed through.
         for (auto &file : evicted_spill_files_) {
-            const uint64_t added = TransferSpilledSegments(*arrowOut, file.path + ".data", file.offsets[pid],
-                file.offsets[pid + 1] - file.offsets[pid]);
-            partition_lengths_[pid] += static_cast<int64_t>(added);
-            total_bytes_written_ += static_cast<int64_t>(added);
+            for (auto &offsets : file.segments) {
+                const uint64_t added = TransferSpilledSegments(*arrowOut, file.path + ".data", offsets[pid],
+                    offsets[pid + 1] - offsets[pid]);
+                partition_lengths_[pid] += static_cast<int64_t>(added);
+                total_bytes_written_ += static_cast<int64_t>(added);
+            }
         }
         for (auto &segment : memory_spills_) {
             const uint64_t size = segment.offsets[pid + 1] - segment.offsets[pid];
@@ -3045,7 +3047,14 @@ int64_t Splitter::reclaim(int64_t targetBytes)
                 SpillToMemory();
             }
             ChargeMemorySpills();
-            if (before - taskMemoryPool_->currentBytes() < targetBytes && !memory_spills_.empty()) {
+            // Tier 2 only when it settles the request: evicting a cache smaller
+            // than the shortfall costs a disk write and still leaves the request
+            // short (q3 SF1000 st16: 11 MB requests against 1 MB of rows, 14 000
+            // evictions of 0.3 MB). An open-ended request takes everything.
+            const int64_t shortfall = targetBytes - (before - taskMemoryPool_->currentBytes());
+            constexpr int64_t kOpenEndedRequest = int64_t{1} << 40;
+            if (shortfall > 0 && !memory_spills_.empty() &&
+                (memory_spill_bytes_ >= shortfall || targetBytes >= kOpenEndedRequest)) {
                 EvictMemorySpills();
             }
         } else {
@@ -3125,20 +3134,26 @@ int Splitter::SpillToMemory()
 
 int64_t Splitter::EvictMemorySpills()
 {
+    // All segments go into one file, back to back; each keeps its partition
+    // boundaries, rebased to the file.
+    EvictedSpillFile file;
+    file.path = CreateTempShuffleFile(NextSpilledFileDir());
+    auto out = writeLocalFile(file.path + ".data");
     int64_t evicted = 0;
+    uint64_t base = 0;
     for (auto &segment : memory_spills_) {
-        EvictedSpillFile file;
-        file.path = CreateTempShuffleFile(NextSpilledFileDir());
-        auto out = writeLocalFile(file.path + ".data");
         out->write(segment.data.data(), segment.data.size());
-        out->close();
-        file.offsets = std::move(segment.offsets);
-        const auto bytes = static_cast<int64_t>(segment.data.size());
-        total_bytes_spilled_ += bytes;
-        total_bytes_evicted_ += bytes;
-        evicted += bytes;
-        evicted_spill_files_.push_back(std::move(file));
+        for (auto &offset : segment.offsets) {
+            offset += base;
+        }
+        base += segment.data.size();
+        file.segments.push_back(std::move(segment.offsets));
+        evicted += static_cast<int64_t>(segment.data.size());
     }
+    out->close();
+    total_bytes_spilled_ += evicted;
+    total_bytes_evicted_ += evicted;
+    evicted_spill_files_.push_back(std::move(file));
     memory_spills_.clear();
     UnchargeMemorySpills();
     return evicted;

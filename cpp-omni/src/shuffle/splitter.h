@@ -311,7 +311,7 @@ class Splitter : public omniruntime::op::SpillableOperator {
     int64_t total_bytes_evicted_ = 0;         // telemetry: memory_spills_ bytes written to disk
     struct EvictedSpillFile {
         std::string path;
-        std::vector<uint64_t> offsets;
+        std::vector<std::vector<uint64_t>> segments; // per segment: num_partitions_ + 1 file offsets
     };
     std::vector<EvictedSpillFile> evicted_spill_files_;
     int SpillToMemory();
