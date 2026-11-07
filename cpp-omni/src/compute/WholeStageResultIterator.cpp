@@ -254,6 +254,10 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::GetQueryC
             "false");
         configs[config::QueryConfig::KSpillHashAggRowThreshold] = std::to_string(
             omniCfg_->Get<int32_t>(KSpillHashAggRowThreshold, INT32_MAX));
+        configs[config::QueryConfig::kHashAggSpillRunFraction] = std::to_string(
+            omniCfg_->Get<double>(KSpillHashAggRunFraction, 1.0));
+        configs[config::QueryConfig::kHashAggSpillMaxRunRows] = std::to_string(
+            omniCfg_->Get<uint64_t>(KSpillHashAggMaxRunRows, 4L * 1024 * 1024));
         configs[config::QueryConfig::KSpillSortRowThreshold] = std::to_string(
             omniCfg_->Get<int32_t>(KSpillSortRowThreshold, INT32_MAX));
         configs[config::QueryConfig::KColumnarSpillMemThreshold] = std::to_string(
