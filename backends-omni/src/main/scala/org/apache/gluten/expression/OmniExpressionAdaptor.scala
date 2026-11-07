@@ -18,7 +18,7 @@ package org.apache.gluten.expression
 
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.utils.Constant._
-import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
+import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet, OmniCountDistinct}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Expression, _}
@@ -1178,6 +1178,7 @@ object OmniExpressionAdaptor extends Logging {
       case _: OmniHLLAdapter => OMNI_AGGREGATION_TYPE_APPROX_COUNT_DISTINCT
       case _: CollectSet => OMNI_AGGREGATION_TYPE_COLLECT_SET
       case _: OmniCollectSet => OMNI_AGGREGATION_TYPE_COLLECT_SET
+      case _: OmniCountDistinct => OMNI_AGGREGATION_TYPE_COUNT_DISTINCT
       case _: CollectList => OMNI_AGGREGATION_TYPE_COLLECT_LIST
       case _: OmniCollectList => OMNI_AGGREGATION_TYPE_COLLECT_LIST
       case _: Skewness => OMNI_AGGREGATION_TYPE_SKEWNESS

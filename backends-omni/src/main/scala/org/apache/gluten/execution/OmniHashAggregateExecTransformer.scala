@@ -20,7 +20,7 @@ import com.google.protobuf.StringValue
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.expression.{OmniExpressionAdaptor, OmniRegrMeasureBuilder}
 import org.apache.gluten.expression.OmniExpressionAdaptor.{sparkTypeToOmniTypeWithComplex, toOmniAggFunType}
-import org.apache.gluten.expression.aggregate.{OmniHLLAdapter,OmniCollectSet, OmniCollectList}
+import org.apache.gluten.expression.aggregate.{OmniHLLAdapter,OmniCollectSet, OmniCollectList, OmniCountDistinct}
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
@@ -148,13 +148,15 @@ abstract class HashAggregateExecTransformer(
       classOf[VarianceSamp], classOf[VariancePop],
       classOf[BitAndAgg], classOf[BitOrAgg], classOf[BitXorAgg], classOf[OmniHLLAdapter],
       classOf[Corr], classOf[CovPopulation], classOf[CovSample], classOf[CollectSet], classOf[OmniCollectSet],
-      classOf[CollectList], classOf[OmniCollectList], classOf[Skewness], classOf[Kurtosis], classOf[ApproximatePercentile]
+      classOf[CollectList], classOf[OmniCollectList], classOf[Skewness], classOf[Kurtosis], classOf[ApproximatePercentile],
+      classOf[OmniCountDistinct]
     ) ++ SparkShimLoader.getSparkShims.bloomFilterExpressionMappings().map(_.expClass) ++
       SparkShimLoader.getSparkShims.aggregateExpressionMappings.map(_.expClass)
 
     var completeOnlySupported = Set(
       classOf[Sum], classOf[Min], classOf[Max], classOf[Count],
       classOf[Average], classOf[First], classOf[Last], classOf[ApproximatePercentile],
+      classOf[OmniCountDistinct],
     )
 
     val supported = mode match {

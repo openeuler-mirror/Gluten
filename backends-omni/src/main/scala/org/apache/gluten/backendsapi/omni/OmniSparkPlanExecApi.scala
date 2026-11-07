@@ -46,7 +46,7 @@ import org.apache.gluten.datasources.orc.OmniOrcFileFormat
 import org.apache.gluten.datasources.parquet.OmniParquetFileFormat
 import org.apache.gluten.exception.GlutenNotSupportException
 import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTransformer
-import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
+import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet, OmniCountDistinct}
 import org.apache.gluten.extension.PushDownFilterToOmniScan
 import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -69,6 +69,7 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       Sig[OmniHLLAdapter](ExpressionNames.APPROX_DISTINCT),
       Sig[CollectSet](ExpressionNames.COLLECT_SET),
       Sig[OmniCollectSet](ExpressionNames.COLLECT_SET),
+      Sig[OmniCountDistinct](ExpressionNames.COUNT_DISTINCT),
       Sig[CollectList](ExpressionNames.COLLECT_LIST),
       Sig[OmniCollectList](ExpressionNames.COLLECT_LIST),
       Sig[Skewness](ExpressionNames.SKEWNESS),

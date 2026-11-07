@@ -186,6 +186,10 @@ const std::string kWriteIOTime = "writeIOTime";
 // spill config
 const std::string KSpillHashAggRowThreshold = "spark.gluten.sql.columnar.backend.omni.hashAggSpill.rowThreshold";
 const std::string KSpillSortRowThreshold = "spark.gluten.sql.columnar.backend.omni.sortSpill.rowThreshold";
+// Run-based hash aggregation spill: fraction of the aggregation table materialized
+// per spill run (1.0 = legacy single-run spill) and the max rows per run.
+const std::string KSpillHashAggRunFraction = "spark.gluten.sql.columnar.backend.omni.hashAggSpill.runFraction";
+const std::string KSpillHashAggMaxRunRows = "spark.gluten.sql.columnar.backend.omni.hashAggSpill.maxRunRows";
 
 const std::string KColumnarSpillMemThreshold = "spark.gluten.sql.columnar.backend.omni.spill.memFraction";
 const std::string KColumnarSpillWriteBufferSize = "spark.gluten.sql.columnar.backend.omni.spill.writeBufferSize";

@@ -459,6 +459,8 @@ op::FunctionType SubstraitParser::ParseFunctionType(
         return op::OMNI_AGGREGATION_TYPE_APPROX_COUNT_DISTINCT;
     } else if (funcName == "collect_set") {
         return op::OMNI_AGGREGATION_TYPE_COLLECT_SET;
+    } else if (funcName == "count_distinct") {
+        return op::OMNI_AGGREGATION_TYPE_COUNT_DISTINCT;
     } else if (funcName == "collect_list") {
         return op::OMNI_AGGREGATION_TYPE_COLLECT_LIST;
     } else if (funcName == "skewness") {
@@ -722,6 +724,7 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"spark_partition_id", {FUNCTION_OMNI_EXPR_TYPE, "spark_partition_id"}},
     {"uuid", {FUNCTION_OMNI_EXPR_TYPE, "uuid"}},
     {"collect_set", {FUNCTION_OMNI_EXPR_TYPE, "collect_set"}},
+    {"count_distinct", {FUNCTION_OMNI_EXPR_TYPE, "count_distinct"}},
     {"cardinality", {FUNCTION_OMNI_EXPR_TYPE, "cardinality"}},
     {"crc32", {FUNCTION_OMNI_EXPR_TYPE, "crc32"}},
     {"isnan", {FUNCTION_OMNI_EXPR_TYPE, "isnan"}},
