@@ -20,6 +20,8 @@
 #include <memory>
 #include <stdexcept>
 #include <cstring>
+#include <algorithm>
+#include <limits>
 #include <vector/vector_common.h>
 #include "common/debug.h"
 #include "shuffle/arrow_frame.h"
@@ -350,6 +352,19 @@ int32_t DecompressionStream::columnarShuffleParseArrowBatch(
         if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
             auto dataType = DescriptorToOmniType(desc);
             vecs[i] = omniruntime::vec::VectorHelper::CreateComplexVector(taskPool_, dataType.get(), rowCount);
+        } else if (vectorDataTypeId == OMNI_VARCHAR || vectorDataTypeId == OMNI_CHAR ||
+                   vectorDataTypeId == OMNI_VARBINARY) {
+            // A string column's buffers are [validity, offsets, values]. Size the string buffer
+            // to this block's values: the 32 KB default turns a block of a few rows into 32 KB per
+            // column, and downstream operators can keep these vectors alive (the shuffle writer
+            // holds string vectors until it spills or finishes).
+            const std::size_t valuesIdx = bufIdx + 2;
+            const int64_t valuesBytes = (valuesIdx < batch.buffers.size() && batch.buffers[valuesIdx] != nullptr)
+                ? batch.buffers[valuesIdx]->size() : 0;
+            const int32_t capacityInBytes = static_cast<int32_t>(std::min<int64_t>(std::max<int64_t>(valuesBytes, 1),
+                std::numeric_limits<int32_t>::max()));
+            vecs[i] = omniruntime::vec::VectorHelper::CreateFlatVector(taskPool_, vectorDataTypeId, rowCount,
+                capacityInBytes);
         } else {
             vecs[i] = omniruntime::vec::VectorHelper::CreateFlatVector(taskPool_, vectorDataTypeId, rowCount);
         }
