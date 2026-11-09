@@ -52,7 +52,6 @@ import org.apache.gluten.expression.ExpressionConverter.replaceWithExpressionTra
 import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
 import org.apache.gluten.extension.PushDownFilterToOmniScan
 import org.apache.spark.sql.hive.OmniHiveTableScanExecTransformer
-import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
@@ -171,19 +170,53 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       right: ExpressionTransformer,
       original: TryEval,
       checkArithmeticExprName: String): ExpressionTransformer = {
-    if (SparkShimLoader.getSparkShims.withAnsiEvalMode(original.child)) {
+    // TRY already guards the ANSI cast Spark inserts under try_add. checkArithmeticExprName
+    // stays in the signature for the shared ExpressionConverter call.
+
+    def isPrimitiveNumeric(dataType: DataType): Boolean = dataType match {
+      case ByteType | ShortType | IntegerType | LongType | FloatType | DoubleType => true
+      case _ => false
+    }
+
+    val inputTypes = Seq(left.dataType, right.dataType)
+    val allDecimal = inputTypes.forall(_.isInstanceOf[DecimalType]) &&
+      original.dataType.isInstanceOf[DecimalType]
+    val bothPrimitive = inputTypes.forall(isPrimitiveNumeric) &&
+      isPrimitiveNumeric(original.dataType)
+    if (!allDecimal && !bothPrimitive) {
       throw new GlutenNotSupportException(
-        s"${original.child.prettyName} with ansi mode is not supported")
+        s"$substraitExprName/$checkArithmeticExprName does not support (${left.dataType}, ${right.dataType}) " +
+          s"to ${original.dataType}")
     }
-    original.child.dataType match {
-      case LongType | IntegerType | ShortType | ByteType =>
-      case _ => throw new GlutenNotSupportException(s"$substraitExprName is not supported")
+    // omni_commercial_1230 passes try_add / try_subtract / try_multiply / try_divide
+    // from ExpressionConverter. Older call sites still pass the substrait name "try".
+    val omniName = substraitExprName match {
+      case "try_add" | "try_subtract" | "try_multiply" | "try_divide" => substraitExprName
+      case _ =>
+        checkArithmeticExprName match {
+          case ExpressionNames.CHECKED_ADD => "try_add"
+          case ExpressionNames.CHECKED_SUBTRACT => "try_subtract"
+          case ExpressionNames.CHECKED_MULTIPLY => "try_multiply"
+          case ExpressionNames.CHECKED_DIVIDE => "try_divide"
+          case other =>
+            throw new GlutenNotSupportException(s"$other is not a try arithmetic expression")
+        }
     }
-    // Offload to omni for only IntegralTypes.
-    GenericExpressionTransformer(
-      substraitExprName,
-      Seq(GenericExpressionTransformer(checkArithmeticExprName, Seq(left, right), original)),
-      original)
+    // long+int and float+double stay mixed in Add(evalMode=TRY). Native try_* wants
+    // one numeric type, so cast both sides to the Spark result type.
+    def align(child: ExpressionTransformer): ExpressionTransformer = {
+      if (!bothPrimitive || child.dataType == original.dataType) {
+        child
+      } else {
+        GenericExpressionTransformer(
+          "cast",
+          Seq(child),
+          Cast(
+            org.apache.spark.sql.catalyst.expressions.Literal(null, child.dataType),
+            original.dataType))
+      }
+    }
+    GenericExpressionTransformer(omniName, Seq(align(left), align(right)), original)
   }
 
   /** Generate HashAggregateExecTransformer. */
