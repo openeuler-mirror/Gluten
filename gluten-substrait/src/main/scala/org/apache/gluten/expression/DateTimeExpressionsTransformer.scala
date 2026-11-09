@@ -28,7 +28,9 @@ case class ExtractDateTransformer(
   extends BinaryExpressionTransformer {
   override def left: ExpressionTransformer = {
     val dateFieldName =
-      DateTimeExpressionsTransformer.EXTRACT_DATE_FIELD_MAPPING.get(original.getClass)
+      DateTimeExpressionsTransformer.EXTRACT_DATE_FIELD_MAPPING.get(original.getClass).orElse {
+        if (original.getClass.getSimpleName == "SecondWithFraction") Some("SECOND") else None
+      }
     if (dateFieldName.isEmpty) {
       throw new GlutenNotSupportException(s"$original not supported yet.")
     }

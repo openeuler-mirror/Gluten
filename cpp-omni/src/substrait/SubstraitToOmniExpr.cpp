@@ -698,6 +698,7 @@ std::unordered_map<std::string, std::string> SubstraitOmniExprConverter::extract
     {"MINUTE", "minute"},
     {"SECOND", "second"},
     {"MONTH", "month"},
+    {"YEAR_OF_WEEK", "year_of_week"},
     {"QUARTER", "quarter"},
     {"YEAR", "year"},
 };
