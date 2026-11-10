@@ -89,7 +89,8 @@ class OmniColumnarShuffleWriter[K, V](
 
   private var partitionLengths: Array[Long] = _
 
-  private val handleRow = dep.serializer.asInstanceOf[OmniColumnarBatchSerializer].isRowShuffle()
+  private val handleRow = columnarConf.enableOmniRowShuffle &&
+    dep.nativePartitioning.getSchema.length > columnarConf.omniRowShuffleColumnsThreshold
 
   private val enableMix = GlutenConfig.get.enableMixedStorage
 
