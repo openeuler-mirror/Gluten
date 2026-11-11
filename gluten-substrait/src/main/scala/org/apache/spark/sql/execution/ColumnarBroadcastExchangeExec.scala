@@ -55,9 +55,14 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
   lazy val completionFuture: scala.concurrent.Future[broadcast.Broadcast[Any]] =
     promise.future
 
+  // Cleanup must not access relationFuture: doing so can start a broadcast on an unused plan
+  // or on an executor, where the transient SparkSession is null after task deserialization.
+  @transient @volatile
+  private var relationFutureForCleanup: java.util.concurrent.Future[broadcast.Broadcast[Any]] = _
+
   @transient
   override lazy val relationFuture: java.util.concurrent.Future[broadcast.Broadcast[Any]] = {
-    SQLExecution.withThreadLocalCaptured[broadcast.Broadcast[Any]](
+    val future = SQLExecution.withThreadLocalCaptured[broadcast.Broadcast[Any]](
       session,
       BroadcastExchangeExec.executionContext) {
       try {
@@ -115,6 +120,8 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
           throw e
       }
     }
+    relationFutureForCleanup = future
+    future
   }
 
   override val runId: UUID = UUID.randomUUID
@@ -174,19 +181,21 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
    * executor-level cached hash tables.
    */
   override def cleanupResources(): Unit = {
-    if (relationFuture.isDone) {
-      try {
-        val broadcastVal = relationFuture.get()
+    val future = relationFutureForCleanup
+    try {
+      if (future != null && future.isDone) {
+        val broadcastVal = future.get()
         broadcastVal.value match {
           case relation: org.apache.spark.sql.execution.joins.BuildSideRelation =>
             relation.reset()
           case _ =>
         }
-      } catch {
-        case _: Exception => // best-effort; ignore errors during cleanup
       }
+    } catch {
+      case NonFatal(_) => // best-effort; ignore errors during cleanup
+    } finally {
+      super.cleanupResources()
     }
-    super.cleanupResources()
   }
 
   override protected def withNewChildInternal(newChild: SparkPlan): ColumnarBroadcastExchangeExec =
