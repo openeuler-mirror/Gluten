@@ -113,4 +113,29 @@
     </plugins>
   </build>
 
+  <!--
+    Customer Spark compatibility tests must load UnsafeExternalSorter from the
+    customer Spark distribution. The normal package build already removes the
+    shim copy from the shaded bundle; this profile applies the same intent to
+    the Maven test classpath by not compiling the duplicate FQCN.
+  -->
+  <profiles>
+    <profile>
+      <id>customer-spark-classpath</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+              <excludes>
+                <exclude>org/apache/spark/util/collection/unsafe/sort/UnsafeExternalSorter.java</exclude>
+              </excludes>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+
 </project>
