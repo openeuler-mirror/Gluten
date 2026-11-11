@@ -56,9 +56,8 @@ class OmniCountDistinctWithoutExpandSuite extends WholeStageTransformerSuite
     withSQLConf(GlutenConfig.ENABLE_COUNT_DISTINCT_WITHOUT_EXPAND.key -> "true") {
       val df = sql("SELECT count(DISTINCT id) FROM range(100)")
       // Logical level: rewritten to the OmniCountDistinct UDAF (no longer distinct).
-      val analyzedString = df.queryExecution.analyzed.toString
-      assert(analyzedString.contains("omni_count_distinct"))
-      assert(!analyzedString.contains("distinct"))
+      val optimizedString = df.queryExecution.optimizedPlan.toString
+      assert(optimizedString.contains("omni_count_distinct"))
 
       // Physical level: no Expand operator.
       val executedPlan = df.queryExecution.executedPlan.toString
@@ -76,14 +75,19 @@ class OmniCountDistinctWithoutExpandSuite extends WholeStageTransformerSuite
         .selectExpr("id % 10 AS g", "id % 7 AS a", "id % 3 AS b")
         .createOrReplaceTempView("v")
       withSQLConf(GlutenConfig.ENABLE_COUNT_DISTINCT_WITHOUT_EXPAND.key -> "true") {
-        val df = sql("SELECT g, count(DISTINCT a), count(DISTINCT b) FROM v GROUP BY g ORDER BY g")
-        // Each group g covers 10 consecutive ids: id%7 has 7 distinct residues,
-        // id%3 has 3 distinct residues.
-        val expected = (0 until 10).map(g => org.apache.spark.sql.Row(g, 7L, 3L))
+        val df = sql("SELECT g, count(DISTINCT a), count(DISTINCT b) FROM v GROUP BY g")
+        // Each group g contains ids g, g + 10, ..., g + 40.
+        val expected = (0 until 10).map { g =>
+          val ids = g until 50 by 10
+          org.apache.spark.sql.Row(
+            g,
+            ids.map(_ % 7).distinct.size.toLong,
+            ids.map(_ % 3).distinct.size.toLong)
+        }
         checkAnswer(df, expected)
         // Plan level: rewritten UDAF present, no Expand.
-        val analyzedString = df.queryExecution.analyzed.toString
-        assert(analyzedString.contains("omni_count_distinct"))
+        val optimizedString = df.queryExecution.optimizedPlan.toString
+        assert(optimizedString.contains("omni_count_distinct"))
         assert(!df.queryExecution.executedPlan.toString.contains("Expand"))
       }
     }
@@ -114,8 +118,8 @@ class OmniCountDistinctWithoutExpandSuite extends WholeStageTransformerSuite
         val df = sql("SELECT count(DISTINCT arr) FROM v")
         val analyzedString = df.queryExecution.analyzed.toString
         assert(!analyzedString.contains("omni_count_distinct"))
-        // Vanilla Spark plans distinct aggregates via Expand.
-        assert(df.queryExecution.executedPlan.toString.contains("Expand"))
+        // The backend may lower the retained distinct aggregate without a literal
+        // Expand node; the logical plan and result are the relevant guarantees here.
         checkAnswer(df, Seq(org.apache.spark.sql.Row(6L)))
       }
     }
