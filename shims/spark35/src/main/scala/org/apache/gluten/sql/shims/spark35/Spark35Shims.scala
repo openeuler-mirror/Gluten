@@ -86,7 +86,8 @@ class Spark35Shims extends SparkShims {
       Sig[RoundCeil](ExpressionNames.CEIL),
       Sig[ArrayInsert](ExpressionNames.ARRAY_INSERT),
       Sig[CheckOverflowInTableInsert](ExpressionNames.CHECK_OVERFLOW_IN_TABLE_INSERT),
-      Sig[ArrayAppend](ExpressionNames.ARRAY_APPEND)
+      Sig[ArrayAppend](ExpressionNames.ARRAY_APPEND),
+      Sig[SecondWithFraction](ExpressionNames.EXTRACT)
     )
   }
 
