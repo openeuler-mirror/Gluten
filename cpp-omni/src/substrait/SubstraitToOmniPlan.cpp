@@ -521,10 +521,9 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::JoinRel 
         auto isBroadcast = joinRel.has_advanced_extension() &&
             SubstraitParser::ConfigSetInOptimization(joinRel.advanced_extension(), "isBHJ=");
 
-        // Create HashJoinNode node
-        // FIX ME param isShuffle is not used, please delete.
-        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin, false,
-            leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType, keys);
+        // SHJ sets isShuffle so HashBuilder join spill can arm. BHJ stays isShuffle=false.
+        return std::make_shared<HashJoinNode>(NextPlanNodeId(), joinType, buildSide, isNullAwareAntiJoin,
+            !isBroadcast, leftKeys, rightKeys, filter, leftNode, rightNode, leftOutputType, rightOutputType, keys);
     }
 }
 

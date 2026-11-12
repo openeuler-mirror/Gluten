@@ -22,7 +22,8 @@
 namespace {
 static JavaVM *vm;
 
-const std::string kUdfResolverClassPath = "Lorg/apache/spark/sql/expression/UDFResolver$;";
+const std::string kUdfResolverClassName = "org/apache/spark/sql/expression/UDFResolver$";
+const std::string kUdfResolverClassSignature = "Lorg/apache/spark/sql/expression/UDFResolver$;";
 
 static jclass udfResolverClass;
 static jmethodID registerUDFMethod;
@@ -36,7 +37,7 @@ void gluten::initOmniJniUDF(JNIEnv *env)
     }
 
     // classes
-    udfResolverClass = createGlobalClassReferenceOrError(env, kUdfResolverClassPath.c_str());
+    udfResolverClass = createGlobalClassReferenceOrError(env, kUdfResolverClassName.c_str());
 
     // methods
     registerUDFMethod = getMethodIdOrError(env, udfResolverClass, "registerUDF", "(Ljava/lang/String;[B[BZZ)V");
@@ -61,7 +62,7 @@ void gluten::jniRegisterFunctionSignatures(JNIEnv *env)
         env->SetByteArrayRegion(argTypes, 0, signature->argTypes.length(),
             reinterpret_cast<const jbyte *>(signature->argTypes.c_str()));
         jobject instance = env->GetStaticObjectField(udfResolverClass,
-            env->GetStaticFieldID(udfResolverClass, "MODULE$", kUdfResolverClassPath.c_str()));
+            env->GetStaticFieldID(udfResolverClass, "MODULE$", kUdfResolverClassSignature.c_str()));
         if (!signature->intermediateType.empty()) {
             jbyteArray intermediateType = env->NewByteArray(signature->intermediateType.length());
             env->SetByteArrayRegion(intermediateType, 0, signature->intermediateType.length(),

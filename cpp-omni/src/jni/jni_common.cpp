@@ -135,11 +135,19 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
         return JNI_ERR;
     }
 
-    gluten::initOmniJniUDF(env);
+    try {
+        gluten::initOmniJniUDF(env);
+    } catch (const std::exception &e) {
+        LogError("Failed to initialize Omni JNI UDF: %s", e.what());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        return JNI_ERR;
+    }
 
-    runtimeExceptionClass = CreateGlobalClassReference(env, "Ljava/lang/RuntimeException;");
+    runtimeExceptionClass = CreateGlobalClassReference(env, "java/lang/RuntimeException");
 
-    metricsBuilderClass = createGlobalClassReferenceOrError(env, "Lorg/apache/gluten/metrics/Metrics;");
+    metricsBuilderClass = createGlobalClassReferenceOrError(env, "org/apache/gluten/metrics/Metrics");
 
     metricsBuilderConstructor = getMethodIdOrError(
         env,
@@ -148,7 +156,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
         "([J[J[J[J[J[J[J[J[J[J[J[JJ[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J[J)V");
 
     splitResultClass =
-        CreateGlobalClassReference(env, "Lcom/huawei/boostkit/spark/vectorized/SplitResult;");
+        CreateGlobalClassReference(env, "com/huawei/boostkit/spark/vectorized/SplitResult");
     splitResultConstructor = GetMethodID(env, splitResultClass, "<init>", "(JJJJJ[J)V");
 
     jsonClass = CreateGlobalClassReference(env, "org/json/JSONObject");
@@ -170,9 +178,9 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
     vecBatchCls = CreateGlobalClassReference(env, "nova/hetu/omniruntime/vector/VecBatch");
     vecBatchInitMethodId = env->GetMethodID(vecBatchCls, "<init>", "(J[J[J[J[J[I[II)V");
 
-    runtimeAwareClass = CreateGlobalClassReference(env, "Lorg/apache/gluten/runtime/RuntimeAware;");
+    runtimeAwareClass = CreateGlobalClassReference(env, "org/apache/gluten/runtime/RuntimeAware");
     runtimeAwareCtxHandle = getMethodIdOrError(env, runtimeAwareClass, "rtHandle", "()J");
-    infoCls = CreateGlobalClassReference(env, "Lorg/apache/gluten/validate/NativePlanValidationInfo;");
+    infoCls = CreateGlobalClassReference(env, "org/apache/gluten/validate/NativePlanValidationInfo");
     if (infoCls == nullptr) {
         std::string errorMessage = "Unable to CreateGlobalClassReferenceOrError for NativePlanValidationInfo";
         OMNI_THROW("RUNTIME_ERROR", errorMessage);
