@@ -763,7 +763,17 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectR
     const auto &projectExprs = projectRel.expressions();
     std::vector<TypedExprPtr> expressions;
     expressions.reserve(projectExprs.size());
-    const auto &inputType = childNode->OutputType();
+    DataTypesPtr inputType = childNode->OutputType();
+    if ((inputType == nullptr || inputType->GetSize() == 0) && projectRel.has_advanced_extension() &&
+        projectRel.advanced_extension().has_enhancement()) {
+        ::substrait::Type substraitType;
+        if (projectRel.advanced_extension().enhancement().UnpackTo(&substraitType)) {
+            auto parsed = SubstraitParser::ParseType(substraitType);
+            if (auto rowType = std::dynamic_pointer_cast<const RowType>(parsed)) {
+                inputType = std::make_shared<DataTypes>(rowType->Children());
+            }
+        }
+    }
     //  Noted that Substrait projection adds the project expressions on top of the
     //  input to the projection node. Thus we need to add the input columns first
     //  and then add the projection expressions.
@@ -778,7 +788,7 @@ PlanNodePtr SubstraitToOmniPlanConverter::ToOmniPlan(const ::substrait::ProjectR
         expressions.emplace_back(exprConverter->ToOmniExpr(expr, inputType));
     }
 
-    if (projectRel.has_common()) {
+    if (projectRel.has_common() && projectRel.common().has_emit()) {
         auto relCommon = projectRel.common();
         const auto &emit = relCommon.emit();
         int emitSize = emit.output_mapping_size();

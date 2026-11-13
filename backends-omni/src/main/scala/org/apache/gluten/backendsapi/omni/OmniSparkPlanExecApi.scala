@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, BroadcastMode, Partitioning}
 import org.apache.spark.sql.execution.{ColumnarWriteFilesExec, FileSourceScanExec, GenerateExec, OmniColumnarShuffleExchangeExec, OmniColumnarWriteFilesExec, OmniExecUtil, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{FileFormat, HadoopFsRelation}
+import org.apache.spark.sql.execution.python.OmniEvalPythonExecTransformer
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.BuildSideRelation
 import org.apache.spark.sql.execution.metric.SQLMetric
@@ -757,5 +758,12 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   override def genHiveTableScanExecTransformer(
                                        scanExec: SparkPlan): BasicScanExecTransformer = {
     OmniHiveTableScanExecTransformer(scanExec)
+  }
+
+  override def genEvalPythonExecTransformer(
+                                      udfs: Seq[PythonUDF],
+                                      resultAttrs: Seq[Attribute],
+                                      child: SparkPlan): SparkPlan = {
+    OmniEvalPythonExecTransformer(udfs, resultAttrs, child)
   }
 }
