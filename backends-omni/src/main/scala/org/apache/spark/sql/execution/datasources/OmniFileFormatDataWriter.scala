@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog.ExternalCatalogUtils
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
-import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOutputWriterSpec
+import org.apache.spark.sql.execution.datasources.OmniFileFormatWriter.ConcurrentOutputWriterSpec
 import org.apache.spark.sql.execution.metric.{CustomMetrics, SQLMetric}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StringType
@@ -103,8 +103,8 @@ private[datasources] object WriteTaskStatsTrackerCompat {
  * Abstract class for writing out data in a single Spark task.
  * Exceptions thrown by the implementation of this trait will automatically trigger task aborts.
  */
-abstract class FileFormatDataWriter(
-                                     description: WriteJobDescription,
+abstract class OmniFileFormatDataWriter(
+                                     description: OmniWriteJobDescription,
                                      taskAttemptContext: TaskAttemptContext,
                                      committer: FileCommitProtocol,
                                      customMetrics: Map[String, SQLMetric]) extends DataWriter[InternalRow] {
@@ -165,15 +165,15 @@ abstract class FileFormatDataWriter(
    * to the driver and used to update the catalog. Other information will be sent back to the
    * driver too and used to e.g. update the metrics in UI.
    */
-  override def commit(): WriteTaskResult = {
+  override def commit(): OmniWriteTaskResult = {
     releaseResources()
     val (taskCommitMessage, taskCommitTime) = Utils.timeTakenMs {
       committer.commitTask(taskAttemptContext)
     }
-    val summary = ExecutedWriteSummary(
+    val summary = OmniExecutedWriteSummary(
       updatedPartitions = updatedPartitions.toSet,
       stats = statsTrackers.map(_.getFinalStats(taskCommitTime)))
-    WriteTaskResult(taskCommitMessage, summary)
+    OmniWriteTaskResult(taskCommitMessage, summary)
   }
 
   def abort(): Unit = {
@@ -188,22 +188,22 @@ abstract class FileFormatDataWriter(
 }
 
 /** FileFormatWriteTask for empty partitions */
-class EmptyDirectoryDataWriter(
-                                description: WriteJobDescription,
+class OmniEmptyDirectoryDataWriter(
+                                description: OmniWriteJobDescription,
                                 taskAttemptContext: TaskAttemptContext,
                                 committer: FileCommitProtocol,
                                 customMetrics: Map[String, SQLMetric] = Map.empty
-                              ) extends FileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
+                              ) extends OmniFileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
   override def write(record: InternalRow): Unit = {}
 }
 
 /** Writes data to a single directory (used for non-dynamic-partition writes). */
-class SingleDirectoryDataWriter(
-                                 description: WriteJobDescription,
+class OmniSingleDirectoryDataWriter(
+                                 description: OmniWriteJobDescription,
                                  taskAttemptContext: TaskAttemptContext,
                                  committer: FileCommitProtocol,
                                  customMetrics: Map[String, SQLMetric] = Map.empty)
-  extends FileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
+  extends OmniFileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
   private var fileCounter: Int = _
   private var recordsInFile: Long = _
   // Initialize currentWriter and statsTrackers
@@ -267,12 +267,12 @@ class SingleDirectoryDataWriter(
  * Holds common logic for writing data with dynamic partition writes, meaning it can write to
  * multiple directories (partitions) or files (bucketing).
  */
-abstract class BaseDynamicPartitionDataWriter(
-                                               description: WriteJobDescription,
+abstract class OmniBaseDynamicPartitionDataWriter(
+                                               description: OmniWriteJobDescription,
                                                taskAttemptContext: TaskAttemptContext,
                                                committer: FileCommitProtocol,
                                                customMetrics: Map[String, SQLMetric])
-  extends FileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
+  extends OmniFileFormatDataWriter(description, taskAttemptContext, committer, customMetrics) {
 
   /** Flag saying whether or not the data to be written out is partitioned. */
   protected val isPartitioned = description.partitionColumns.nonEmpty
@@ -283,7 +283,7 @@ abstract class BaseDynamicPartitionDataWriter(
   assert(isPartitioned || isBucketed,
     s"""DynamicPartitionWriteTask should be used for writing out data that's either
        |partitioned or bucketed. In this case neither is true.
-       |WriteJobDescription: $description
+       |OmniWriteJobDescription: $description
        """.stripMargin)
 
   /** Number of records in current file. */
@@ -447,12 +447,12 @@ abstract class BaseDynamicPartitionDataWriter(
  * writing. The records to be written are required to be sorted on partition and/or bucket
  * column(s) before writing.
  */
-class DynamicPartitionDataSingleWriter(
-                                        description: WriteJobDescription,
+class OmniDynamicPartitionDataSingleWriter(
+                                        description: OmniWriteJobDescription,
                                         taskAttemptContext: TaskAttemptContext,
                                         committer: FileCommitProtocol,
                                         customMetrics: Map[String, SQLMetric] = Map.empty)
-  extends BaseDynamicPartitionDataWriter(description, taskAttemptContext, committer,
+  extends OmniBaseDynamicPartitionDataWriter(description, taskAttemptContext, committer,
     customMetrics) {
 
   private var currentPartitionValues: Option[UnsafeRow] = None
@@ -548,13 +548,13 @@ class DynamicPartitionDataSingleWriter(
  *
  * Caller is expected to call `writeWithIterator()` instead of `write()` to write records.
  */
-class DynamicPartitionDataConcurrentWriter(
-                                            description: WriteJobDescription,
+class OmniDynamicPartitionDataConcurrentWriter(
+                                            description: OmniWriteJobDescription,
                                             taskAttemptContext: TaskAttemptContext,
                                             committer: FileCommitProtocol,
                                             concurrentOutputWriterSpec: ConcurrentOutputWriterSpec,
                                             customMetrics: Map[String, SQLMetric] = Map.empty)
-  extends BaseDynamicPartitionDataWriter(description, taskAttemptContext, committer, customMetrics)
+  extends OmniBaseDynamicPartitionDataWriter(description, taskAttemptContext, committer, customMetrics)
     with Logging {
 
   /** Wrapper class to index a unique concurrent output writer. */
@@ -734,19 +734,19 @@ class DynamicPartitionDataConcurrentWriter(
  * @param bucketIdExpression Expression to calculate bucket id based on bucket column(s).
  * @param bucketFileNamePrefix Prefix of output file name based on bucket id.
  */
-case class WriterBucketSpec(
+case class OmniWriterBucketSpec(
                              bucketIdExpression: Expression,
                              bucketFileNamePrefix: Int => String)
 
 /** A shared job description for all the write tasks. */
-class WriteJobDescription(
+class OmniWriteJobDescription(
                            val uuid: String, // prevent collision between different (appending) write jobs
                            val serializableHadoopConf: SerializableConfiguration,
                            val outputWriterFactory: OutputWriterFactory,
                            val allColumns: Seq[Attribute],
                            val dataColumns: Seq[Attribute],
                            val partitionColumns: Seq[Attribute],
-                           val bucketSpec: Option[WriterBucketSpec],
+                           val bucketSpec: Option[OmniWriterBucketSpec],
                            val path: String,
                            val customPartitionLocations: Map[TablePartitionSpec, String],
                            val maxRecordsPerFile: Long,
@@ -756,14 +756,14 @@ class WriteJobDescription(
 
   def bucketIdExpression: Option[Expression] = {
     bucketSpec.asInstanceOf[Option[Any]].map {
-      case spec: WriterBucketSpec => spec.bucketIdExpression
+      case spec: OmniWriterBucketSpec => spec.bucketIdExpression
       case expression: Expression => expression
     }
   }
 
   def bucketFileNamePrefix(bucketId: Int): String = {
     bucketSpec.asInstanceOf[Option[Any]].collect {
-      case spec: WriterBucketSpec => spec.bucketFileNamePrefix(bucketId)
+      case spec: OmniWriterBucketSpec => spec.bucketFileNamePrefix(bucketId)
     }.getOrElse("")
   }
 
@@ -776,7 +776,7 @@ class WriteJobDescription(
 }
 
 /** The result of a successful write task. */
-case class WriteTaskResult(commitMsg: TaskCommitMessage, summary: ExecutedWriteSummary)
+case class OmniWriteTaskResult(commitMsg: TaskCommitMessage, summary: OmniExecutedWriteSummary)
   extends WriterCommitMessage
 
 /**
@@ -786,6 +786,6 @@ case class WriteTaskResult(commitMsg: TaskCommitMessage, summary: ExecutedWriteS
  *                          for dynamic partition.
  * @param stats one `WriteTaskStats` object for every `WriteJobStatsTracker` that the job had.
  */
-case class ExecutedWriteSummary(
+case class OmniExecutedWriteSummary(
                                  updatedPartitions: Set[String],
                                  stats: Seq[WriteTaskStats])

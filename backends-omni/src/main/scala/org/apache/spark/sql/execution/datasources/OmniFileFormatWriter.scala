@@ -42,7 +42,6 @@ import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
 import org.apache.spark.sql.connector.write.WriterCommitMessage
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOutputWriterSpec
 import org.apache.spark.sql.execution.datasources.orc.OrcFileFormat
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.internal.SQLConf
@@ -53,16 +52,16 @@ import java.util.{Date, UUID}
 
 /** A helper object for writing FileFormat data out to a location. */
 object OmniFileFormatWriter extends Logging {
+  /** Describes how concurrent output writers should be executed. */
+  case class ConcurrentOutputWriterSpec(
+                                         maxWriters: Int,
+                                         createSorter: () => UnsafeExternalRowSorter)
+
   /** Describes how output files should be placed in the filesystem. */
   case class OutputSpec(
                          outputPath: String,
                          customPartitionLocations: Map[TablePartitionSpec, String],
                          outputColumns: Seq[Attribute])
-
-  /** Describes how concurrent output writers should be executed. */
-//  case class ConcurrentOutputWriterSpec(
-//                                         maxWriters: Int,
-//                                         createSorter: () => UnsafeExternalRowSorter)
 
   /**
    * A variable used in tests to check whether the output ordering of the query matches the
@@ -104,7 +103,7 @@ object OmniFileFormatWriter extends Logging {
              numStaticPartitionCols: Int = 0)
   : Set[String] = {
     require(partitionColumns.size >= numStaticPartitionCols)
-    val writeFilesOpt = V1WritesUtils.getWriteFilesOpt(plan)
+    val writeFilesOpt = OmniV1WritesUtils.getWriteFilesOpt(plan)
     var nativeEnabled =
       "true" == sparkSession.sparkContext.getLocalProperty("isNativeApplicable")
 
@@ -129,8 +128,8 @@ object OmniFileFormatWriter extends Logging {
     val finalOutputSpec = outputSpec
     val dataColumns = finalOutputSpec.outputColumns.filterNot(partitionSet.contains)
 
-    val writerBucketSpec = V1WritesUtils.getWriterBucketSpec(bucketSpec, dataColumns, options)
-    val sortColumns = V1WritesUtils.getBucketSortColumns(bucketSpec, dataColumns)
+    val writerBucketSpec = OmniV1WritesUtils.getWriterBucketSpec(bucketSpec, dataColumns, options)
+    val sortColumns = OmniV1WritesUtils.getBucketSortColumns(bucketSpec, dataColumns)
 
     val caseInsensitiveOptions = CaseInsensitiveMap(options)
 
@@ -151,7 +150,7 @@ object OmniFileFormatWriter extends Logging {
     val outputWriterFactory =
       effectiveFileFormat.prepareWrite(sparkSession, job, caseInsensitiveOptions, dataSchema)
 
-    val description = new WriteJobDescription(
+    val description = new OmniWriteJobDescription(
       uuid = UUID.randomUUID.toString,
       serializableHadoopConf = new SerializableConfiguration(job.getConfiguration),
       outputWriterFactory = outputWriterFactory,
@@ -186,7 +185,7 @@ object OmniFileFormatWriter extends Logging {
     val actualOrdering = writeFilesOpt.map(_.child)
       .getOrElse(materializeAdaptiveSparkPlan(plan))
       .outputOrdering
-    val orderingMatched = V1WritesUtils.isOrderingMatched(requiredOrdering, actualOrdering)
+    val orderingMatched = OmniV1WritesUtils.isOrderingMatched(requiredOrdering, actualOrdering)
 
     SQLExecution.checkSQLExecutionId(sparkSession)
 
@@ -205,12 +204,12 @@ object OmniFileFormatWriter extends Logging {
     if (Utils.isTesting) outputOrderingMatched = orderingMatched
 
     if (writeFilesOpt.isDefined) {
-      // build `WriteFilesSpec` for `WriteFiles`
+      // build `OmniWriteFilesSpec` for `WriteFiles`
       val concurrentOutputWriterSpecFunc = (plan: SparkPlan) => {
         val sortPlan = createSortPlan(plan, requiredOrdering, outputSpec)
         createConcurrentOutputWriterSpec(sparkSession, sortPlan, sortColumns)
       }
-      val writeSpec = WriteFilesSpec(
+      val writeSpec = OmniWriteFilesSpec(
         description = description,
         committer = committer,
         concurrentOutputWriterSpecFunc = concurrentOutputWriterSpecFunc
@@ -240,14 +239,14 @@ object OmniFileFormatWriter extends Logging {
                             sparkSession: SparkSession,
                             plan: SparkPlan,
                             job: Job,
-                            description: WriteJobDescription,
+                            description: OmniWriteJobDescription,
                             committer: FileCommitProtocol,
                             outputSpec: OutputSpec,
                             requiredOrdering: Seq[Expression],
                             partitionColumns: Seq[Attribute],
                             sortColumns: Seq[Attribute],
                             orderingMatched: Boolean, nativeEnabled : Boolean): Set[String] = {
-    val projectList = V1WritesUtils.convertEmptyToNull(plan.output, partitionColumns)
+    val projectList = OmniV1WritesUtils.convertEmptyToNull(plan.output, partitionColumns)
     val empty2NullPlan = if (nativeEnabled && projectList.nonEmpty) {
       nativeWrap(ProjectExec(projectList, plan), sparkSession)
     } else if (projectList.nonEmpty) {
@@ -292,7 +291,7 @@ object OmniFileFormatWriter extends Logging {
       }
 
       val jobIdInstant = new Date().getTime
-      val ret = new Array[WriteTaskResult](rddWithNonEmptyPartitions.partitions.length)
+      val ret = new Array[OmniWriteTaskResult](rddWithNonEmptyPartitions.partitions.length)
       sparkSession.sparkContext.runJob(
         rddWithNonEmptyPartitions,
         (taskContext: TaskContext, iter: Iterator[InternalRow]) => {
@@ -307,7 +306,7 @@ object OmniFileFormatWriter extends Logging {
             concurrentOutputWriterSpec = concurrentOutputWriterSpec)
         },
         rddWithNonEmptyPartitions.partitions.indices,
-        (index, res: WriteTaskResult) => {
+        (index, res: OmniWriteTaskResult) => {
           committer.onTaskCommit(res.commitMsg)
           ret(index) = res
         })
@@ -317,8 +316,8 @@ object OmniFileFormatWriter extends Logging {
 
   private def writeAndCommit(
                               job: Job,
-                              description: WriteJobDescription,
-                              committer: FileCommitProtocol)(f: => Array[WriteTaskResult]): Set[String] = {
+                              description: OmniWriteJobDescription,
+                              committer: FileCommitProtocol)(f: => Array[OmniWriteTaskResult]): Set[String] = {
     // This call shouldn't be put into the `try` block below because it only initializes and
     // prepares the job, any exception thrown from here shouldn't cause abortJob() to be called.
     committer.setupJob(job)
@@ -348,7 +347,7 @@ object OmniFileFormatWriter extends Logging {
   private def executeWrite(
                             session: SparkSession,
                             planForWrites: SparkPlan,
-                            writeFilesSpec: WriteFilesSpec,
+                            writeFilesSpec: OmniWriteFilesSpec,
                             job: Job, nativeEnabled : Boolean): Set[String] = {
 
 
@@ -368,13 +367,13 @@ object OmniFileFormatWriter extends Logging {
 
     writeAndCommit(job, description, committer) {
       val rdd = nPlan match {
-        case writeFilesExec: WriteFilesExec =>
-          SparkShimLoader.getSparkShims.executeWriteFiles(writeFilesExec, writeFilesSpec)
+        case writeFilesExec: OmniColumnarWriteFilesExec =>
+          writeFilesExec.doExecuteOmniWrite(writeFilesSpec)
         case other =>
           throw new UnsupportedOperationException(
             s"${other.nodeName} does not support write files execution")
       }
-      val ret = new Array[WriteTaskResult](rdd.partitions.length)
+      val ret = new Array[OmniWriteTaskResult](rdd.partitions.length)
       session.sparkContext.runJob(
         rdd,
         (context: TaskContext, iter: Iterator[WriterCommitMessage]) => {
@@ -385,8 +384,8 @@ object OmniFileFormatWriter extends Logging {
         },
         rdd.partitions.indices,
         (index, res: WriterCommitMessage) => {
-          assert(res.isInstanceOf[WriteTaskResult])
-          val writeTaskResult = res.asInstanceOf[WriteTaskResult]
+          assert(res.isInstanceOf[OmniWriteTaskResult])
+          val writeTaskResult = res.asInstanceOf[OmniWriteTaskResult]
           committer.onTaskCommit(writeTaskResult.commitMsg)
           ret(index) = writeTaskResult
         })
@@ -424,14 +423,14 @@ object OmniFileFormatWriter extends Logging {
 
   /** Writes data out in a single Spark task. */
   private[spark] def executeTask(
-                                  description: WriteJobDescription,
+                                  description: OmniWriteJobDescription,
                                   jobIdInstant: Long,
                                   sparkStageId: Int,
                                   sparkPartitionId: Int,
                                   sparkAttemptNumber: Int,
                                   committer: FileCommitProtocol,
                                   iterator: Iterator[InternalRow],
-                                  concurrentOutputWriterSpec: Option[ConcurrentOutputWriterSpec]): WriteTaskResult = {
+                                  concurrentOutputWriterSpec: Option[ConcurrentOutputWriterSpec]): OmniWriteTaskResult = {
 
     val jobId = SparkHadoopWriterUtils.createJobID(new Date(jobIdInstant), sparkStageId)
     val taskId = new TaskID(jobId, TaskType.MAP, sparkPartitionId)
@@ -455,16 +454,16 @@ object OmniFileFormatWriter extends Logging {
     val dataWriter =
       if (sparkPartitionId != 0 && !iterator.hasNext) {
         // In case of empty job, leave first partition to save meta for file format like parquet.
-        new EmptyDirectoryDataWriter(description, taskAttemptContext, committer)
+        new OmniEmptyDirectoryDataWriter(description, taskAttemptContext, committer)
       } else if (description.partitionColumns.isEmpty && description.bucketSpec.isEmpty) {
-        new SingleDirectoryDataWriter(description, taskAttemptContext, committer)
+        new OmniSingleDirectoryDataWriter(description, taskAttemptContext, committer)
       } else {
         concurrentOutputWriterSpec match {
           case Some(spec) =>
-            new DynamicPartitionDataConcurrentWriter(
+            new OmniDynamicPartitionDataConcurrentWriter(
               description, taskAttemptContext, committer, spec)
           case _ =>
-            new DynamicPartitionDataSingleWriter(description, taskAttemptContext, committer)
+            new OmniDynamicPartitionDataSingleWriter(description, taskAttemptContext, committer)
         }
       }
 

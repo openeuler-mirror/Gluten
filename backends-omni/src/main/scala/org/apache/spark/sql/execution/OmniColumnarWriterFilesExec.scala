@@ -51,7 +51,7 @@ case class OmniColumnarWriteFilesExec private (
       CaseInsensitiveMap(options))
   }
 
-  override def doExecuteWrite(writeFilesSpec: WriteFilesSpec): RDD[WriterCommitMessage] = {
+  def doExecuteOmniWrite(writeFilesSpec: OmniWriteFilesSpec): RDD[WriterCommitMessage] = {
     val rdd = child.execute()
     // SPARK-23271 If we are attempting to write a zero partition rdd, create a dummy single
     // partition rdd to make sure we at least set up one write task to write the metadata.
