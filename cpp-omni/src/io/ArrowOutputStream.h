@@ -33,18 +33,30 @@
 // 供 Arrow 帧逐 buffer 顺序 Write。压缩块格式复用现有 createCompressor，对上层透明。
 class ArrowOutputStream : public arrow::io::OutputStream {
 public:
-    explicit ArrowOutputStream(std::unique_ptr<spark::BufferedOutputStream> buf) : buf_(std::move(buf)) {}
+    ArrowOutputStream(spark::OutputStream& raw, std::unique_ptr<spark::BufferedOutputStream> buf)
+        : raw_(raw), buf_(std::move(buf)) {}
+
+    ~ArrowOutputStream() override;
 
     // 工厂：按 compressionKind 选压缩/非压缩，包装底层 raw OutputStream。
     // strategy 控制压缩策略：COMPRESSION（注重压缩比）或 SPEED（注重速度）。
     // 注意：必须使用 CompressionStrategy_COMPRESSION，
     // 否则 LZ4 会因 LZ4_ACCELERATION_MAX=65537 几乎不压缩，导致 Shuffle Write 量暴增。
-    static std::shared_ptr<ArrowOutputStream> Make(spark::OutputStream* raw,
-                                                    spark::CompressionKind kind,
-                                                    spark::CompressionStrategy strategy,
-                                                    uint64_t capacity,
-                                                    uint64_t blockSize,
-                                                    spark::MemoryPool& pool);
+    // Owns the sink, including when compressor construction fails.
+    static std::shared_ptr<ArrowOutputStream> Make(std::unique_ptr<spark::OutputStream> raw,
+                                                   spark::CompressionKind kind,
+                                                   spark::CompressionStrategy strategy,
+                                                   uint64_t capacity,
+                                                   uint64_t blockSize,
+                                                   spark::MemoryPool& pool);
+
+    // Borrows the sink (e.g. an RSS memory buffer); Close closes but never deletes it.
+    static std::shared_ptr<ArrowOutputStream> Make(spark::OutputStream& raw,
+                                                   spark::CompressionKind kind,
+                                                   spark::CompressionStrategy strategy,
+                                                   uint64_t capacity,
+                                                   uint64_t blockSize,
+                                                   spark::MemoryPool& pool);
 
     arrow::Status Write(const void* data, int64_t nbytes) override;
     arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override;
@@ -63,8 +75,12 @@ public:
     }
 
 private:
+    // The buffer borrows the sink; destroy the buffer before its owned sink.
+    std::unique_ptr<spark::OutputStream> ownedRaw_;
+    spark::OutputStream& raw_;
     std::unique_ptr<spark::BufferedOutputStream> buf_;
     bool closed_ = false;
+    arrow::Status closeStatus_ = arrow::Status::OK();
 };
 
 #endif // CPP_ARROW_OUTPUT_STREAM_H

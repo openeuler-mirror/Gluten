@@ -19,9 +19,24 @@
 #include "io/ArrowOutputStream.h"
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <arrow/status.h>
 
 #include "common/debug.h"
+
+ArrowOutputStream::~ArrowOutputStream() {
+    if (closed_) {
+        return;
+    }
+    try {
+        auto status = Close();
+        if (!status.ok()) {
+            LogsError("ArrowOutputStream destructor Close failed: %s", status.ToString().c_str());
+        }
+    } catch (...) {
+        // ownedRaw_ still releases the file if error reporting throws during unwinding.
+    }
+}
 
 arrow::Status ArrowOutputStream::Write(const void* data, int64_t nbytes) {
     if (closed_) {
@@ -74,10 +89,32 @@ arrow::Status ArrowOutputStream::Flush() {
 
 arrow::Status ArrowOutputStream::Close() {
     if (!closed_) {
-        buf_->flush();
         closed_ = true;
+        std::exception_ptr error;
+        try {
+            buf_->flush();
+        } catch (...) {
+            error = std::current_exception();
+        }
+        // A failed flush must not leave the shuffle file descriptor open.
+        try {
+            raw_.close();
+        } catch (...) {
+            if (!error) {
+                error = std::current_exception();
+            }
+        }
+        if (error) {
+            try {
+                std::rethrow_exception(error);
+            } catch (const std::exception& e) {
+                closeStatus_ = arrow::Status::IOError("ArrowOutputStream::Close: ", e.what());
+            } catch (...) {
+                closeStatus_ = arrow::Status::IOError("ArrowOutputStream::Close: unknown error");
+            }
+        }
     }
-    return arrow::Status::OK();
+    return closeStatus_;
 }
 
 arrow::Result<int64_t> ArrowOutputStream::Tell() const {
@@ -85,7 +122,19 @@ arrow::Result<int64_t> ArrowOutputStream::Tell() const {
 }
 
 std::shared_ptr<ArrowOutputStream> ArrowOutputStream::Make(
-        spark::OutputStream* raw,
+        std::unique_ptr<spark::OutputStream> raw,
+        spark::CompressionKind kind,
+        spark::CompressionStrategy strategy,
+        uint64_t capacity,
+        uint64_t blockSize,
+        spark::MemoryPool& pool) {
+    auto out = Make(*raw, kind, strategy, capacity, blockSize, pool);
+    out->ownedRaw_ = std::move(raw);
+    return out;
+}
+
+std::shared_ptr<ArrowOutputStream> ArrowOutputStream::Make(
+        spark::OutputStream& raw,
         spark::CompressionKind kind,
         spark::CompressionStrategy strategy,
         uint64_t capacity,
@@ -93,10 +142,10 @@ std::shared_ptr<ArrowOutputStream> ArrowOutputStream::Make(
         spark::MemoryPool& pool) {
     std::unique_ptr<spark::BufferedOutputStream> buf;
     if (kind == spark::CompressionKind_NONE) {
-        buf = std::make_unique<spark::BufferedOutputStream>(pool, raw, capacity, blockSize);
+        buf = std::make_unique<spark::BufferedOutputStream>(pool, &raw, capacity, blockSize);
     } else {
-        buf = spark::createCompressor(kind, raw, strategy,
+        buf = spark::createCompressor(kind, &raw, strategy,
                                       capacity, blockSize, pool);
     }
-    return std::make_shared<ArrowOutputStream>(std::move(buf));
+    return std::make_shared<ArrowOutputStream>(raw, std::move(buf));
 }
