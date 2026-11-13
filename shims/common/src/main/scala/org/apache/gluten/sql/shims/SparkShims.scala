@@ -22,9 +22,9 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.scheduler.TaskInfo
 import org.apache.spark.shuffle.ShuffleHandle
-import org.apache.spark.sql.{AnalysisException, SparkSession}
-import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.catalog.BucketSpec
+import org.apache.spark.sql.{AnalysisException, SaveMode, SparkSession}
+import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
+import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogTable}
 import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BinaryExpression, Expression, NamedExpression, ProjectionOverSchema}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, TypedImperativeAggregate}
@@ -41,14 +41,17 @@ import org.apache.spark.sql.execution.command.{DataWritingCommand, DataWritingCo
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
+import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.text.TextScan
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeLike}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.SaveMode
+import org.apache.spark.sql.hive.execution.InsertIntoHiveDirCommand
+import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types.{DecimalType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.storage.{BlockId, BlockManagerId}
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.parquet.schema.MessageType
 
@@ -268,6 +271,31 @@ trait SparkShims {
       columnNames: Seq[String],
       colType: String,
       caseSensitiveAnalysis: Boolean): Unit
+
+  def writeEmptyToNull(child: Expression): Expression
+
+  def writeTableAlreadyExists(table: TableIdentifier): Throwable
+
+  def writeAndRead(
+      source: DataSource,
+      mode: SaveMode,
+      query: LogicalPlan,
+      outputNames: Seq[String],
+      plan: SparkPlan,
+      metrics: Map[String, SQLMetric]): BaseRelation
+
+  def checkHiveWriteColumns(table: CatalogTable): Unit
+
+  def hiveWriteStaging(
+      command: InsertIntoHiveDirCommand,
+      session: SparkSession,
+      conf: Configuration,
+      target: Path): HiveWriteStaging
+
+  def rewriteHiveCtas(plan: SparkPlan)(
+      insert: (CatalogTable, LogicalPlan, Seq[String], Boolean) => DataWritingCommand): SparkPlan
+
+  def isSparkHiveCtas(command: DataWritingCommand): Boolean = false
 
   def unsupportedSaveModeError(mode: SaveMode, pathExists: Boolean): Throwable
 

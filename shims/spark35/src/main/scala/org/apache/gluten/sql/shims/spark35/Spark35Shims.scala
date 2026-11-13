@@ -71,7 +71,9 @@ import java.util.{Properties, HashMap => JHashMap, Map => JMap}
 
 import scala.reflect.ClassTag
 
-class Spark35Shims extends SparkShims {
+class Spark35Shims extends SparkShims
+  with org.apache.spark.sql.hive.execution.GlutenHiveWriteShim {
+
   override def getShimDescriptor: ShimDescriptor = SparkShimProvider.DESCRIPTOR
 
   override def getDistribution(

@@ -143,7 +143,7 @@ class OmniHiveFileFormat(fileSinkConf: OmniFileSinkDesc)
                                   path: String,
                                   dataSchema: StructType,
                                   context: TaskAttemptContext): OutputWriter = {
-          new HiveOutputWriter(path, fileSinkConfSer, jobConf.value, dataSchema)
+          new OmniHiveOutputWriter(path, fileSinkConfSer, jobConf.value, dataSchema)
         }
       }
     }
@@ -165,7 +165,7 @@ class OmniHiveFileFormat(fileSinkConf: OmniFileSinkDesc)
   }
 }
 
-class HiveOutputWriter(
+private class OmniHiveOutputWriter(
                         val path: String,
                         fileSinkConf: OmniFileSinkDesc,
                         jobConf: JobConf,

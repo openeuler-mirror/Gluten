@@ -24,7 +24,7 @@ import org.apache.gluten.sql.shims.{ShimDescriptor, SparkShims}
 import org.apache.spark._
 import org.apache.spark.scheduler.TaskInfo
 import org.apache.spark.shuffle.ShuffleHandle
-import org.apache.spark.sql.{AnalysisException, SparkSession}
+import org.apache.spark.sql.{AnalysisException, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.csv.CSVOptions
@@ -58,7 +58,9 @@ import org.apache.parquet.schema.MessageType
 import java.time.ZoneOffset
 import java.util.{Properties, HashMap => JHashMap, Map => JMap}
 
-class Spark33Shims extends SparkShims {
+class Spark33Shims extends SparkShims
+  with org.apache.spark.sql.hive.execution.GlutenHiveWriteShim {
+
   override def getShimDescriptor: ShimDescriptor = SparkShimProvider.DESCRIPTOR
 
   override def getDistribution(
@@ -74,6 +76,7 @@ class Spark33Shims extends SparkShims {
       Sig[Csc](ExpressionNames.CSC),
       Sig[KnownNullable](KNOWN_NULLABLE),
       Sig[Empty2Null](ExpressionNames.EMPTY2NULL),
+      Sig[GlutenWriteEmpty2Null](ExpressionNames.EMPTY2NULL),
       Sig[TimestampAdd](TIMESTAMP_ADD),
       Sig[RoundFloor](FLOOR),
       Sig[RoundCeil](CEIL)

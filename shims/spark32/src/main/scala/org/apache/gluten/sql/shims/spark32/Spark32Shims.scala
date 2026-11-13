@@ -63,7 +63,9 @@ import org.apache.parquet.schema.MessageType
 
 import java.util.{HashMap => JHashMap, Locale, Map => JMap, Properties}
 
-class Spark32Shims extends SparkShims {
+class Spark32Shims extends SparkShims
+  with org.apache.spark.sql.hive.execution.GlutenHiveWriteShim {
+
   override def getShimDescriptor: ShimDescriptor = SparkShimProvider.DESCRIPTOR
 
   override def getDistribution(
@@ -72,7 +74,9 @@ class Spark32Shims extends SparkShims {
     HashClusteredDistribution(leftKeys) :: HashClusteredDistribution(rightKeys) :: Nil
   }
 
-  override def scalarExpressionMappings: Seq[Sig] = Seq(Sig[Empty2Null](ExpressionNames.EMPTY2NULL))
+  override def scalarExpressionMappings: Seq[Sig] = Seq(
+    Sig[Empty2Null](ExpressionNames.EMPTY2NULL),
+    Sig[GlutenWriteEmpty2Null](ExpressionNames.EMPTY2NULL))
 
   override def aggregateExpressionMappings: Seq[Sig] = Seq.empty
 
