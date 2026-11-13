@@ -236,8 +236,11 @@ object OmniBackendSettings extends BackendSettingsApi {
     )
   }
 
-  /** Omni supports AppendDataExec (Iceberg append write uses columnar offload). */
-  override def supportAppendDataExec(): Boolean = true
+  /**
+   * Keep V2 writes on Spark's writer when native writing is disabled. Otherwise the columnar V2
+   * write exec still takes over even though the V1 native writer path has been turned off.
+   */
+  override def supportAppendDataExec(): Boolean = enableNativeWriteFiles()
 
   override def supportSortExec(): Boolean = true
 

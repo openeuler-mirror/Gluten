@@ -20,7 +20,8 @@ import org.apache.spark.sql.execution.SparkPlan
  * Parquet writing for the files produced by Delta's FileFormatWriter path.
  */
 case class OffloadDeltaAppendDataExecV1() extends OffloadSingleNode with Logging {
-  override def offload(plan: SparkPlan): SparkPlan = plan match {
+  override def offload(plan: SparkPlan): SparkPlan =
+    if (!OffloadWrite.nativeWriterEnabled) plan else plan match {
     case p if FallbackTags.nonEmpty(p) =>
       p
     case p if DeltaWriteUtil.isDeltaAppendDataExecV1(p) =>
@@ -35,7 +36,8 @@ case class OffloadDeltaAppendDataExecV1() extends OffloadSingleNode with Logging
 
 /** Offloads Spark 3.5 + Delta 3.2 INSERT OVERWRITE write plans. */
 case class OffloadDeltaOverwriteByExpressionExecV1() extends OffloadSingleNode with Logging {
-  override def offload(plan: SparkPlan): SparkPlan = plan match {
+  override def offload(plan: SparkPlan): SparkPlan =
+    if (!OffloadWrite.nativeWriterEnabled) plan else plan match {
     case p if FallbackTags.nonEmpty(p) =>
       p
     case p if DeltaWriteUtil.isDeltaOverwriteByExpressionExecV1(p) =>

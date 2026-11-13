@@ -17,62 +17,149 @@
 
 package org.apache.spark.sql.execution.datasources
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.execution.{ColumnarToRowExecBase}
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
+import org.apache.gluten.logging.LogLevelUtil
 import org.apache.gluten.sql.shims.SparkShimLoader
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.command.{CreateDataSourceTableAsSelectCommand, DataWritingCommand, DataWritingCommandExec}
 import org.apache.spark.sql.execution.datasources.v2.{AppendDataExec, OverwriteByExpressionExec}
-import org.apache.spark.sql.hive.execution.OmniInsertIntoHiveTable
+import org.apache.spark.sql.hive.execution.{GlutenHiveCtas, InsertIntoHiveDirCommand, InsertIntoHiveTable, OmniInsertIntoHiveDirCommand, OmniInsertIntoHiveTable}
 import org.apache.spark.sql.sources.DataSourceRegister
 
-object OmniGlutenWriterColumnarRules {
+import java.util.Locale
+
+object OmniGlutenWriterColumnarRules extends Logging with LogLevelUtil {
   // TODO: support ctas in Spark3.4, see https://github.com/apache/spark/pull/39220
-  // TODO: support dynamic partition and bucket write
-  //  1. pull out `Empty2Null` and required ordering to `WriteFilesExec`, see Spark3.4 `V1Writes`
-  //  2. support detect partition value, partition path, bucket value, bucket path at native side,
-  //     see `BaseDynamicPartitionDataWriter`
+  // Dynamic partition and bucket writes are supported on this branch through the Omni command
+  // path: OmniFileFormatWriter injects Empty2Null / `__bucket_value__` projections that the
+  // native side evaluates per row (see FileFormatWriter.nativeWrap in the spark32 shim).
   private val formatMapping = Map(
     "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" -> "orc",
     "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" -> "parquet"
   )
-  private def getNativeFormat(cmd: DataWritingCommand): Option[String] = {
+
+  // Same message shape and log level policy as GlutenFallbackReporter so that
+  // native-write fallbacks are greppable alongside validation fallbacks.
+  private def logFallback(session: SparkSession, nodeName: String, reason: String): Unit = {
+    val executionIdInfo = Option(
+      session.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY))
+      .map(id => s"[QueryId=$id]")
+      .getOrElse("")
+    logOnLevel(
+      GlutenConfig.get.validationLogLevel,
+      s"Validation failed for plan: $nodeName$executionIdInfo, due to: $reason.")
+  }
+
+  private def getNativeFormat(
+      session: SparkSession,
+      cmd: DataWritingCommand): Option[String] = {
     if (!BackendsApiManager.getSettings.enableNativeWriteFiles()) {
+      logFallback(
+        session,
+        cmd.getClass.getSimpleName,
+        "spark.gluten.sql.native.writer.enabled is false")
       return None
     }
 
     cmd match {
-      case command: CreateDataSourceTableAsSelectCommand
-        if !BackendsApiManager.getSettings.skipNativeCtas(command) =>
-        command.table.provider.filter(GlutenFormatFactory.isRegistered)
-      case command: InsertIntoHadoopFsRelationCommand
-        if !BackendsApiManager.getSettings.skipNativeInsertInto(command) =>
-        command.fileFormat match {
-          case register: DataSourceRegister
-            if GlutenFormatFactory.isRegistered(register.shortName()) =>
-            Some(register.shortName())
-          case _ => None
+      case command: OmniCreateDataSourceTableAsSelectCommand =>
+        // Spark keeps the provider string exactly as written in the SQL (e.g. "ORC"
+        // for `USING ORC`), while GlutenFormatFactory keys are lowercase.
+        val format = command.table.provider
+          .map(_.toLowerCase(Locale.ROOT))
+          .filter(GlutenFormatFactory.isRegistered)
+        if (format.isEmpty) {
+          logFallback(
+            session,
+            command.getClass.getSimpleName,
+            s"provider=${command.table.provider} of table ${command.table.identifier} " +
+              "is not eligible for native write")
         }
-      case command: OmniInsertIntoHadoopFsRelationCommand =>
-        command.fileFormat match {
-          case register: DataSourceRegister
-            if GlutenFormatFactory.isRegistered(register.shortName()) =>
-            Some(register.shortName())
-          case _ => None
-        }
-      case command: OmniInsertIntoHiveTable =>
-        command.table.storage.outputFormat
+        format
+      case command: OmniInsertIntoHiveDirCommand =>
+        val format = command.storage.outputFormat
           .flatMap(formatMapping.get)
           .filter(GlutenFormatFactory.isRegistered)
-      case _ =>
-        SparkShimLoader.getSparkShims.getNativeWriteFormatForHiveCommand(
+        if (format.isEmpty) {
+          logFallback(
+            session,
+            command.getClass.getSimpleName,
+            s"outputFormat=${command.storage.outputFormat} of directory " +
+              s"${command.storage.locationUri} is not eligible for native write")
+        }
+        format
+      case command: GlutenHiveCtas =>
+        val format = command.tableDesc.storage.outputFormat
+          .flatMap(formatMapping.get)
+          .filter(GlutenFormatFactory.isRegistered)
+        if (format.isEmpty) {
+          logFallback(
+            session,
+            command.getClass.getSimpleName,
+            s"outputFormat=${command.tableDesc.storage.outputFormat} of table " +
+              s"${command.tableDesc.identifier} is not eligible for native write")
+        }
+        format
+      case command: OmniInsertIntoHadoopFsRelationCommand =>
+        val format = command.fileFormat match {
+          case register: DataSourceRegister
+            if GlutenFormatFactory.isRegistered(register.shortName()) =>
+            Some(register.shortName())
+          case other =>
+            logFallback(
+              session,
+              command.getClass.getSimpleName,
+              s"fileFormat=${other.getClass.getSimpleName} is not a registered native format")
+            None
+        }
+        format
+      case command: OmniInsertIntoHiveTable =>
+        val format = command.table.storage.outputFormat
+          .flatMap(formatMapping.get)
+          .filter(GlutenFormatFactory.isRegistered)
+        if (format.isEmpty) {
+          logFallback(
+            session,
+            command.getClass.getSimpleName,
+            s"outputFormat=${command.table.storage.outputFormat} of table " +
+              s"${command.table.identifier} is not eligible for native write")
+        }
+        format
+      // OffloadWrite rewrites eligible commands into Omni commands above. What reaches below are
+      // raw customer Spark commands, e.g. writes kept by FallbackTags (partial fallback): their
+      // writers are customer Spark writers (the shim native branches are unreachable with the
+      // Omni bundle packaging), so never select native format for them. Injecting FakeRowAdaptor
+      // into those row consumers would feed FakeRow into vanilla writers (FakeRow.isNullAt
+      // throws UnsupportedOperationException).
+      case _: InsertIntoHiveTable =>
+        None
+      case _: InsertIntoHiveDirCommand =>
+        None
+      case command if SparkShimLoader.getSparkShims.isSparkHiveCtas(command) =>
+        None
+      case _: CreateDataSourceTableAsSelectCommand =>
+        None
+      case _: InsertIntoHadoopFsRelationCommand =>
+        None
+      case other =>
+        val format = SparkShimLoader.getSparkShims.getNativeWriteFormatForHiveCommand(
           cmd,
           formatMapping,
           GlutenFormatFactory.isRegistered)
+        if (format.isEmpty) {
+          logFallback(
+            session,
+            other.getClass.getSimpleName,
+            "command or output format is not eligible for native write")
+        }
+        format
     }
   }
 
@@ -92,12 +179,16 @@ object OmniGlutenWriterColumnarRules {
       case rc @ DataWritingCommandExec(cmd, child) =>
         // The same thread can set these properties in the last query submission.
         val fields = child.output.toStructType.fields
+        val schemaSupported = BackendsApiManager.getSettings.supportNativeWrite(fields)
+        if (!schemaSupported) {
+          logFallback(
+            session,
+            cmd.getClass.getSimpleName,
+            "unsupported schema: " +
+              fields.map(f => s"${f.name}:${f.dataType.simpleString}").mkString(", "))
+        }
         val format =
-          if (BackendsApiManager.getSettings.supportNativeWrite(fields)) {
-            getNativeFormat(cmd)
-          } else {
-            None
-          }
+          if (schemaSupported) getNativeFormat(session, cmd) else None
         injectSparkLocalProperty(session, format)
         format match {
           case Some(_) =>
@@ -129,7 +220,13 @@ object OmniGlutenWriterColumnarRules {
                   aqe.isSubquery,
                   supportsColumnar = true
                 ))))
-        case other => command
+        case other =>
+          logFallback(
+            session,
+            command.nodeName,
+            s"unexpected child plan ${other.getClass.getSimpleName} under the write command, " +
+              "expect ColumnarToRowExecBase or AdaptiveSparkPlanExec")
+          command
       }
     }
   }
