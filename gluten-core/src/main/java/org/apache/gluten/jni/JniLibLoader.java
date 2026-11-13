@@ -72,11 +72,32 @@ public class JniLibLoader {
     }
 
     public static synchronized void loadFromPath(String libPath) {
-        final File file = new File(libPath);
+        final File file;
+        try {
+            file = new File(libPath).getCanonicalFile();
+        } catch (IOException e) {
+            throw new GlutenException(e);
+        }
         if (!file.isFile() || !file.exists()) {
             throw new GlutenException("library at path: " + libPath + " is not a file or does not exist");
         }
-        loadFromPath0(file.getAbsolutePath());
+        loadFromPath0(file.getPath());
+    }
+
+    /**
+     * Removes a library path from the loader bookkeeping.
+     *
+     * <p>The JVM does not support unloading a native library, so this method only
+     * resets the duplicate-load guard for benchmark/test lifecycle compatibility.
+     *
+     * @param libPath the path of the library to unload
+     */
+    public static synchronized void unloadFromPath(String libPath) {
+        try {
+            LOADED_LIBRARY_PATHS.remove(toRealPath(new File(libPath).getCanonicalPath()));
+        } catch (IOException e) {
+            throw new GlutenException(e);
+        }
     }
 
     public void load(String libPath) {

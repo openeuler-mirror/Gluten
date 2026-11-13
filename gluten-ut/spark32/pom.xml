@@ -26,6 +26,20 @@
 
   <profiles>
     <profile>
+      <id>backends-omni</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.gluten</groupId>
+          <artifactId>backends-omni</artifactId>
+          <version>${project.version}</version>
+          <scope>test</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
       <id>backends-clickhouse</id>
       <activation>
         <activeByDefault>false</activeByDefault>
@@ -109,6 +123,7 @@
               <systemProperties>
                 <clickhouse.lib.path>${clickhouse.lib.path}</clickhouse.lib.path>
                 <tpcds.data.path>${tpcds.data.path}</tpcds.data.path>
+                <omni.lib.path>${omni.lib.path}</omni.lib.path>
               </systemProperties>
             </configuration>
           </execution>

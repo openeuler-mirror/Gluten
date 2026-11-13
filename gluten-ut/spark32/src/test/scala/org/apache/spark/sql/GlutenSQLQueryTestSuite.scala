@@ -619,7 +619,7 @@ class GlutenSQLQueryTestSuite
 
   /** Returns all the files (not directories) in a directory, recursively. */
   protected def listFilesRecursively(path: File): Seq[File] = {
-    val (dirs, files) = path.listFiles().partition(_.isDirectory)
+    val (dirs, files) = Option(path.listFiles()).getOrElse(Array.empty[File]).partition(_.isDirectory)
     // Filter out test files with invalid extensions such as temp files created
     // by vi (.swp), Mac (.DS_Store) etc.
     val filteredFiles = files.filter(_.getName.endsWith(validFileExtensions))
@@ -736,7 +736,9 @@ class GlutenSQLQueryTestSuite
 
   override def beforeAll(): Unit = {
     super.beforeAll()
-    createTestTables(spark)
+    if (supportedList.nonEmpty) {
+      createTestTables(spark)
+    }
     RuleExecutor.resetMetrics()
     CodeGenerator.resetCompileTime()
     WholeStageCodegenExec.resetCodeGenTime()

@@ -199,6 +199,12 @@ object BackendTestSettings {
         .getDeclaredConstructor()
         .newInstance()
         .asInstanceOf[BackendTestSettings]
+    } else if (BackendTestUtils.isOmniBackendLoaded()) {
+      Class
+        .forName("org.apache.gluten.utils.omni.OmniTestSettings")
+        .getDeclaredConstructor()
+        .newInstance()
+        .asInstanceOf[BackendTestSettings]
     } else {
       throw new IllegalStateException()
     }

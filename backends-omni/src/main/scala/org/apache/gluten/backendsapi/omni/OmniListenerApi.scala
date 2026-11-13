@@ -93,7 +93,9 @@ class OmniListenerApi extends ListenerApi with Logging {
     // Initial native backend with configurations.
     val parsed = GlutenConfigUtil.parseConfig(conf.getAll.toMap)
 
-    val libPath = conf.get(GlutenConfig.GLUTEN_LIB_PATH, StringUtils.EMPTY)
+    val libPath = conf.get(
+      GlutenConfig.GLUTEN_LIB_PATH,
+      sys.props.getOrElse("omni.lib.path", StringUtils.EMPTY))
     if (StringUtils.isBlank(libPath)) {
       throw new IllegalArgumentException(
         "Please set spark.gluten.sql.columnar.libpath to enable omni backend")
