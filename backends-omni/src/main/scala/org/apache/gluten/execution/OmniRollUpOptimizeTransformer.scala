@@ -19,6 +19,7 @@ package org.apache.gluten.execution
 import com.google.protobuf.Any
 import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.expression.{AggregateFunctionsBuilder, ConverterUtils, ExpressionConverter, OmniExpressionAdaptor, OmniRegrMeasureBuilder}
+import org.apache.gluten.expression.aggregate.{OmniCollectList, OmniCollectSet}
 import org.apache.gluten.extension.ValidationResult
 import org.apache.gluten.substrait.`type`.{TypeBuilder, TypeNode}
 import org.apache.gluten.substrait.expression.{AggregateFunctionNode, ExpressionBuilder, ExpressionNode}
@@ -164,7 +165,11 @@ case class OmniRollUpOptimizeTransformer(
       classOf[Average],
       classOf[First],
       classOf[Last],
-      classOf[ApproximatePercentile]
+      classOf[ApproximatePercentile],
+      classOf[CollectList],
+      classOf[CollectSet],
+      classOf[OmniCollectList],
+      classOf[OmniCollectSet]
     )
 
     val supported = mode match {

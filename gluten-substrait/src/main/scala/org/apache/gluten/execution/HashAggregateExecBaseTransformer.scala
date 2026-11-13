@@ -44,6 +44,33 @@ abstract class HashAggregateExecBaseTransformer(
   extends BaseAggregateExec
   with UnaryTransformSupport {
 
+  private var sortAggregation = false
+
+  def setSortAggregation(value: Boolean): Unit = {
+    sortAggregation = value
+  }
+
+  def isSortAggregation: Boolean = sortAggregation
+
+  // Must be a def, not a lazy val: sortAggregation is set after construction when the
+  // transformer is created from a SortAggregateExec.
+  // Native sort aggregation assumes input rows are clustered by grouping keys. Without this
+  // declaration the base HashAggregateExec contract (Nil) applies, so post-transform rules
+  // like EnsureLocalSortRequirements never insert a local sort when an offloaded child (e.g.
+  // SortMergeJoin rewritten to ShuffledHashJoin by OmniRewriteJoin) no longer guarantees
+  // ordering.
+  // Contract: one entry per child (SparkPlan default is Seq.fill(children.size)(Nil)).
+  // Returning Nil here breaks EnsureLocalSortRequirements, which zips children with
+  // requiredChildOrdering and then calls withNewChildren, failing with
+  // "Incorrect number of children" for every non-sort hash aggregate.
+  override def requiredChildOrdering: Seq[Seq[SortOrder]] = {
+    if (isSortAggregation) {
+      Seq(groupingExpressions.map(SortOrder(_, Ascending)))
+    } else {
+      Seq.fill(children.size)(Nil)
+    }
+  }
+
   override lazy val allAttributes: AttributeSeq =
     child.output ++ aggregateBufferAttributes ++ aggregateAttributes ++
       aggregateExpressions.flatMap(_.aggregateFunction.inputAggBufferAttributes)
@@ -185,7 +212,7 @@ object HashAggregateExecBaseTransformer {
   }
 
   def from(agg: BaseAggregateExec): HashAggregateExecBaseTransformer = {
-    BackendsApiManager.getSparkPlanExecApiInstance
+    val transformer = BackendsApiManager.getSparkPlanExecApiInstance
       .genHashAggregateExecTransformer(
         agg.requiredChildDistributionExpressions,
         agg.groupingExpressions,
@@ -195,6 +222,8 @@ object HashAggregateExecBaseTransformer {
         agg.resultExpressions,
         agg.child
       )
+    transformer.setSortAggregation(agg.isInstanceOf[SortAggregateExec])
+    transformer
   }
 }
 

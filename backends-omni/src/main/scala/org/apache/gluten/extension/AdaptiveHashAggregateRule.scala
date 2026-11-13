@@ -45,6 +45,11 @@ case class AdaptiveHashAggregateRule(session: SparkSession) extends Rule[SparkPl
     func: OmniHashAggregateExecTransformer => SparkPlan): SparkPlan = {
     def transformDown: SparkPlan => SparkPlan = {
       case agg: OmniHashAggregateExecTransformer
+        if agg.isSortAggregation =>
+        // SortAggregate requires its child ordering. Do not replace it with
+        // adaptive hash aggregation, even when it is a partial aggregate.
+        agg
+      case agg: OmniHashAggregateExecTransformer
         if !agg.aggregateExpressions.forall(p => p.mode == Partial || p.mode == PartialMerge) =>
         // Not a intermediate agg. Skip.
         agg
