@@ -60,6 +60,8 @@
     <spark.major.version>3</spark.major.version>
     <sparkbundle.version>3.4</sparkbundle.version>
     <spark.version>3.4.3</spark.version>
+    <!-- Modern Spark owns its writer types. Only legacy profiles relocate shim copies. -->
+    <omni.legacy.writer.package>org.apache.gluten.unused.writer</omni.legacy.writer.package>
     <sparkshim.artifactId>spark-sql-columnar-shims-spark34</sparkshim.artifactId>
     <iceberg.version>1.5.0</iceberg.version>
     <delta.package.name>delta-core</delta.package.name>
@@ -294,6 +296,7 @@
         <sparkbundle.version>3.2</sparkbundle.version>
         <sparkshim.artifactId>spark-sql-columnar-shims-spark32</sparkshim.artifactId>
         <spark.version>3.2.0</spark.version>
+        <omni.legacy.writer.package>org.apache.spark.sql.execution.datasources</omni.legacy.writer.package>
         <iceberg.version>1.3.1</iceberg.version>
         <delta.package.name>delta-core</delta.package.name>
         <delta.version>2.0.1</delta.version>
@@ -308,6 +311,7 @@
         <sparkbundle.version>3.3</sparkbundle.version>
         <sparkshim.artifactId>spark-sql-columnar-shims-spark33</sparkshim.artifactId>
         <spark.version>3.3.1</spark.version>
+        <omni.legacy.writer.package>org.apache.spark.sql.execution.datasources</omni.legacy.writer.package>
         <!-- keep using iceberg v1.3.1 for parquet compatibilty. -->
         <iceberg.version>1.3.1</iceberg.version>
         <delta.package.name>delta-core</delta.package.name>

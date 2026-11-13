@@ -82,6 +82,52 @@
           <version>${delta.version}</version>
         </dependency>
       </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>shade-bundle</id>
+                <configuration>
+                  <relocations combine.children="append">
+                    <!-- Keep Spark shim writers private to the Omni bundle during customer Spark fallback. -->
+                    <relocation><pattern>${omni.legacy.writer.package}.FileFormatWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.FileFormatWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.FileFormatDataWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.FileFormatDataWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.EmptyDirectoryDataWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.EmptyDirectoryDataWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.SingleDirectoryDataWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.SingleDirectoryDataWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.BaseDynamicPartitionDataWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.BaseDynamicPartitionDataWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.DynamicPartitionDataSingleWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.DynamicPartitionDataSingleWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.DynamicPartitionDataConcurrentWriter</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.DynamicPartitionDataConcurrentWriter</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.WriteJobDescription</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.WriteJobDescription</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.WriteTaskResult</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.WriteTaskResult</shadedPattern></relocation>
+                    <relocation><pattern>${omni.legacy.writer.package}.ExecutedWriteSummary</pattern><shadedPattern>org.apache.gluten.shaded.omni.spark.sql.execution.datasources.ExecutedWriteSummary</shadedPattern></relocation>
+                  </relocations>
+                  <filters combine.children="append">
+                    <filter>
+                      <artifact>*:*</artifact>
+                      <excludes>
+                        <exclude>org/apache/spark/util/collection/unsafe/sort/UnsafeExternalSorter*.class</exclude>
+                        <exclude>org/apache/spark/memory/MemoryConsumer*.class</exclude>
+                        <exclude>org/apache/spark/memory/TaskMemoryManager*.class</exclude>
+                        <exclude>org/apache/spark/sql/hive/execution/HiveFileFormat*.class</exclude>
+                        <exclude>org/apache/spark/sql/hive/execution/HiveOutputWriter*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/parquet/ParquetFileFormat*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/orc/OrcFileFormat*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/BasicWriteTaskStats*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/BasicWriteTaskStatsTracker*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/BasicWriteJobStatsTracker*.class</exclude>
+                        <exclude>org/apache/spark/sql/execution/datasources/InsertIntoHadoopFsRelationCommand*.class</exclude>
+                      </excludes>
+                    </filter>
+                  </filters>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
     <profile>
       <id>celeborn</id>
@@ -150,12 +196,14 @@
         </configuration>
         <executions>
           <execution>
+            <id>shade-bundle</id>
             <phase>package</phase>
             <goals>
               <goal>shade</goal>
             </goals>
             <configuration>
               <createSourcesJar>true</createSourcesJar>
+
               <relocations>
                 <relocation>
                   <pattern>com.google.protobuf</pattern>

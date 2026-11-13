@@ -22,7 +22,8 @@ import org.apache.spark.sql.hudi.command.InsertIntoHoodieTableCommand
  */
 
 case class OffloadHudiAppend() extends OffloadSingleNode with Logging {
-  override def offload(plan: SparkPlan): SparkPlan = plan match {
+  override def offload(plan: SparkPlan): SparkPlan =
+    if (!OffloadWrite.nativeWriterEnabled) plan else plan match {
     case p if FallbackTags.nonEmpty(p) =>
       p
     case a: AppendDataExec if HudiWriteUtil.supportsWrite(a.write) =>
@@ -37,7 +38,8 @@ case class OffloadHudiAppend() extends OffloadSingleNode with Logging {
 
 /** Hudi Spark SQL INSERT command offload: Hudi extension plans SQL INSERT as a RunnableCommand. */
 case class OffloadHudiInsertIntoCommand() extends OffloadSingleNode {
-  override def offload(plan: SparkPlan): SparkPlan = plan match {
+  override def offload(plan: SparkPlan): SparkPlan =
+    if (!OffloadWrite.nativeWriterEnabled) plan else plan match {
     case p if FallbackTags.nonEmpty(p) =>
       p
     case ExecutedCommandExec(command: InsertIntoHoodieTableCommand) =>
