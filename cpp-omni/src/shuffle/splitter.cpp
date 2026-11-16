@@ -3017,8 +3017,13 @@ uint64_t Splitter::reclaimableBytes() const
         bytes = addReclaimable(bytes, static_cast<uint64_t>(std::max<int64_t>(0, row_bookkeeping_bytes_)));
         return bytes;
     }
+    // Segments whose charge is still pending are real memory an eviction frees,
+    // even though the pool does not show them: count them so a reclaim reaches
+    // the eviction below instead of skipping this writer.
+    const uint64_t memorySpillBytes = static_cast<uint64_t>(
+        std::max<int64_t>(0, memory_spill_bytes_) + std::max<int64_t>(0, memory_spill_uncharged_));
     if (num_row_splited_ == 0) {
-        return static_cast<uint64_t>(std::max<int64_t>(0, memory_spill_bytes_));
+        return memorySpillBytes;
     }
 
     // Count pool-backed allocations which SpillToTmpFile actually destroys.
@@ -3065,7 +3070,7 @@ uint64_t Splitter::reclaimableBytes() const
         }
     }
     // Memory spills are written to disk by a reclaim the raw buffers cannot serve.
-    bytes = addReclaimable(bytes, static_cast<uint64_t>(std::max<int64_t>(0, memory_spill_bytes_)));
+    bytes = addReclaimable(bytes, memorySpillBytes);
     return bytes;
 }
 
@@ -3115,7 +3120,8 @@ int64_t Splitter::reclaim(int64_t targetBytes)
             const int64_t worthEvicting = std::min<int64_t>(
                 std::max<int64_t>(shortfall, 1),
                 omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(1));
-            if (shortfall > 0 && !memory_spills_.empty() && memory_spill_bytes_ >= worthEvicting) {
+            if (shortfall > 0 && !memory_spills_.empty() &&
+                memory_spill_bytes_ + memory_spill_uncharged_ >= worthEvicting) {
                 EvictMemorySpills();
             }
         } else {
@@ -3232,13 +3238,23 @@ void Splitter::ChargeMemorySpills()
     // The raw buffers this segment replaced were just freed, so the charge
     // normally fits the pool's existing reservation. When it does not, keep the
     // bytes pending and charge them from the next Split, outside reclaim.
+    //
+    // AddMemory calls the Spark listener, and Spark may ask this task for
+    // memory back. The charge must not reclaim this writer: a re-entrant
+    // reclaim would add segments, charge or evict the pending bytes itself, and
+    // the outer charge would then bill them a second time for the rest of the
+    // task. So the writer is non-reclaimable for the call, and exactly the
+    // amount that was charged moves from pending to charged.
+    const int64_t pending = memory_spill_uncharged_;
     try {
-        taskMemoryPool_->AddMemory(memory_spill_uncharged_);
-        memory_spill_bytes_ += memory_spill_uncharged_;
-        memory_spill_uncharged_ = 0;
+        NonReclaimableSection nonReclaimable(this);
+        taskMemoryPool_->AddMemory(pending);
     } catch (const std::exception &e) {
-        LogsDebug("ChargeMemorySpills deferred %ld bytes: %s", static_cast<long>(memory_spill_uncharged_), e.what());
+        LogsDebug("ChargeMemorySpills deferred %ld bytes: %s", static_cast<long>(pending), e.what());
+        return;
     }
+    memory_spill_bytes_ += pending;
+    memory_spill_uncharged_ -= pending;
 }
 
 void Splitter::UnchargeMemorySpills()
