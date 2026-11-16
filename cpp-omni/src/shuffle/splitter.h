@@ -131,7 +131,9 @@ class Splitter : public omniruntime::op::SpillableOperator {
     // reclaimCachePool != nullptr: cache each partition with that pool right before writing it.
     int WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool = nullptr);
 
-    int WriteDataFileArrowByRow();
+    // `scratchPool` builds each batch outside the task pool; a reclaim passes one because the
+    // task pool has no headroom left while it spills.
+    int WriteDataFileArrowByRow(OmniMemoryPoolAdapter *scratchPool = nullptr);
 
     std::shared_ptr<Buffer> CaculateSpilledTmpFilePartitionOffsets();
 
@@ -332,6 +334,10 @@ class Splitter : public omniruntime::op::SpillableOperator {
     std::vector<uint32_t> partition_row_batch_count;
     uint64_t total_input_size = 0; // total row size in bytes
     uint32_t expansion = 2; // expansion coefficient
+    // Row shuffle keeps one RowInfo object and one pointer slot per buffered row
+    // outside the partition arenas. These bytes are charged to the task pool
+    // (accounting only; the memory itself stays with operator new).
+    int64_t row_bookkeeping_bytes_ = 0;
 
     std::vector<DataTypePtr> inputDataTypes_;
 
@@ -346,6 +352,9 @@ class Splitter : public omniruntime::op::SpillableOperator {
 
 private:
     int64_t EstimateSplitReservation(VectorBatch& vb);
+    int64_t RowBookkeepingBytes(int32_t incomingRows) const;
+    void ChargeRowBookkeeping(int32_t incomingRows);
+    void TrimRowBookkeeping();
     void ReserveForSplit(VectorBatch& vb, const char *site);
 
     // JNI supplies the full logical schema before the first batch. Direct C++
@@ -416,7 +425,7 @@ public:
 
     int SpillToTmpFile(bool inReclaim = false);
 
-    int SpillToTmpFileByRow();
+    int SpillToTmpFileByRow(bool inReclaim = false);
 
     uint64_t reclaimableBytes() const override;
     int64_t reclaim(int64_t targetBytes) override;
@@ -501,6 +510,7 @@ private:
         // got a chance to flush and clear the cached columnar batches.
         ReleaseVarcharVector();
         partition_rows.clear();
+        TrimRowBookkeeping();
 	partition_arrow_batch_.clear();
 	partition_fixed_width_arrow_buffers_.clear();
 	partition_complex_accumulators_.clear();

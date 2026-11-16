@@ -2342,6 +2342,57 @@ int64_t Splitter::EstimateSplitReservation(VectorBatch& vb)
     return quantized < 0 ? std::numeric_limits<int64_t>::max() : quantized;
 }
 
+// Bytes the row shuffle holds outside the partition arenas once `incomingRows`
+// more rows are buffered: one pointer slot per reserved row and one RowInfo
+// allocation per buffered row. The capacity rule mirrors SplitByRow.
+int64_t Splitter::RowBookkeepingBytes(int32_t incomingRows) const
+{
+    // operator new rounds a RowInfo up to the allocator's 16-byte size classes.
+    constexpr uint64_t rowInfoAllocBytes = (sizeof(RowInfo) + 15) / 16 * 16;
+    const uint64_t incoming = incomingRows > 0 ? static_cast<uint64_t>(incomingRows) : 0;
+    uint64_t slots = 0;
+    uint64_t rows = incoming;
+    for (const auto &partition : partition_rows) {
+        rows += partition.size();
+        uint64_t capacity = partition.capacity();
+        const uint64_t needCapacity = partition.size() + incoming;
+        if (capacity < needCapacity) {
+            capacity = std::max<uint64_t>(capacity * expansion, needCapacity);
+        }
+        slots += capacity;
+    }
+    return static_cast<int64_t>(slots * sizeof(std::unique_ptr<RowInfo>) + rows * rowInfoAllocBytes);
+}
+
+void Splitter::ChargeRowBookkeeping(int32_t incomingRows)
+{
+    if (taskMemoryPool_ == nullptr) {
+        return;
+    }
+    // AddMemory can make Spark reclaim this writer; its spill frees the rows and
+    // the pointer arrays and trims the charge, so size the charge again after it.
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const int64_t delta = RowBookkeepingBytes(incomingRows) - row_bookkeeping_bytes_;
+        if (delta <= 0) {
+            return;
+        }
+        taskMemoryPool_->AddMemory(delta);
+        row_bookkeeping_bytes_ += delta;
+    }
+}
+
+void Splitter::TrimRowBookkeeping()
+{
+    if (taskMemoryPool_ == nullptr || row_bookkeeping_bytes_ <= 0) {
+        return;
+    }
+    const int64_t actual = RowBookkeepingBytes(0);
+    if (row_bookkeeping_bytes_ > actual) {
+        taskMemoryPool_->SubMemory(row_bookkeeping_bytes_ - actual);
+        row_bookkeeping_bytes_ = actual;
+    }
+}
+
 void Splitter::ReserveForSplit(VectorBatch& vb, const char *site)
 {
     if (taskMemoryPool_ == nullptr) {
@@ -2375,6 +2426,9 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
     EnsureInputDataTypes(*vecBatch);
     TIME_NANO_OR_RAISE(total_compute_pid_time_, ComputeAndCountPartitionId(*vecBatch, false));
     ReserveForSplit(*vecBatch, "Splitter::SplitByRow");
+    // Charge the per-row bookkeeping this batch adds while the writer can still
+    // be reclaimed: nothing of the batch is buffered yet, so a spill is safe.
+    ChargeRowBookkeeping(vecBatch->GetRowCount());
     NonReclaimableSection nonReclaimable(this);
     int32_t rowCount = vecBatch->GetRowCount();
     uint64_t batchRowBytes = 0;
@@ -2439,6 +2493,7 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
         const uint64_t batchAvg = (batchRowBytes + rowCount - 1) / static_cast<uint64_t>(rowCount);
         row_estimate_max_avg_bytes_ = std::max(row_estimate_max_avg_bytes_, batchAvg);
     }
+    TrimRowBookkeeping();
 
     // spill
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
@@ -2545,7 +2600,7 @@ int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
     return 0;
 }
 
-int Splitter::WriteDataFileArrowByRow() {
+int Splitter::WriteDataFileArrowByRow(OmniMemoryPoolAdapter *scratchPool) {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
     // Spill files use the final shuffle codec; see WriteDataFileArrow.
@@ -2574,14 +2629,16 @@ int Splitter::WriteDataFileArrowByRow() {
     for (auto pid = 0; pid < num_partitions_; ++pid) {
         auto written = ArrowWriteRowPartition(
             pid, *arrowOut, header, partition_rows,
-            options_.spill_batch_row_num, *arrow_pool_,
+            options_.spill_batch_row_num, scratchPool != nullptr ? *scratchPool : *arrow_pool_,
             /*headerAlreadyWritten=*/true);
         total_bytes_spilled_ += written;
         partition_serialization_size_[pid] = written;
         // 清理该分区的行数据和 arena
         partition_arena_[pid].Reset();
-        partition_rows[pid].clear();
+        // A spill returns memory: free the pointer array as well, not only its rows.
+        std::vector<std::unique_ptr<RowInfo>>().swap(partition_rows[pid]);
     }
+    TrimRowBookkeeping();
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("WriteDataFileArrowByRow Close failed: msg=%s", closeSt.ToString().c_str());
@@ -2867,6 +2924,7 @@ void Splitter::WriteSplitByRow() {
         partition_arena_[pid].Reset();
         partition_rows[pid].clear();
     }
+    TrimRowBookkeeping();
 
     auto writeRowCloseSt = arrowOut->Close();
     if (!writeRowCloseSt.ok()) {
@@ -2955,6 +3013,8 @@ uint64_t Splitter::reclaimableBytes() const
         for (const auto &arena : partition_arena_) {
             bytes = addReclaimable(bytes, arena.ReclaimableBytesOnReset());
         }
+        // A row spill also frees the RowInfo objects and the pointer arrays.
+        bytes = addReclaimable(bytes, static_cast<uint64_t>(std::max<int64_t>(0, row_bookkeeping_bytes_)));
         return bytes;
     }
     if (num_row_splited_ == 0) {
@@ -3059,7 +3119,7 @@ int64_t Splitter::reclaim(int64_t targetBytes)
                 EvictMemorySpills();
             }
         } else {
-            SpillToTmpFileByRow();
+            SpillToTmpFileByRow(true);
             total_input_size = 0;
         }
         isSpill = true;
@@ -3190,9 +3250,10 @@ void Splitter::UnchargeMemorySpills()
     memory_spill_uncharged_ = 0;
 }
 
-int Splitter::SpillToTmpFileByRow() {
+int Splitter::SpillToTmpFileByRow(bool inReclaim) {
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileArrowByRow();
+    // Inside reclaim the task pool has no headroom left: serialize each batch outside it.
+    WriteDataFileArrowByRow(inReclaim ? reclaim_spill_pool_.get() : nullptr);
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     return 0;
@@ -3425,6 +3486,7 @@ int32_t Splitter::PushRowPartitionToRss(int32_t pid)
     partition_lengths_[pid] += written;
     partition_arena_[pid].Reset();
     partition_rows[pid].clear();
+    TrimRowBookkeeping();
     return written;
 }
 
