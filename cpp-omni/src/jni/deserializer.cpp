@@ -27,7 +27,9 @@
 #include "shuffle/arrow_row_deserializer.h"
 #include "memory/omni_task_memory_pool.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 
 using namespace omniruntime::vec;
 
@@ -194,6 +196,19 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
             if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
                 auto dataType = DescriptorToOmniType(desc);
                 vecs[i] = VectorHelper::CreateComplexVector(taskPool, dataType.get(), rowCount);
+            } else if (vectorDataTypeId == OMNI_VARCHAR || vectorDataTypeId == OMNI_CHAR ||
+                       vectorDataTypeId == OMNI_VARBINARY) {
+                // A string column's buffers are [validity, offsets, values]. Size the string buffer
+                // to this block's values instead of the 32 KB default, as
+                // DecompressionStream::columnarShuffleParseArrowBatch does: a block of a few rows
+                // would otherwise pin 32 KB per string column for as long as the vector lives.
+                const std::size_t valuesIdx = bufIdx + 2;
+                const int64_t valuesBytes =
+                    (valuesIdx < arrowBatchBody.buffers.size() && arrowBatchBody.buffers[valuesIdx] != nullptr)
+                    ? arrowBatchBody.buffers[valuesIdx]->size() : 0;
+                const int32_t capacityInBytes = static_cast<int32_t>(std::min<int64_t>(
+                    std::max<int64_t>(valuesBytes, 1), std::numeric_limits<int32_t>::max()));
+                vecs[i] = VectorHelper::CreateFlatVector(taskPool, vectorDataTypeId, rowCount, capacityInBytes);
             } else {
                 vecs[i] = VectorHelper::CreateFlatVector(taskPool, vectorDataTypeId, rowCount);
             }
