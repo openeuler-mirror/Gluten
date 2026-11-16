@@ -16,9 +16,11 @@
  */
 package org.apache.spark.sql.execution.datasources
 
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.datasources.orc.OmniOrcOutputWriter
 import org.apache.gluten.datasources.parquet.OmniParquetOutputWriter
 import org.apache.gluten.datasources.text.OmniTextOutputWriter
+import org.apache.gluten.execution.InternalRowToColumnarBatch
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 import org.apache.spark.internal.Logging
@@ -32,7 +34,8 @@ import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
 import org.apache.spark.sql.execution.datasources.FileFormatWriter.ConcurrentOutputWriterSpec
 import org.apache.spark.sql.execution.metric.{CustomMetrics, SQLMetric}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.StringType
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.{SerializableConfiguration, Utils}
 
 import scala.collection.mutable
@@ -530,14 +533,21 @@ class DynamicPartitionDataConcurrentWriter(
   private val currentWriterId = WriterIndex(None, None)
 
   /**
-   * Columnar input (`FakeRow` batches) cannot fall back to the row sorter, so when the
-   * number of open writers reaches the limit the least recently used writer is closed
-   * instead. A partition whose writer was closed this way continues with the next file
-   * counter when it shows up again, so file names never collide.
+   * Columnar input (`FakeRow` batches) falls back to the sorter the same way rows do: once the
+   * number of open writers reaches the limit, the rest of the input is turned into rows, sorted
+   * on the partition and bucket columns, and written back as columnar batches one partition at
+   * a time. A task therefore writes each partition into at most two files (one from each
+   * phase) per file-size limit, as vanilla Spark does.
    */
-  private var useClock: Long = 0L
-  private val lastUse = mutable.HashMap[WriterIndex, Long]()
-  private val closedFileCounters = mutable.HashMap[WriterIndex, Int]()
+  private var columnarInput: Boolean = false
+  /** True while the batches being written come out of the sorter. */
+  private var writingSortedBatches: Boolean = false
+  /** Rows of the batch in which the limit was reached that were not written before it. */
+  private val overflowRows = mutable.ArrayBuffer[UnsafeRow]()
+  private lazy val toUnsafeRow: InternalRow => UnsafeRow = {
+    val proj = UnsafeProjection.create(description.allColumns, description.allColumns)
+    row => proj(row)
+  }
 
   /**
    * Release resources for all concurrent output writers.
@@ -568,29 +578,7 @@ class DynamicPartitionDataConcurrentWriter(
     if (currentWriterId.partitionValues != nextPartitionValues ||
       currentWriterId.bucketId != nextBucketId) {
       // See a new partition or bucket - write to a new partition dir (or a new bucket file).
-      if (currentWriter != null) {
-        if (!sorted) {
-          // Update writer status in concurrent writers map, because the writer is probably needed
-          // again later for writing other rows.
-          updateCurrentWriterStatusInMap()
-        } else {
-          // Remove writer status in concurrent writers map and release current writer resource,
-          // because the writer is not needed any more.
-          concurrentWriters.remove(currentWriterId)
-          releaseCurrentWriter()
-        }
-      }
-
-      if (isBucketed) {
-        currentWriterId.bucketId = nextBucketId
-      }
-      if (isPartitioned && currentWriterId.partitionValues != nextPartitionValues) {
-        currentWriterId.partitionValues = Some(nextPartitionValues.get.copy())
-        if (!concurrentWriters.contains(currentWriterId)) {
-          statsTrackers.foreach(_.newPartition(currentWriterId.partitionValues.get))
-        }
-      }
-      setupCurrentWriterUsingMap()
+      switchWriter(nextPartitionValues, nextBucketId)
     }
 
     if (description.maxRecordsPerFile > 0 &&
@@ -606,14 +594,20 @@ class DynamicPartitionDataConcurrentWriter(
    * Writes one columnar batch: every maximal run of rows that share a partition (and bucket)
    * goes to that partition's writer as one slice, in input order. The input does not have to be
    * sorted, which is what lets the planner leave out the sort above a dynamic-partition write.
+   *
+   * Once the number of open writers has reached the limit (`sorted`), an unsorted batch is
+   * written only up to its next partition change; the rows after it are kept in `overflowRows`
+   * and `writeWithIterator` sends them, with the rest of the input, through the sorter.
    */
   private def splitWrite(fakeRow: InternalRow): Unit = {
+    columnarInput = true
     val batch = fakeRow.asInstanceOf[FakeRow].batch
     try {
       val numRows = batch.numRows()
       var runStart = 0
       var i = 0
-      while (i < numRows) {
+      var fallBack = false
+      while (i < numRows && !fallBack) {
         val row = batch.getRow(i)
         val nextPartitionValues = if (isPartitioned) Some(getPartitionValues(row)) else None
         val nextBucketId = if (isBucketed) Some(getBucketId(row)) else None
@@ -623,7 +617,11 @@ class DynamicPartitionDataConcurrentWriter(
             writeRecord(fakeRow, runStart, i)
             runStart = i
           }
-          switchWriterForColumnar(nextPartitionValues, nextBucketId)
+          if (sorted && !writingSortedBatches) {
+            fallBack = true
+          } else {
+            switchWriter(nextPartitionValues, nextBucketId)
+          }
         } else if (description.maxRecordsPerFile > 0 &&
           recordsInFile + (i - runStart) >= description.maxRecordsPerFile) {
           if (i > runStart) {
@@ -633,9 +631,16 @@ class DynamicPartitionDataConcurrentWriter(
           renewCurrentWriterIfTooManyRecords(currentWriterId.partitionValues, currentWriterId.bucketId)
           updateCurrentWriterStatusInMap()
         }
-        i += 1
+        if (!fallBack) {
+          i += 1
+        }
       }
-      if (runStart < numRows) {
+      if (fallBack) {
+        while (i < numRows) {
+          overflowRows += toUnsafeRow(batch.getRow(i)).copy()
+          i += 1
+        }
+      } else if (runStart < numRows) {
         writeRecord(fakeRow, runStart, numRows)
       }
     } finally {
@@ -646,66 +651,67 @@ class DynamicPartitionDataConcurrentWriter(
   }
 
   /**
-   * Moves the current writer to the one of the given partition / bucket, opening it when it is
-   * not open yet and closing the least recently used writer first when the limit is reached.
+   * Moves the current writer to the one of the given partition / bucket. Before the limit is
+   * reached every writer stays open in the map; in the sorted phase a partition never comes
+   * back, so the writer that is left is closed.
    */
-  private def switchWriterForColumnar(
+  private def switchWriter(
       nextPartitionValues: Option[UnsafeRow],
       nextBucketId: Option[Int]): Unit = {
     if (currentWriter != null) {
-      updateCurrentWriterStatusInMap()
+      if (!sorted) {
+        // Update writer status in concurrent writers map, because the writer is probably needed
+        // again later for writing other rows.
+        updateCurrentWriterStatusInMap()
+      } else {
+        // Remove writer status in concurrent writers map and release current writer resource,
+        // because the writer is not needed any more.
+        concurrentWriters.remove(currentWriterId)
+        releaseCurrentWriter()
+      }
     }
+
     if (isBucketed) {
       currentWriterId.bucketId = nextBucketId
     }
     if (isPartitioned && currentWriterId.partitionValues != nextPartitionValues) {
       currentWriterId.partitionValues = Some(nextPartitionValues.get.copy())
-      if (!concurrentWriters.contains(currentWriterId) &&
-        !closedFileCounters.contains(currentWriterId)) {
+      if (!concurrentWriters.contains(currentWriterId)) {
         statsTrackers.foreach(_.newPartition(currentWriterId.partitionValues.get))
       }
     }
-    useClock += 1
-    if (concurrentWriters.contains(currentWriterId)) {
-      val status = concurrentWriters(currentWriterId)
-      currentWriter = status.outputWriter
-      recordsInFile = status.recordsInFile
-      fileCounter = status.fileCounter
-    } else {
-      if (concurrentWriters.size >= concurrentOutputWriterSpec.maxWriters) {
-        closeLeastRecentlyUsedWriter()
-      }
-      fileCounter = closedFileCounters.get(currentWriterId).map(_ + 1).getOrElse(0)
-      assert(fileCounter < MAX_FILE_COUNTER,
-        s"File counter $fileCounter is beyond max value $MAX_FILE_COUNTER")
-      renewCurrentWriter(
-        currentWriterId.partitionValues,
-        currentWriterId.bucketId,
-        closeCurrentWriter = false)
-      concurrentWriters.put(
-        currentWriterId.copy(),
-        new WriterStatus(currentWriter, recordsInFile, fileCounter))
-    }
-    lastUse.put(currentWriterId.copy(), useClock)
+    setupCurrentWriterUsingMap()
   }
 
-  private def closeLeastRecentlyUsedWriter(): Unit = {
-    val victim = concurrentWriters.keys.minBy(id => lastUse.getOrElse(id, 0L))
-    val status = concurrentWriters(victim)
-    if (status.outputWriter != null) {
-      try {
-        status.outputWriter.close()
-        statsTrackers.foreach(_.closeFile(status.outputWriter.path()))
-      } finally {
-        status.outputWriter = null
+  /** The rows of one columnar input batch as unsafe rows; the batch is closed after its last row. */
+  private def unsafeRowsOf(fakeRow: InternalRow): Iterator[UnsafeRow] = {
+    val batch = fakeRow.asInstanceOf[FakeRow].batch
+    val numRows = batch.numRows()
+    new Iterator[UnsafeRow] {
+      private var i = 0
+      private var closed = false
+      override def hasNext: Boolean = {
+        if (i >= numRows && !closed) {
+          batch.close()
+          closed = true
+        }
+        i < numRows
+      }
+      override def next(): UnsafeRow = {
+        val row = toUnsafeRow(batch.getRow(i))
+        i += 1
+        row
       }
     }
-    closedFileCounters.put(victim, status.fileCounter)
-    concurrentWriters.remove(victim)
-    lastUse.remove(victim)
-    logInfo(s"Number of concurrent writers reached ${concurrentOutputWriterSpec.maxWriters}; " +
-      s"closed the least recently used one (columnar input has no sort fallback). You may " +
-      s"change the threshold with configuration ${SQLConf.MAX_CONCURRENT_OUTPUT_FILE_WRITERS.key}")
+  }
+
+  /** Sorted rows back as columnar batches, the form the Omni output writers take. */
+  private def columnarBatchesOf(rows: Iterator[InternalRow]): Iterator[ColumnarBatch] = {
+    val schema = StructType(description.allColumns.map(
+      a => StructField(a.name, a.dataType, a.nullable, a.metadata)))
+    // The converter reports into metrics; this conversion is internal to the writer.
+    InternalRowToColumnarBatch.convert(true, new SQLMetric("sum"), new SQLMetric("sum"),
+      new SQLMetric("sum"), GlutenConfig.get.maxBatchSize, schema, rows)
   }
 
   /**
@@ -719,14 +725,27 @@ class DynamicPartitionDataConcurrentWriter(
     }
     CustomMetrics.updateMetrics(currentMetricsValues, customMetrics)
 
-    if (iterator.hasNext) {
+    if (iterator.hasNext || overflowRows.nonEmpty) {
       count = 0L
       clearCurrentWriterStatus()
       val sorter = concurrentOutputWriterSpec.createSorter()
-      val sortIterator = sorter.sort(iterator.asInstanceOf[Iterator[UnsafeRow]])
-      while (sortIterator.hasNext) {
-        writeWithMetrics(sortIterator.next(), count)
-        count += 1
+      if (columnarInput) {
+        // The sorter takes rows and the Omni writers take batches: rows in, batches out.
+        val rows = overflowRows.iterator ++ iterator.flatMap(unsafeRowsOf)
+        val sortIterator = sorter.sort(rows)
+        overflowRows.clear()
+        writingSortedBatches = true
+        val batches = columnarBatchesOf(sortIterator)
+        while (batches.hasNext) {
+          writeWithMetrics(new FakeRow(batches.next()), count)
+          count += 1
+        }
+      } else {
+        val sortIterator = sorter.sort(iterator.asInstanceOf[Iterator[UnsafeRow]])
+        while (sortIterator.hasNext) {
+          writeWithMetrics(sortIterator.next(), count)
+          count += 1
+        }
       }
       CustomMetrics.updateMetrics(currentMetricsValues, customMetrics)
     }
