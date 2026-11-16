@@ -682,11 +682,13 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
   override def maybeCollapseTakeOrderedAndProject(plan: SparkPlan): SparkPlan = {
     // This to-top-n optimization assumes exchange operators were already placed in input plan.
     plan.transformUp {
-      case p @ LimitExecTransformer(SortExecTransformer(sortOrder, _, child, _), 0, count) =>
+      case p @ LimitExecTransformer(SortExecTransformer(sortOrder, _, child, _), offset, count)
+          if offset == 0 || (offset > 0 && offset <= Int.MaxValue - count) =>
         val global = child.outputPartitioning.satisfies(AllTuples)
-        val topN = OmniTopNTransformer(count, sortOrder, global, child)
+        val topN = OmniTopNTransformer(count + offset, sortOrder, global, child)
         if (topN.doValidate().ok()) {
-          topN
+          // TopN retains the candidates, and FetchRel applies the offset.
+          if (offset == 0) topN else p.copy(child = topN)
         } else {
           p
         }

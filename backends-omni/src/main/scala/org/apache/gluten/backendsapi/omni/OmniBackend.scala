@@ -240,6 +240,7 @@ object OmniBackendSettings extends BackendSettingsApi {
   override def supportAppendDataExec(): Boolean = true
 
   override def supportSortExec(): Boolean = true
+  override def supportTopKOffset(): Boolean = true
 
   override def supportExpandExec(): Boolean = true
   

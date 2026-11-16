@@ -68,7 +68,7 @@ case class TakeOrderedAndProjectExecTransformer(
   }
 
   override protected def doValidateInternal(): ValidationResult = {
-    if (offset != 0) {
+    if (offset != 0 && !BackendsApiManager.getSettings.supportTopKOffset()) {
       return ValidationResult.failed(s"Native TopK does not support offset: $offset")
     }
 
@@ -116,30 +116,28 @@ case class TakeOrderedAndProjectExecTransformer(
         }
       }
 
-      val hasShuffle = childRDDPartsNum == 1
-      val limitBeforeShuffleOffset = if (hasShuffle) {
-        // Local limit does not need offset
-        0
-      } else {
-        offset
-      }
+      val needsShuffle = childRDDPartsNum > 1
+      // The Spark shim passes the output count after applying the offset. Each partition
+      // must retain enough candidates for the final TopK to apply the offset globally.
+      val localOffset = if (needsShuffle) 0 else offset
+      val localCount = if (needsShuffle) limit + offset else limit
       // The child should have been replaced by ColumnarCollapseTransformStages.
       val limitBeforeShuffle = child match {
         case wholeStage: WholeStageTransformer =>
           // remove this WholeStageTransformer, put the new sort, limit and project
           // into a new whole stage.
           val localSortPlan = withLocalSort(wholeStage.child)
-          LimitExecTransformer(localSortPlan, limitBeforeShuffleOffset, limit)
+          LimitExecTransformer(localSortPlan, localOffset, localCount)
         case other =>
           // if the child it is not WholeStageTransformer, add the adapter first
           // so that, later we can wrap WholeStageTransformer.
           val localSortPlan = withLocalSort(
             ColumnarCollapseTransformStages.wrapInputIteratorTransformer(other))
-          LimitExecTransformer(localSortPlan, limitBeforeShuffleOffset, limit)
+          LimitExecTransformer(localSortPlan, localOffset, localCount)
       }
       val transformStageCounter: AtomicInteger =
         ColumnarCollapseTransformStages.transformStageCounter
-      val finalLimitPlan = if (hasShuffle) {
+      val finalLimitPlan = if (!needsShuffle) {
         limitBeforeShuffle
       } else {
         val limitStagePlan =
