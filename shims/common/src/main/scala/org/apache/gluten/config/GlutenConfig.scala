@@ -519,6 +519,9 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def omniColumnarSpillMemoryFraction: Double = conf.getConf(COLUMNAR_OMNI_SPILL_MEMORY_FRACTION)
 
+  def omniColumnarShuffleExecutorSpillMemoryFraction: Option[Double] =
+    conf.getConf(COLUMNAR_OMNI_SHUFFLE_EXECUTOR_SPILL_MEMORY_FRACTION)
+
   def enableOmniExpCheck : Boolean = conf.getConf(ENABLE_OMNI_EXP_CHECK)
 
   def enableOmniUnixTimeFunc: Boolean = conf.getConf(ENABLE_OMNI_UNIXTIME_FUNCTION)
@@ -2491,10 +2494,21 @@ object GlutenConfig {
   val COLUMNAR_OMNI_SPILL_MEMORY_FRACTION =
     buildConf("spark.gluten.sql.columnar.backend.omni.memFraction")
       .internal()
-      .doc("Fraction of spark.memory.offHeap.size used as the spill threshold, in (0, 1].")
+      .doc("Fraction of spark.memory.offHeap.size used as the hash aggregation and window " +
+        "spill threshold, in (0, 1].")
       .doubleConf
       .checkValue(v => v > 0 && v <= 1, "Spill memory fraction must be in (0, 1]")
       .createWithDefault(0.9)
+
+  val COLUMNAR_OMNI_SHUFFLE_EXECUTOR_SPILL_MEMORY_FRACTION =
+    buildConf("spark.gluten.sql.columnar.backend.omni.shuffleExecutorSpillMemFraction")
+      .internal()
+      .doc("Fraction of spark.memory.offHeap.size, in (0, 1]. When the executor's accounted " +
+        "off-heap memory exceeds it, columnar shuffle writers spill on every split batch. " +
+        "Unset disables the executor-level shuffle spill; the task-level threshold still applies.")
+      .doubleConf
+      .checkValue(v => v > 0 && v <= 1, "Shuffle executor spill memory fraction must be in (0, 1]")
+      .createOptional
 
   val ENABLE_OMNI_AGGREGATION_SPILL =
     buildConf("spark.gluten.sql.columnar.backend.omni.aggregationSpillEnabled")

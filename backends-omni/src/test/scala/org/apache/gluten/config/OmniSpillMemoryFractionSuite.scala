@@ -52,4 +52,31 @@ class OmniSpillMemoryFractionSuite extends AnyFunSuite {
       }
     }
   }
+
+  test("shuffle executor spill fraction is unset by default") {
+    val conf = new GlutenConfig(new SQLConf)
+    assert(conf.omniColumnarShuffleExecutorSpillMemoryFraction.isEmpty)
+  }
+
+  test("shuffle executor spill fraction is independent of memFraction") {
+    val sqlConf = new SQLConf
+    sqlConf.setConfString(GlutenConfig.COLUMNAR_OMNI_SPILL_MEMORY_FRACTION.key, "0.5")
+    assert(new GlutenConfig(sqlConf).omniColumnarShuffleExecutorSpillMemoryFraction.isEmpty)
+    sqlConf.setConfString(
+      GlutenConfig.COLUMNAR_OMNI_SHUFFLE_EXECUTOR_SPILL_MEMORY_FRACTION.key, "0.95")
+    val conf = new GlutenConfig(sqlConf)
+    assert(conf.omniColumnarShuffleExecutorSpillMemoryFraction.contains(0.95))
+    assert(conf.omniColumnarSpillMemoryFraction == 0.5)
+  }
+
+  test("shuffle executor spill fraction rejects percentages and invalid ratios") {
+    val entry = GlutenConfig.COLUMNAR_OMNI_SHUFFLE_EXECUTOR_SPILL_MEMORY_FRACTION
+    Seq("90", "0", "-0.1", "NaN", "Infinity", "0.9 junk").foreach { value =>
+      val conf = new SQLConf
+      intercept[IllegalArgumentException] {
+        conf.setConfString(entry.key, value)
+        conf.getConf(entry)
+      }
+    }
+  }
 }

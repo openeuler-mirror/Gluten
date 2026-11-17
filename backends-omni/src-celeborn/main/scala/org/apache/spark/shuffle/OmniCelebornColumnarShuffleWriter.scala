@@ -53,8 +53,10 @@ class OmniCelebornColumnarShuffleWriter[K, V](
 
   private val shuffleSpillBatchRowNum = columnarConf.omniColumnarShuffleSpillBatchRowNum
   private val shuffleTaskSpillMemoryThreshold = columnarConf.omniColumnarShuffleTaskSpillMemoryThreshold
-  private val shuffleExecutorSpillMemoryThreshold = (columnarConf.omniColumnarSpillMemoryFraction *
-    conf.getSizeAsBytes("spark.memory.offHeap.size", "1g")).toLong
+  private val shuffleExecutorSpillMemoryThreshold =
+    columnarConf.omniColumnarShuffleExecutorSpillMemoryFraction
+      .map(fraction => (fraction * conf.getSizeAsBytes("spark.memory.offHeap.size", "1g")).toLong)
+      .getOrElse(Long.MaxValue)
   private val shuffleCompressBlockSize = columnarConf.omniColumnarShuffleCompressBlockSize
 
   private val handleRow = columnarConf.enableOmniRowShuffle &&
