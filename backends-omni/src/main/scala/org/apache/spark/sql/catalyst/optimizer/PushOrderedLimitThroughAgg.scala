@@ -61,12 +61,13 @@ case class PushOrderedLimitThroughAgg(session: SparkSession)
     val enableColumnarTopNSort: Boolean = columnarConf.enableColumnarTopNSort
 
     plan.transform {
+      // This rewrite rebuilds TakeOrderedAndProjectExec without an offset.
       case orderAndProject @ TakeOrderedAndProjectExecShim(
             limit,
             sortOrder,
             projectList,
             orderAndProjectChild,
-            offset) => {
+            0) => {
         orderAndProjectChild match {
           case finalAgg @ HashAggregateExec(_, _, _, _, _, _, _, _, finalAggChild) =>
             finalAggChild match {
