@@ -145,12 +145,17 @@ namespace spark {
       size_t bytesWritten = 0;
       while (bytesWritten < length) {
         ssize_t actualBytes = ::write(file, static_cast<const char *>(buf) + bytesWritten, length - bytesWritten);
-	if (actualBytes <= 0) {
-          close();
-	  std::string errMsg = "Bad write of " + filename + " since " + strerror(errno) + ",actual write bytes " +
+        if (actualBytes <= 0) {
+          const int writeError = errno;
+          try {
+            close();
+          } catch (...) {
+            // Preserve the write failure if closing the file also fails.
+          }
+          std::string errMsg = "Bad write of " + filename + " since " + strerror(writeError) + ",actual write bytes " +
             std::to_string(actualBytes) + ".";
-	  throw std::runtime_error(errMsg);
-	}
+          throw std::runtime_error(errMsg);
+        }
 	bytesWritten += actualBytes;
       }
     }
@@ -161,8 +166,12 @@ namespace spark {
 
     void close() override {
       if (!closed) {
-        ::close(file);
+        // Never retry a failed close: the descriptor may already have been reused.
         closed = true;
+        if (::close(file) != 0) {
+          const int closeError = errno;
+          throw std::runtime_error("Can't close " + filename + " since " + strerror(closeError));
+        }
       }
     }
   };

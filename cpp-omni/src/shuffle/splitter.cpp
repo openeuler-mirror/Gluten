@@ -2084,7 +2084,7 @@ int Splitter::WriteDataFileArrow() {
     }
 
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         CompressionKind_NONE,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2103,6 +2103,7 @@ int Splitter::WriteDataFileArrow() {
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("WriteDataFileArrow Close failed: msg=%s", closeSt.ToString().c_str());
+        throw std::runtime_error("WriteDataFileArrow close failed: " + closeSt.ToString());
     }
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
     return 0;
@@ -2125,7 +2126,7 @@ int Splitter::WriteDataFileArrowByRow() {
     }
 
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         CompressionKind_NONE,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2148,6 +2149,7 @@ int Splitter::WriteDataFileArrowByRow() {
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("WriteDataFileArrowByRow Close failed: msg=%s", closeSt.ToString().c_str());
+        throw std::runtime_error("WriteDataFileArrowByRow close failed: " + closeSt.ToString());
     }
     return 0;
 }
@@ -2227,7 +2229,7 @@ void Splitter::MergeSpilled() {
     }
 
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2262,6 +2264,7 @@ void Splitter::MergeSpilled() {
     auto mergeCloseSt = arrowOut->Close();
     if (!mergeCloseSt.ok()) {
         LogsError("MergeSpilled Close failed: msg=%s", mergeCloseSt.ToString().c_str());
+        throw std::runtime_error("MergeSpilled close failed: " + mergeCloseSt.ToString());
     }
 
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
@@ -2287,7 +2290,7 @@ void Splitter::MergeSpilledByRow() {
     }
 
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2326,6 +2329,7 @@ void Splitter::MergeSpilledByRow() {
     auto mergeRowCloseSt = arrowOut->Close();
     if (!mergeRowCloseSt.ok()) {
         LogsError("MergeSpilledByRow Close failed: msg=%s", mergeRowCloseSt.ToString().c_str());
+        throw std::runtime_error("MergeSpilledByRow close failed: " + mergeRowCloseSt.ToString());
     }
 }
 
@@ -2350,7 +2354,7 @@ void Splitter::WriteSplit() {
 
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.data_file);
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2368,6 +2372,7 @@ void Splitter::WriteSplit() {
     auto writeSplitCloseSt = arrowOut->Close();
     if (!writeSplitCloseSt.ok()) {
         LogsError("WriteSplit Close failed: msg=%s", writeSplitCloseSt.ToString().c_str());
+        throw std::runtime_error("WriteSplit close failed: " + writeSplitCloseSt.ToString());
     }
     memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
     ReleaseVarcharVector();
@@ -2392,7 +2397,7 @@ void Splitter::WriteSplitByRow() {
     }
 
     auto arrowOut = ArrowOutputStream::Make(
-        outStream.release(),
+        std::move(outStream),
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2414,6 +2419,7 @@ void Splitter::WriteSplitByRow() {
     auto writeRowCloseSt = arrowOut->Close();
     if (!writeRowCloseSt.ok()) {
         LogsError("WriteSplitByRow Close failed: msg=%s", writeRowCloseSt.ToString().c_str());
+        throw std::runtime_error("WriteSplitByRow close failed: " + writeRowCloseSt.ToString());
     }
 }
 
@@ -2563,7 +2569,7 @@ int32_t Splitter::PushColumnarPartitionToRss(int32_t pid)
 
     spark::MemoryOutputStream memOut;
     auto arrowOut = ArrowOutputStream::Make(
-        &memOut,
+        memOut,
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2577,6 +2583,7 @@ int32_t Splitter::PushColumnarPartitionToRss(int32_t pid)
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("PushColumnarPartitionToRss Close failed: pid=%d msg=%s", pid, closeSt.ToString().c_str());
+        throw std::runtime_error("PushColumnarPartitionToRss close failed: " + closeSt.ToString());
     }
 
     const auto& data = memOut.data();
@@ -2605,7 +2612,7 @@ int32_t Splitter::PushRowPartitionToRss(int32_t pid)
 
     spark::MemoryOutputStream memOut;
     auto arrowOut = ArrowOutputStream::Make(
-        &memOut,
+        memOut,
         options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
@@ -2620,6 +2627,7 @@ int32_t Splitter::PushRowPartitionToRss(int32_t pid)
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("PushRowPartitionToRss Close failed: pid=%d msg=%s", pid, closeSt.ToString().c_str());
+        throw std::runtime_error("PushRowPartitionToRss close failed: " + closeSt.ToString());
     }
 
     const auto& data = memOut.data();
