@@ -18,7 +18,9 @@ package org.apache.gluten.extension
 
 import org.apache.gluten.config.GlutenConfig
 
+import org.apache.spark.sql.catalyst.expressions.RowOrdering
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide, JoinSelectionHelper}
+import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, JoinType}
 import org.apache.spark.sql.catalyst.plans.logical.{Join, JoinHint, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.SparkPlan
@@ -174,10 +176,42 @@ case class OmniRewriteJoin() extends Rule[SparkPlan] with JoinSelectionHelper {
           shj
       }
 
-    override def apply(plan: SparkPlan): SparkPlan = plan.transformUp {
-        case smj: SortMergeJoinExec =>
-            getShjBuildSide(smj)
-              .map(buildSide => rewriteJoin(smj, buildSide))
-              .getOrElse(smj)
+    /** SHJ is kept for unsortable keys (SMJ cannot run) and for an explicit SHUFFLE_HASH hint. */
+    private def canRewriteToSmj(shj: ShuffledHashJoinExec): Boolean = {
+        val hintedShj = shj.logicalLink.exists {
+            case join: Join =>
+                hintToShuffleHashJoinLeft(join.hint) || hintToShuffleHashJoinRight(join.hint)
+            case _ => false
+        }
+        !hintedShj && RowOrdering.isOrderable(shj.leftKeys)
+    }
+
+    override def apply(plan: SparkPlan): SparkPlan = {
+        val smallOffHeap = GlutenConfig.get.preferSortMergeJoinOnSmallOffHeap
+        def forceSmj(joinType: JoinType): Boolean = smallOffHeap && (joinType match {
+            case _: ExistenceJoin => true
+            case _ => false
+        })
+
+        plan.transformUp {
+            // Small off-heap existence join: planner or AQE may already have chosen SHJ.
+            // Turn it into SMJ. Broadcast hash join is a different operator and stays.
+            case shj: ShuffledHashJoinExec if forceSmj(shj.joinType) && canRewriteToSmj(shj) =>
+                val smj = SortMergeJoinExec(
+                    shj.leftKeys,
+                    shj.rightKeys,
+                    shj.joinType,
+                    shj.condition,
+                    shj.left,
+                    shj.right,
+                    shj.isSkewJoin)
+                smj.copyTagsFrom(shj)
+                shj.logicalLink.foreach(smj.setLogicalLink)
+                smj
+            case smj: SortMergeJoinExec if !forceSmj(smj.joinType) =>
+                getShjBuildSide(smj)
+                  .map(buildSide => rewriteJoin(smj, buildSide))
+                  .getOrElse(smj)
+        }
     }
 }
