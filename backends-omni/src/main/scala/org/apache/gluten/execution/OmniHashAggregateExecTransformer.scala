@@ -18,6 +18,7 @@ package org.apache.gluten.execution
 
 import com.google.protobuf.StringValue
 import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.expression.{OmniExpressionAdaptor, OmniRegrMeasureBuilder}
 import org.apache.gluten.expression.OmniExpressionAdaptor.{sparkTypeToOmniTypeWithComplex, toOmniAggFunType}
 import org.apache.gluten.expression.aggregate.{OmniHLLAdapter,OmniCollectSet, OmniCollectList}
@@ -35,7 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedEx
 
 import org.apache.spark.internal.Logging
 
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.execution.{ExpandExec, SparkPlan}
 import org.apache.spark.sql.expression.UDFResolver
 import org.apache.spark.sql.hive.HiveUDAFInspector
 import org.apache.spark.sql.types._
@@ -207,7 +208,31 @@ abstract class HashAggregateExecTransformer(
     }
   }
 
+  private def isVariableLengthGroupKey(dataType: DataType): Boolean = dataType match {
+    case StringType | BinaryType => true
+    case _: ArrayType | _: MapType | _: StructType => true
+    case _ => false
+  }
+
+  /**
+   * Rollup, cube and grouping sets multiply the input through Expand, so the aggregation
+   * above sees many distinct groups. With variable-length keys its hash table and key copies
+   * grow inside one batch, and spill is only checked between batches.
+   */
+  private def isExpandAggWithVariableLengthKeys: Boolean = {
+    val overExpand = child match {
+      case _: ExpandExec | _: ExpandExecTransformer => true
+      case _ => false
+    }
+    overExpand && groupingExpressions.exists(e => isVariableLengthGroupKey(e.dataType))
+  }
+
   override protected def doValidateInternal(): ValidationResult = {
+    if (GlutenConfig.get.smallOffHeap && isExpandAggWithVariableLengthKeys) {
+      return ValidationResult.failed(
+        "Off-heap at or below the small-memory threshold: aggregation over Expand with " +
+          "variable-length group keys may not fit that pool, fallback to Spark")
+    }
     val substraitContext = new SubstraitContext
     val operatorId = substraitContext.nextOperatorId(this.nodeName)
     val aggParams = new AggregationParams
