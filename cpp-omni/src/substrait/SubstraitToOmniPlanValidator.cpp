@@ -307,7 +307,7 @@ bool SubstraitToOmniPlanValidator::IsAllowedCast(const DataTypePtr &fromType, co
             }
             break;
         case OMNI_TIMESTAMP:
-            if (fromTypeId != OMNI_DATE32) {
+            if (fromTypeId != OMNI_DATE32 && fromTypeId != OMNI_VARCHAR) {
                 return false;
             }
             break;
