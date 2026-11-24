@@ -81,6 +81,23 @@ class GlutenConfig(conf: SQLConf) extends Logging {
 
   def forceShuffledHashJoin: Boolean = conf.getConf(COLUMNAR_FORCE_SHUFFLED_HASH_JOIN_ENABLED)
 
+  /**
+   * Off-heap is set and at or below the small-memory threshold. Operators that keep a
+   * full hash table in that shared pool should stay on Spark.
+   */
+  def smallOffHeap: Boolean = {
+    val threshold = conf.getConf(COLUMNAR_OMNI_SMALL_OFFHEAP_THRESHOLD)
+    val bytes = offHeapMemorySize
+    threshold > 0 && bytes > 0 && bytes <= threshold
+  }
+
+  /**
+   * Off-heap at or below the small-memory threshold. Existence joins are then planned as
+   * sort-merge join, because their shuffled hash join keeps a full build-side table in
+   * that pool.
+   */
+  def preferSortMergeJoinOnSmallOffHeap: Boolean = smallOffHeap
+
   def enableColumnarSortMergeJoin: Boolean = conf.getConf(COLUMNAR_SORTMERGEJOIN_ENABLED)
 
   def adaptiveJoinEnabled: Boolean = conf.getConf(COLUMNAR_ADAPTIVE_JOIN_ENABLED)
@@ -2725,6 +2742,17 @@ object GlutenConfig {
       "is true.")
     .booleanConf
     .createWithDefault(false)
+
+  val COLUMNAR_OMNI_SMALL_OFFHEAP_THRESHOLD =
+    buildConf("spark.gluten.sql.columnar.backend.omni.smallOffHeapThreshold")
+      .internal()
+      .doc("When the off-heap size is at or below this value, keep operators whose hash table " +
+        "may not fit the off-heap pool away from Omni: existence joins are planned as " +
+        "sort-merge join instead of shuffled hash join, and aggregations over Expand " +
+        "(rollup, cube, grouping sets) with variable-length group keys fall back to Spark. " +
+        "0 disables it.")
+      .bytesConf(ByteUnit.BYTE)
+      .createWithDefaultString("10g")
 
   val COLUMNAR_OMNI_CATALOG_CACHE_SIZE = buildConf("spark.gluten.sql.columnar.backend.omni.catalog.cache.size")
     .internal()

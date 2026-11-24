@@ -39,15 +39,35 @@ object ShuffleJoinStrategy extends Strategy
 
   private var initialized = false
 
+  private def forceSortMergeJoin(joinType: JoinType): Boolean = joinType match {
+    case _: ExistenceJoin => GlutenConfig.get.preferSortMergeJoinOnSmallOffHeap
+    case _ => false
+  }
+
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
       case ExtractEquiJoinKeysShim(joinType, leftKeys, rightKeys, nonEquiCond, left, right, hint)
-        if columnarPreferShuffledHashJoin =>
+        if columnarPreferShuffledHashJoin || forceSortMergeJoin(joinType) =>
         val enable = getBroadcastBuildSide(left, right, joinType, hint, true, conf).isEmpty &&
           !hintToSortMergeJoin(hint) &&
           getShuffleHashJoinBuildSide(left, right, joinType, hint, true, conf).isEmpty &&
           !hintToShuffleReplicateNL(hint) &&
           getBroadcastBuildSide(left, right, joinType, hint, false, conf).isEmpty
-        if (enable) {
+        if (enable && forceSortMergeJoin(joinType)) {
+          // Small off-heap existence join: this would have been SHJ. Emit SMJ instead.
+          // Broadcast joins fail `enable` above and stay with JoinSelection, and so do
+          // joins whose keys cannot be sorted.
+          if (RowOrdering.isOrderable(leftKeys)) {
+            Seq(joins.SortMergeJoinExec(
+              leftKeys,
+              rightKeys,
+              joinType,
+              nonEquiCond,
+              planLater(left),
+              planLater(right)))
+          } else {
+            Nil
+          }
+        } else if (enable) {
           var buildLeft = false
           var buildRight = false
           var joinCountLeft = 0
