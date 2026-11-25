@@ -24,6 +24,7 @@ import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, WindowFunctionNode}
 
 import org.apache.spark.ShuffleDependency
+import org.apache.spark.api.python.EvalPythonExecTransformer
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{GenShuffleWriterParameters, GlutenShuffleWriterWrapper}
@@ -765,5 +766,12 @@ trait SparkPlanExecApi {
   def genHiveTableScanExecTransformer(
                                         scanExec: SparkPlan): BasicScanExecTransformer = {
     HiveTableScanExecTransformer(scanExec)
+  }
+
+  def genEvalPythonExecTransformer(
+      udfs: Seq[PythonUDF],
+      resultAttrs: Seq[Attribute],
+      child: SparkPlan): SparkPlan = {
+    EvalPythonExecTransformer(udfs, resultAttrs, child)
   }
 }

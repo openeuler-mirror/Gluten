@@ -868,7 +868,7 @@ object OffloadOthers {
         case plan: BatchEvalPythonExec =>
           logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
           val child = plan.child
-          EvalPythonExecTransformer(plan.udfs, plan.resultAttrs, child)
+          BackendsApiManager.getSparkPlanExecApiInstance.genEvalPythonExecTransformer(plan.udfs, plan.resultAttrs, child)
         case plan: ArrowEvalPythonExec =>
           logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
           val child = plan.child
