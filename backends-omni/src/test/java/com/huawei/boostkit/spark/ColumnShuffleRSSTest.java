@@ -18,12 +18,16 @@
 
 package com.huawei.boostkit.spark;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
 import com.huawei.boostkit.spark.jni.SparkJniWrapper;
+
 import nova.hetu.omniruntime.type.DataType;
 import nova.hetu.omniruntime.type.DataTypeSerializer;
 import nova.hetu.omniruntime.vector.VecBatch;
+
 import org.junit.Test;
-import static org.junit.Assert.*;
 
 public class ColumnShuffleRSSTest extends ColumnShuffleTest {
     public static final class Pusher {

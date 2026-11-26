@@ -19,7 +19,6 @@ package org.apache.gluten.memory.listener;
 import org.apache.gluten.memory.SimpleMemoryUsageRecorder;
 import org.apache.gluten.memory.memtarget.MemoryTarget;
 import org.apache.gluten.memory.memtarget.ThrowOnOomMemoryTarget.OutOfMemoryException;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

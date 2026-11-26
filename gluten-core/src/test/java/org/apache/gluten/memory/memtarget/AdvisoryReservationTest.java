@@ -23,7 +23,7 @@ public class AdvisoryReservationTest {
   private static class Target implements MemoryTarget {
     long balance;
     long limit = 4;
-    RuntimeException repaymentFailure;
+    IllegalStateException repaymentFailure;
 
     public long borrow(long size) {
       long granted = Math.min(size, limit);

@@ -223,8 +223,9 @@ VectorBatch *CreateVarcharBatch(int32_t numPartitions, int32_t numRows, int32_t 
     auto *strings = new Vector<LargeStringContainer<std::string_view>>(numRows);
     auto *longs = new Vector<int64_t>(numRows);
     std::string value(width, 'v');
+    const int32_t partitions = numPartitions > 0 ? numPartitions : 1;
     for (int32_t row = 0; row < numRows; ++row) {
-        partitionIds->SetValue(row, row % numPartitions);
+        partitionIds->SetValue(row, row % partitions);
         const std::string digits = std::to_string(row);
         value.replace(0, digits.size(), digits);
         strings->SetValue(row, std::string_view(value));
@@ -300,9 +301,10 @@ VectorBatch *CreateIntLongBatch(int32_t numPartitions, int32_t firstRow, int32_t
     auto *partitionIds = new Vector<int32_t>(numRows);
     auto *ints = new Vector<int32_t>(numRows);
     auto *longs = new Vector<int64_t>(numRows);
+    const int32_t partitions = numPartitions > 0 ? numPartitions : 1;
     for (int32_t row = 0; row < numRows; ++row) {
         const int32_t id = firstRow + row;
-        partitionIds->SetValue(row, id % numPartitions);
+        partitionIds->SetValue(row, id % partitions);
         if (nullEvery > 0 && id % nullEvery == 0) {
             ints->SetNull(row);
         } else {

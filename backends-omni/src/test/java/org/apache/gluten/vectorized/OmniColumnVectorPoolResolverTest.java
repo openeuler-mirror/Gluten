@@ -17,8 +17,11 @@
  */
 package org.apache.gluten.vectorized;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.fail;
+
 import org.junit.Test;
-import static org.junit.Assert.*;
 
 public class OmniColumnVectorPoolResolverTest {
     @Test
@@ -35,11 +38,11 @@ public class OmniColumnVectorPoolResolverTest {
 
     @Test
     public void activeTaskResolutionFailureAndErrorPropagateUnchanged() {
-        RuntimeException failure = new IllegalStateException("NMM creation failed");
+        IllegalStateException failure = new IllegalStateException("NMM creation failed");
         try {
             OmniColumnVector.resolveColumnVectorPoolAddress(true, () -> { throw failure; });
             fail("must propagate NMM failure");
-        } catch (RuntimeException caught) {
+        } catch (IllegalStateException caught) {
             assertSame(failure, caught);
         }
         AssertionError error = new AssertionError("JNI linkage failure");

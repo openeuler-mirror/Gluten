@@ -17,7 +17,6 @@
 package org.apache.gluten.memory;
 
 import org.apache.gluten.memory.memtarget.MemoryTarget;
-
 import org.apache.spark.task.TaskResources;
 
 /** Reconcile task usage when a native spiller repays its MemoryTarget directly. */

@@ -2,11 +2,11 @@ package org.apache.gluten.init;
 
 import nova.hetu.omniruntime.memory.MemoryManager;
 import nova.hetu.omniruntime.operator.OmniOperatorFactoryContext;
-import org.apache.gluten.memory.listener.ReservationListener;
-import org.apache.gluten.config.GlutenConfig;
-import org.apache.gluten.utils.ConfigUtil;
 import scala.runtime.BoxedUnit;
 
+import org.apache.gluten.config.GlutenConfig;
+import org.apache.gluten.memory.listener.ReservationListener;
+import org.apache.gluten.utils.ConfigUtil;
 import org.apache.spark.network.util.JavaUtils;
 import org.apache.spark.util.SparkShutdownManagerUtil;
 import org.slf4j.Logger;
@@ -68,21 +68,27 @@ public final class OmniNativeBackendInitializer {
         if (!broadcastCacheInitialized.compareAndSet(false, true)) {
             return;
         }
+        boolean isStarted = false;
         try {
             initializeBroadcastCache0(listener);
-        } catch (RuntimeException e) {
-            broadcastCacheInitialized.set(false);
-            throw e;
+            isStarted = true;
+        } finally {
+            if (!isStarted) {
+                broadcastCacheInitialized.set(false);
+            }
         }
     }
 
     public void shutdownBroadcastCache() {
         if (broadcastCacheInitialized.compareAndSet(true, false)) {
+            boolean isStopped = false;
             try {
                 shutdownBroadcastCache0();
-            } catch (RuntimeException e) {
-                broadcastCacheInitialized.set(true);
-                throw e;
+                isStopped = true;
+            } finally {
+                if (!isStopped) {
+                    broadcastCacheInitialized.set(true);
+                }
             }
         }
     }

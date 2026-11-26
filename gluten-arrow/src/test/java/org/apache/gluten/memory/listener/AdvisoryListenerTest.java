@@ -20,7 +20,6 @@ import org.apache.gluten.memory.SimpleMemoryUsageRecorder;
 import org.apache.gluten.memory.memtarget.MemoryTarget;
 import org.apache.gluten.memory.memtarget.MemoryTargetVisitor;
 import org.apache.gluten.memory.memtarget.ThrowOnOomMemoryTarget;
-
 import org.junit.Assert;
 import org.junit.Test;
 
