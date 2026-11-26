@@ -64,6 +64,11 @@ public final class OmniNativeBackendInitializer {
 
     private native void initialize(byte[] configPlan);
 
+    /**
+     * Starts the executor-level broadcast hash table cache once.
+     *
+     * @param listener listener that accounts the cached tables in Spark storage memory
+     */
     public void initializeBroadcastCache(ReservationListener listener) {
         if (!broadcastCacheInitialized.compareAndSet(false, true)) {
             return;
@@ -79,6 +84,9 @@ public final class OmniNativeBackendInitializer {
         }
     }
 
+    /**
+     * Stops the broadcast hash table cache if it was started.
+     */
     public void shutdownBroadcastCache() {
         if (broadcastCacheInitialized.compareAndSet(true, false)) {
             boolean isStopped = false;

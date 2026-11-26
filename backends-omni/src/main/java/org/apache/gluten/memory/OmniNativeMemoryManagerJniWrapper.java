@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -14,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.gluten.memory;
 
 import org.apache.gluten.memory.listener.ReservationListener;
@@ -22,39 +24,79 @@ import org.apache.gluten.memory.listener.ReservationListener;
  * JNI binding for the Omni backend's per-task `gluten::MemoryManager` (concretely
  * `gluten::OmniMemoryManager`, which owns the per-task `OmniTaskMemoryPool`).
  *
- * Mirrors {@link NativeMemoryManagerJniWrapper} from gluten-arrow exactly — the
- * native methods are registered in `gluten/cpp-omni/src/jni/SparkJniWrapper.cpp`
+ * Mirrors {@link NativeMemoryManagerJniWrapper} from gluten-arrow — the
+ * native methods are registered in `gluten/cpp-omni/src/jni/SparkJniWrapperMemory.cpp`
  * via JNI export names matching the canonical
  * `Java_org_apache_gluten_memory_OmniNativeMemoryManagerJniWrapper_*` pattern.
  *
  * JDK 8 compatible: plain class, private ctor, native decls only.
+ *
+ * @since 2026
  */
 public class OmniNativeMemoryManagerJniWrapper {
-    private OmniNativeMemoryManagerJniWrapper() {}
+    private OmniNativeMemoryManagerJniWrapper() {
+    }
 
+    /**
+     * Creates the native memory manager of a task.
+     *
+     * @param backendType backend name the native factory is registered under
+     * @param listener listener through which native reservations reach Spark
+     * @param sessionConf serialized conf map with what the native construction reads: the
+     *        reservation block size and the telemetry labels of the task
+     * @param taskAttemptId Spark task attempt id, -1 outside a Spark task
+     * @return handle of the native memory manager
+     */
     public static native long create(
-        String backendType,
-        ReservationListener listener,
-        byte[] sessionConf,
-        String runId,
-        String queryId,
-        String round,
-        long taskAttemptId);
+            String backendType, ReservationListener listener, byte[] sessionConf, long taskAttemptId);
 
+    /**
+     * Collects the memory usage statistics of a manager.
+     *
+     * @param handle handle returned by {@link #create}
+     * @return the serialized usage statistics
+     */
     public static native byte[] collectUsage(long handle);
 
-    /** The shared MemoryManager SHRINK contract is unsupported by Omni. */
+    /**
+     * Shrink entry of the shared MemoryManager contract, which Omni does not support.
+     *
+     * @param handle handle returned by {@link #create}
+     * @param size bytes asked for
+     * @return bytes released, always 0
+     */
     public static native long shrink(long handle, long size);
 
-    /** Explicit Omni SPILL request; returns the native repayment offer for JVM reconciliation. */
+    /**
+     * Asks the native side to spill.
+     *
+     * @param handle handle returned by {@link #create}
+     * @param size bytes to free
+     * @return bytes the native side offers to repay, for the JVM to reconcile
+     */
     public static native long spill(long handle, long size);
 
+    /**
+     * Holds a manager so that its pools outlive the objects still allocated from them.
+     *
+     * @param handle handle returned by {@link #create}
+     */
     public static native void hold(long handle);
 
-    /** Reconcile Spark's actual repayment and retain any unrepaid native offer. */
-    public static native void reconcileExternalRepay(
-        long handle, long nativeFreed, long repaid);
+    /**
+     * Reconciles Spark's actual repayment and retains any native offer that was not repaid.
+     *
+     * @param handle handle returned by {@link #create}
+     * @param nativeFreed bytes the native side offered
+     * @param repaid bytes Spark accepted
+     */
+    public static native void reconcileExternalRepay(long handle, long nativeFreed, long repaid);
 
+    /**
+     * Releases a manager.
+     *
+     * @param handle handle returned by {@link #create}
+     */
     public static native void release(long handle);
 
     /**
@@ -69,6 +111,9 @@ public class OmniNativeMemoryManagerJniWrapper {
      * harness / mock); the caller MUST check and fall back to a legacy
      * unbound allocation path. Production (Spark/Gluten path) always
      * returns a valid pool address.
+     *
+     * @param handle handle returned by {@link #create}
+     * @return address of the task pool, 0 when the manager has none
      */
     public static native long getPoolAddress(long handle);
 }

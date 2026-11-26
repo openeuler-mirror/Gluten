@@ -151,7 +151,7 @@ TEST_F(ScopedJniResourcesTest, VersionErrorDoesNotAttachOrDetach)
 } // namespace
 
 extern "C" jlong Java_org_apache_gluten_memory_OmniNativeMemoryManagerJniWrapper_create(
-    JNIEnv*, jclass, jstring, jobject, jbyteArray, jstring, jstring, jstring, jlong);
+    JNIEnv*, jclass, jstring, jobject, jbyteArray, jlong);
 
 TEST(ReservationListenerInitDeathTest, RepeatedFailureAlwaysLeavesJavaException)
 {
@@ -177,7 +177,7 @@ TEST(ReservationListenerInitDeathTest, RepeatedFailureAlwaysLeavesJavaException)
         env.functions = &functions;
         auto create = [&] {
             return Java_org_apache_gluten_memory_OmniNativeMemoryManagerJniWrapper_create(
-                &env, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0);
+                &env, nullptr, nullptr, nullptr, nullptr, 0);
         };
         if (create() != 0 || !pending || lookups != 1 || throws != 0) _exit(1);
         pending = false; // Java caller handled the first lookup exception.

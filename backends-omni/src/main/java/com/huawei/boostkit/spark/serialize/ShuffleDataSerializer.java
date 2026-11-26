@@ -67,13 +67,20 @@ public class ShuffleDataSerializer {
     }
 
     /**
-     * Trailing taskPoolAddress carries the per-task
-     * pool address. Threaded through to ShuffleDataSerializerUtils.parse so the JNI
-     * vector constructors in deserializer.cpp consume it. 0L is the no-task fallback
-     * (native then uses the unaccounted no-pool path).
-     * Note: this method has no callers in the current gluten tree — Path 1 is reached
-     * only via the JNI surface (ShuffleColumnarBatchOutIterator → makeNativeDeserializer
-     * → Decompression.cc), so the parameter is plumbed for symmetry and future-proofing.
+     * Deserializes one shuffle block into a columnar batch.
+     *
+     * The task pool address is handed to the native parse context so the JNI vector
+     * constructors in deserializer.cpp charge the vectors to the task. This method has no
+     * callers in the current gluten tree: the read path goes through
+     * ShuffleColumnarBatchOutIterator, makeNativeDeserializer and Decompression.cc, so the
+     * parameter is plumbed for symmetry.
+     *
+     * @param isRowShuffle whether the block holds row-shuffle data
+     * @param bytes buffer holding the block
+     * @param readSize number of valid bytes in the buffer
+     * @param taskPoolAddress address of the task's Omni memory pool; 0 outside a Spark task,
+     *        where the vectors are created without a pool
+     * @return the deserialized batch
      */
     public static ColumnarBatch deserialize(boolean isRowShuffle, byte[] bytes, int readSize,
                                             long taskPoolAddress) {
@@ -85,7 +92,7 @@ public class ShuffleDataSerializer {
             unsafe.copyMemory(bytes, BYTE_ARRAY_BASE_OFFSET, null, address, readSize);
 
             deserializer = new ShuffleDataSerializerUtils();
-            deserializer.init(address, readSize, isRowShuffle);
+            deserializer.init(address, readSize, isRowShuffle, taskPoolAddress);
             int vecCount = deserializer.getVecCount();
             int rowCount = deserializer.getRowCount();
 
@@ -93,7 +100,7 @@ public class ShuffleDataSerializer {
             int[] precisionArray = new int[vecCount];
             int[] scaleArray = new int[vecCount];
             long[] vecNativeIdArray = new long[vecCount];
-            deserializer.parse(typeIdArray, precisionArray, scaleArray, vecNativeIdArray, taskPoolAddress);
+            deserializer.parse(typeIdArray, precisionArray, scaleArray, vecNativeIdArray);
             vecs = new ColumnVector[vecCount];
             for (int i = 0; i < vecCount; i++) {
                 vecs[i] = buildVec(typeIdArray[i], vecNativeIdArray[i], rowCount, precisionArray[i], scaleArray[i]);

@@ -80,6 +80,10 @@ public class OmniPlanEvaluatorJniWrapper implements RuntimeAware {
      */
     public static native void nativeInvalidateBroadcastHashTable(String buildHashTableId);
 
-    /** Indexed entries, builds, hits, retirements, outstanding Spark storage bytes. */
+    /**
+     * Reads the counters of the executor-level broadcast hash table cache.
+     *
+     * @return indexed entries, builds, hits, retirements, outstanding Spark storage bytes
+     */
     public static native long[] nativeBroadcastCacheSnapshot();
 }

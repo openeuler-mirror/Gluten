@@ -127,18 +127,22 @@ object OmniNativeMemoryManager {
         environmentSwitchEnabled("OMNI_RECLAIM_VERBOSE_SUCCESS")
     private def taskProperty(key: String): String =
       Option(taskContext).flatMap(context => Option(context.getLocalProperty(key))).getOrElse("unknown")
+    // Only what native NMM construction reads: the reservation block size and the
+    // telemetry labels of the task. The whole session conf was parsed and serialized
+    // here for every task without being used.
+    private val nativeCreationConf: java.util.Map[String, String] = {
+      val conf = new java.util.HashMap[String, String]()
+      conf.put(
+        GlutenConfig.COLUMNAR_MEMORY_RESERVATION_BLOCK_SIZE.key,
+        GlutenConfig.get.memoryReservationBlockSize.toString)
+      Seq("omni.telemetry.run_id", "omni.telemetry.qid", "omni.telemetry.round")
+        .foreach(key => conf.put(key, taskProperty(key)))
+      conf
+    }
     private val handle = OmniNativeMemoryManagerJniWrapper.create(
       backendName,
       rl,
-      // Only what native NMM construction reads; the whole session conf was
-      // parsed and serialized here for every task without being used.
-      ConfigUtil.serialize(
-        java.util.Collections.singletonMap(
-          GlutenConfig.COLUMNAR_MEMORY_RESERVATION_BLOCK_SIZE.key,
-          GlutenConfig.get.memoryReservationBlockSize.toString)),
-      taskProperty("omni.telemetry.run_id"),
-      taskProperty("omni.telemetry.qid"),
-      taskProperty("omni.telemetry.round"),
+      ConfigUtil.serialize(nativeCreationConf),
       Option(taskContext).map(_.taskAttemptId()).getOrElse(-1L)
     )
     require(handle > 0L, "Native Omni memory manager creation returned an invalid handle")

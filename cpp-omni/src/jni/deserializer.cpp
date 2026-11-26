@@ -44,19 +44,26 @@ struct ColumnarParseContext {
     const uint8_t* arrowCursor = nullptr;
     int64_t arrowRemaining = 0;
     int32_t arrowCurrentRowCount = 0;  // current batch row count
+    // Task pool the parsed vectors are charged to; nullptr outside a Spark task.
+    omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr;
 };
 
 // Row parse context — returned as jlong handle to Java
 struct RowParseContext {
     std::unique_ptr<RowShuffleBatchContext> arrowCtx;
+    // Task pool the parsed vectors are charged to; nullptr outside a Spark task.
+    omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr;
 };
 
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length)
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress)
 {
     JNI_FUNC_START
     auto* ctx = new ColumnarParseContext();
+    // 0 (no Spark task active) decodes to nullptr; the vector factories then take the
+    // unaccounted no-pool path. Same convention as computePartitionIds and nativeMake.
+    ctx->taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
     const auto* data = reinterpret_cast<const uint8_t*>(address);
 
     // Check for Arrow magic "OMSA"
@@ -141,7 +148,7 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuffleParseBatch(
     JNIEnv *env, jobject obj, jlong address, jintArray typeIdArray, jintArray precisionArray,
-    jintArray scaleArray, jlongArray vecNativeIdArray, jlong taskPoolAddress)
+    jintArray scaleArray, jlongArray vecNativeIdArray)
 {
     auto* ctx = reinterpret_cast<ColumnarParseContext*>(address);
 
@@ -152,12 +159,8 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
     ColumnarBatchBody arrowBatchBody;
 
     omniruntime::vec::BaseVector* vecs[vecCount]{};
-    // Decode the trailing JNI jlong into the
-    // per-task OmniTaskMemoryPool*. 0L sentinel (no Spark task active) decodes
-    // to nullptr; CreateFlatVector/CreateComplexVector then fall back to the
-    // unaccounted no-pool ctor path. Mirrors the convention of
-    // computePartitionIds and nativeMake.
-    auto* taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
+    // Bound by columnarShuffleParseInit; nullptr outside a Spark task.
+    auto* taskPool = ctx->taskPool;
 
     JNI_FUNC_START
 
@@ -227,10 +230,12 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
 
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length)
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress)
 {
     JNI_FUNC_START
     auto* ctx = new RowParseContext();
+    // See columnarShuffleParseInit above.
+    ctx->taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
     const auto* data = reinterpret_cast<const uint8_t*>(address);
 
     // Check for Arrow magic "OMSA"
@@ -294,7 +299,7 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShufflePa
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShuffleParseBatch(
     JNIEnv *env, jobject obj, jlong address, jintArray typeIdArray, jintArray precisionArray,
-    jintArray scaleArray, jlongArray vecNativeIdArray, jlong taskPoolAddress)
+    jintArray scaleArray, jlongArray vecNativeIdArray)
 {
     auto* ctx = reinterpret_cast<RowParseContext*>(address);
     int32_t vecCount = ctx->arrowCtx->vecCnt;
@@ -302,8 +307,8 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShufflePa
 
     omniruntime::vec::BaseVector* vecs[vecCount];
     std::vector<omniruntime::type::DataTypeId> omniDataTypeIds(vecCount);
-    // See columnarShuffleParseBatch above.
-    auto* taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
+    // Bound by rowShuffleParseInit; nullptr outside a Spark task.
+    auto* taskPool = ctx->taskPool;
 
     JNI_FUNC_START
     jint *typeIdArrayElements = env->GetIntArrayElements(typeIdArray, NULL);

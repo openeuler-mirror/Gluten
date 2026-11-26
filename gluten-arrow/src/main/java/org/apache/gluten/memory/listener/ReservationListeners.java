@@ -37,20 +37,29 @@ public final class ReservationListeners {
     return create(name, spiller, mutableStats, false);
   }
 
-  /** Use advisory denials only when the native caller handles reservation rejection. */
-  public static ReservationListener create(
-      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
-      boolean advisory) {
-    if (!TaskResources.inSparkTask()) {
-      throw new IllegalStateException(
-          "Spillable reservation listener must be used in a Spark task.");
+    /**
+     * Creates a spillable listener whose denials can be advisory. Use advisory denials only
+     * when the native caller handles a rejected reservation.
+     *
+     * @param name name of the memory consumer
+     * @param spiller spiller called when Spark asks the consumer to free memory
+     * @param mutableStats usage statistics builders of the consumer's children
+     * @param isAdvisory whether a denial is reported without logging and without a stack trace
+     * @return the listener
+     */
+    public static ReservationListener create(
+            String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
+            boolean isAdvisory) {
+        if (!TaskResources.inSparkTask()) {
+            throw new IllegalStateException(
+                    "Spillable reservation listener must be used in a Spark task.");
+        }
+        return create0(name, spiller, mutableStats, isAdvisory);
     }
-    return create0(name, spiller, mutableStats, advisory);
-  }
 
   private static ReservationListener create0(
       String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
-      boolean advisory) {
+      boolean isAdvisory) {
     // Memory target.
     final double overAcquiredRatio = GlutenConfig.get().memoryOverAcquiredRatio();
     final long reservationBlockSize = GlutenConfig.get().memoryReservationBlockSize();
@@ -67,7 +76,7 @@ public final class ReservationListeners {
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(consumer),
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(overConsumer),
                 overAcquiredRatio),
-            advisory);
+            isAdvisory);
 
     // Listener.
     return new ManagedReservationListener(target, TaskResources.getSharedUsage(), tmm);

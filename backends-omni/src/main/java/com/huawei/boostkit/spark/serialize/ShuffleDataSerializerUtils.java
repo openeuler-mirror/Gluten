@@ -25,12 +25,21 @@ public class ShuffleDataSerializerUtils {
     public ShuffleDataSerializerUtils() {
     }
 
-    public void init(long address, int length, boolean isRowShuffle) {
+    /**
+     * Opens a parse context over one serialized shuffle block.
+     *
+     * @param address native address of the block
+     * @param length length of the block in bytes
+     * @param isRowShuffle whether the block holds row-shuffle data
+     * @param taskPoolAddress address of the task's Omni memory pool, which the parsed vectors are
+     *        charged to; 0 outside a Spark task, where the vectors are created without a pool
+     */
+    public void init(long address, int length, boolean isRowShuffle, long taskPoolAddress) {
         this.isRowShuffle = isRowShuffle;
         if (isRowShuffle) {
-            this.vecBatchAddress = rowShuffleParseInit(address, length);
+            this.vecBatchAddress = rowShuffleParseInit(address, length, taskPoolAddress);
         } else {
-            this.vecBatchAddress = columnarShuffleParseInit(address, length);
+            this.vecBatchAddress = columnarShuffleParseInit(address, length, taskPoolAddress);
         }
     }
 
@@ -58,27 +67,15 @@ public class ShuffleDataSerializerUtils {
         }
     }
 
-    /**
-     * Trailing taskPoolAddress carries the per-task
-     * OmniTaskMemoryPool* address resolved by the caller (typically via
-     * OmniRuntimes.contextInstance("omni-shuffle-reader").getNmmHandle() then
-     * OmniNativeMemoryManagerJniWrapper.getPoolAddress). 0L sentinel = no Spark task
-     * active; native side then falls back to the unaccounted no-pool Vector ctor path.
-     * Mirrors the writer side in OmniShuffleUtil.scala.
-     * Signature must match the deserializer.cpp/.hh JNI definition.
-     */
-    public void parse(int[] typeIdArray, int[] precisionArray, int[] scaleArray, long[] vecNativeIdArray,
-                      long taskPoolAddress) {
+    public void parse(int[] typeIdArray, int[] precisionArray, int[] scaleArray, long[] vecNativeIdArray) {
         if (isRowShuffle) {
-            rowShuffleParseBatch(vecBatchAddress, typeIdArray, precisionArray, scaleArray, vecNativeIdArray,
-                taskPoolAddress);
+            rowShuffleParseBatch(vecBatchAddress, typeIdArray, precisionArray, scaleArray, vecNativeIdArray);
         } else {
-            columnarShuffleParseBatch(vecBatchAddress, typeIdArray, precisionArray, scaleArray, vecNativeIdArray,
-                taskPoolAddress);
+            columnarShuffleParseBatch(vecBatchAddress, typeIdArray, precisionArray, scaleArray, vecNativeIdArray);
         }
     }
 
-    private native long rowShuffleParseInit(long address, int length);
+    private native long rowShuffleParseInit(long address, int length, long taskPoolAddress);
 
     private native int rowShuffleParseVecCount(long vecBatchAddress);
 
@@ -86,10 +83,9 @@ public class ShuffleDataSerializerUtils {
 
     private native void rowShuffleParseClose(long vecBatchAddress);
 
-    private native void rowShuffleParseBatch(long vecBatchAddress, int[] typeIdArray, int[] precisionArray,
-        int[] scaleArray, long[] vecNativeIdArray, long taskPoolAddress);
+    private native void rowShuffleParseBatch(long vecBatchAddress, int[] typeIdArray, int[] precisionArray, int[] scaleArray, long[] vecNativeIdArray);
 
-    private native long columnarShuffleParseInit(long address, int length);
+    private native long columnarShuffleParseInit(long address, int length, long taskPoolAddress);
 
     private native int columnarShuffleParseVecCount(long vecBatchAddress);
 
@@ -97,6 +93,5 @@ public class ShuffleDataSerializerUtils {
 
     private native void columnarShuffleParseClose(long vecBatchAddress);
 
-    private native void columnarShuffleParseBatch(long vecBatchAddress, int[] typeIdArray, int[] precisionArray,
-        int[] scaleArray, long[] vecNativeIdArray, long taskPoolAddress);
+    private native void columnarShuffleParseBatch(long vecBatchAddress, int[] typeIdArray, int[] precisionArray, int[] scaleArray, long[] vecNativeIdArray);
 }

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -14,26 +15,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.gluten.memory;
 
 import org.apache.gluten.memory.memtarget.MemoryTarget;
 import org.apache.spark.task.TaskResources;
 
-/** Reconcile task usage when a native spiller repays its MemoryTarget directly. */
+/**
+ * Reconciles the task's usage record when a native spiller repays its memory target directly.
+ *
+ * @since 2026
+ */
 public final class OmniMemoryRepayment {
-  private OmniMemoryRepayment() {}
-
-  public static Object currentTaskMemoryLock() {
-    // Java can access Spark's taskMemoryManager bridge; Scala restricts it to org.apache.spark.
-    return TaskResources.getLocalTaskContext().taskMemoryManager();
-  }
-
-  static long repayAndRecord(
-      MemoryTarget target, long freed, SimpleMemoryUsageRecorder usage, Object sharedLock) {
-    synchronized (sharedLock) {
-      long repaid = target.repay(freed);
-      usage.inc(-repaid);
-      return repaid;
+    private OmniMemoryRepayment() {
     }
-  }
+
+    /**
+     * Returns the lock that guards the memory accounting of the current task.
+     *
+     * @return the task memory manager of the current task, used as the shared lock
+     */
+    public static Object currentTaskMemoryLock() {
+        // Java can access Spark's taskMemoryManager bridge; Scala restricts it to org.apache.spark.
+        return TaskResources.getLocalTaskContext().taskMemoryManager();
+    }
+
+    static long repayAndRecord(
+            MemoryTarget target, long freed, SimpleMemoryUsageRecorder usage, Object sharedLock) {
+        synchronized (sharedLock) {
+            long repaid = target.repay(freed);
+            usage.inc(-repaid);
+            return repaid;
+        }
+    }
 }

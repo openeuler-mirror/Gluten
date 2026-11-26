@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -29,10 +29,27 @@ import nova.hetu.omniruntime.vector.VecBatch;
 
 import org.junit.Test;
 
+/**
+ * Checks that a remote-shuffle splitter reserves from the task's memory manager and returns it.
+ *
+ * @since 2026
+ */
 public class ColumnShuffleRSSTest extends ColumnShuffleTest {
+    /**
+     * Stand-in for the remote shuffle client: counts what the native splitter pushes.
+     */
     public static final class Pusher {
         int pushes;
         long bytes;
+
+        /**
+         * Receives one pushed block; called from the native splitter.
+         *
+         * @param partition partition id of the block
+         * @param data buffer holding the block
+         * @param length number of valid bytes in the buffer
+         * @return number of bytes accepted
+         */
         public int pushPartitionData(int partition, byte[] data, int length) {
             assertEquals(0, partition);
             assertTrue(length > 0 && length <= data.length);

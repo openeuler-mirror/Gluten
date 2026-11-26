@@ -143,20 +143,20 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
   }
 
   public static class OutOfMemoryException extends RuntimeException {
-    private final boolean advisory;
+    private final boolean isAdvisory;
 
     public OutOfMemoryException(String message) {
-      super(message);
-      this.advisory = false;
+        super(message);
+        this.isAdvisory = false;
     }
 
-    private OutOfMemoryException(String message, boolean advisory) {
-      super(message, null, true, !advisory);
-      this.advisory = advisory;
+    private OutOfMemoryException(String message, boolean isAdvisory) {
+        super(message, null, true, !isAdvisory);
+        this.isAdvisory = isAdvisory;
     }
 
     public boolean isAdvisory() {
-      return advisory;
+        return isAdvisory;
     }
   }
 

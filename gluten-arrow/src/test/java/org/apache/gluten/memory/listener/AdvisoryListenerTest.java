@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -14,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.gluten.memory.listener;
 
 import org.apache.gluten.memory.SimpleMemoryUsageRecorder;
@@ -23,46 +25,57 @@ import org.apache.gluten.memory.memtarget.ThrowOnOomMemoryTarget;
 import org.junit.Assert;
 import org.junit.Test;
 
+/**
+ * Checks that an advisory denial leaves the listener's and the target's balances unchanged.
+ *
+ * @since 2026
+ */
 public class AdvisoryListenerTest {
-  @Test
-  public void denialLeavesSharedAndTargetBalancesUnchanged() {
-    MemoryTarget target = new MemoryTarget() {
-      private long used;
+    @Test
+    public void denialLeavesSharedAndTargetBalancesUnchanged() {
+        MemoryTarget target = new MemoryTarget() {
+            private long used;
 
-      public long borrow(long size) {
-        long granted = Math.min(size, 4);
-        used += granted;
-        return granted;
-      }
+            @Override
+            public long borrow(long size) {
+                long granted = Math.min(size, 4);
+                used += granted;
+                return granted;
+            }
 
-      public long repay(long size) {
-        used -= size;
-        return size;
-      }
+            @Override
+            public long repay(long size) {
+                used -= size;
+                return size;
+            }
 
-      public long usedBytes() { return used; }
+            @Override
+            public long usedBytes() {
+                return used;
+            }
 
-      public <T> T accept(MemoryTargetVisitor<T> visitor) {
-        throw new AssertionError("Unexpected statistics dump");
-      }
-    };
-    SimpleMemoryUsageRecorder usage = new SimpleMemoryUsageRecorder();
-    ReservationListener listener = new ManagedReservationListener(
-        new ThrowOnOomMemoryTarget(target, true), usage, new Object());
-    Assert.assertEquals(4, listener.reserve(4));
-    for (int i = 0; i < 100; i++) {
-      try {
-        listener.reserve(8);
-        Assert.fail("Expected denial");
-      } catch (ThrowOnOomMemoryTarget.OutOfMemoryException e) {
-        Assert.assertTrue(e.isAdvisory());
-        Assert.assertEquals(0, e.getStackTrace().length);
-      }
-      Assert.assertEquals(4, listener.getUsedBytes());
-      Assert.assertEquals(4, usage.current());
+            @Override
+            public <T> T accept(MemoryTargetVisitor<T> visitor) {
+                throw new AssertionError("Unexpected statistics dump");
+            }
+        };
+        SimpleMemoryUsageRecorder usage = new SimpleMemoryUsageRecorder();
+        ReservationListener listener = new ManagedReservationListener(
+                new ThrowOnOomMemoryTarget(target, true), usage, new Object());
+        Assert.assertEquals(4, listener.reserve(4));
+        for (int i = 0; i < 100; i++) {
+            try {
+                listener.reserve(8);
+                Assert.fail("Expected denial");
+            } catch (ThrowOnOomMemoryTarget.OutOfMemoryException e) {
+                Assert.assertTrue(e.isAdvisory());
+                Assert.assertEquals(0, e.getStackTrace().length);
+            }
+            Assert.assertEquals(4, listener.getUsedBytes());
+            Assert.assertEquals(4, usage.current());
+        }
+        Assert.assertEquals(4, listener.unreserve(4));
+        Assert.assertEquals(0, listener.getUsedBytes());
+        Assert.assertEquals(0, usage.current());
     }
-    Assert.assertEquals(4, listener.unreserve(4));
-    Assert.assertEquals(0, listener.getUsedBytes());
-    Assert.assertEquals(0, usage.current());
-  }
 }

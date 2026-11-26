@@ -240,6 +240,33 @@ public class OmniColumnVector extends WritableColumnVector {
     // Construction-time task pool. Only standalone/task-free vectors use a null pool.
     private long taskPoolAddress;
 
+    /**
+     * Creates a vector that is charged to the memory pool of the current task.
+     *
+     * @param capacity number of rows the vector can hold
+     * @param type Spark data type of the column
+     * @param isInitVec whether the native vector is allocated right away
+     */
+    public OmniColumnVector(int capacity, DataType type, boolean isInitVec) {
+        this(capacity, type, isInitVec, resolveColumnVectorPoolAddress());
+    }
+
+    // Batch transfers share the already resolved task pool across all column wrappers.
+    OmniColumnVector(int capacity, DataType type, boolean isInitVec, long taskPoolAddress) {
+        super(capacity, type);
+        this.initVec = isInitVec;
+        bindConstructionTaskPoolAddress(taskPoolAddress);
+        if (this.initVec) {
+            reserveInternal(capacity);
+        }
+        reset();
+    }
+
+    /**
+     * Resolves the memory pool that a vector created on this thread is charged to.
+     *
+     * @return address of the current task's Omni memory pool, 0 outside a Spark task
+     */
     public static long resolveColumnVectorPoolAddress() {
         return resolveColumnVectorPoolAddress(
                 TaskResources.inSparkTask(),
@@ -248,8 +275,15 @@ public class OmniColumnVector extends WritableColumnVector {
                         .getPoolAddress());
     }
 
-    static long resolveColumnVectorPoolAddress(boolean inSparkTask, java.util.function.LongSupplier resolvePool) {
-        if (!inSparkTask) {
+    /**
+     * Resolves the pool address from the task state and a pool supplier.
+     *
+     * @param isInSparkTask whether the calling thread runs a Spark task
+     * @param resolvePool supplies the pool address of the running task
+     * @return the pool address, 0 outside a Spark task
+     */
+    static long resolveColumnVectorPoolAddress(boolean isInSparkTask, java.util.function.LongSupplier resolvePool) {
+        if (!isInSparkTask) {
             return 0L;
         }
         final long pool = resolvePool.getAsLong();
@@ -257,21 +291,6 @@ public class OmniColumnVector extends WritableColumnVector {
             throw new IllegalStateException("Active Spark task has no Omni memory pool");
         }
         return pool;
-    }
-
-    public OmniColumnVector(int capacity, DataType type, boolean initVec) {
-        this(capacity, type, initVec, resolveColumnVectorPoolAddress());
-    }
-
-    // Batch transfers share the already resolved task pool across all column wrappers.
-    OmniColumnVector(int capacity, DataType type, boolean initVec, long taskPoolAddress) {
-        super(capacity, type);
-        this.initVec = initVec;
-        bindConstructionTaskPoolAddress(taskPoolAddress);
-        if (this.initVec) {
-            reserveInternal(capacity);
-        }
-        reset();
     }
 
     private void bindConstructionTaskPoolAddress(long taskPoolAddress) {

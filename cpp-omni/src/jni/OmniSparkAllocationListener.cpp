@@ -239,9 +239,11 @@ void OmniSparkAllocationListener::allocationChanged(int64_t size) {
     auto applyGranted = [this](int64_t granted) {
         int64_t newUsed = (usedBytes_ += granted);
         int64_t prevPeak = peakBytes_.load();
-        while (newUsed > prevPeak && !peakBytes_.compare_exchange_weak(prevPeak, newUsed)) {
+        bool peakSettled = false;
+        while (!peakSettled) {
             // compare_exchange_weak refreshes prevPeak on failure; loop until we win the CAS
             // or another thread has already pushed peak past newUsed.
+            peakSettled = newUsed <= prevPeak || peakBytes_.compare_exchange_weak(prevPeak, newUsed);
         }
     };
 

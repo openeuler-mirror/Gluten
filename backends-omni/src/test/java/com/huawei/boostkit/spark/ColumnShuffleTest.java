@@ -51,10 +51,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Base of the shuffle writer tests: owns the native memory manager the splitters reserve from.
+ *
+ * @since 2025-06-18
+ */
 abstract class ColumnShuffleTest {
     public static String shuffleTestDir = "/tmp/shuffleTests";
 
+    /**
+     * Handle of the native memory manager created for each test.
+     */
     protected long nmmHandle;
+
     private final Set<Long> openSplitters = new LinkedHashSet<>();
     private long reservedBytes;
     private final SparkJniWrapper cleanupWrapper = new SparkJniWrapper();
@@ -89,14 +98,24 @@ abstract class ColumnShuffleTest {
             }
         };
         nmmHandle = OmniNativeMemoryManagerJniWrapper.create(
-                "omni", listener, new byte[0], "shuffle-test", "test", "1", -1L);
+                "omni", listener, new byte[0], -1L);
         assertTrue("Native manager must be valid", nmmHandle > 0);
     }
 
+    /**
+     * Returns what the native side currently holds from the test listener.
+     *
+     * @return reserved bytes
+     */
     protected long reservedNativeBytes() {
         return reservedBytes;
     }
 
+    /**
+     * Creates a wrapper that checks the manager handle and tracks the splitters it opens.
+     *
+     * @return the wrapper
+     */
     protected SparkJniWrapper newTestShuffleWrapper() {
         return new SparkJniWrapper() {
             @Override

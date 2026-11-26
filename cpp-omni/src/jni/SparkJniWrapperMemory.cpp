@@ -155,17 +155,11 @@ bool EnsureReservationListenerInit(JNIEnv *env) {
     return g_reservationListenerInitOk;
 }
 
-std::string JStringToStdString(JNIEnv *env, jstring value, const char *fallback) {
-    if (value == nullptr) {
-        return fallback;
-    }
-    const char *chars = env->GetStringUTFChars(value, nullptr);
-    if (chars == nullptr) {
-        throw std::runtime_error("GetStringUTFChars failed while reading telemetry context");
-    }
-    std::string result(chars);
-    env->ReleaseStringUTFChars(value, chars);
-    return result.empty() ? fallback : result;
+// Value of `key` in the conf sent by the JVM, or `fallback` when it is absent or empty.
+std::string ConfValueOr(const gluten::ConfigMap &conf, const char *key, const std::string &fallback)
+{
+    const auto it = conf.configs().find(key);
+    return (it == conf.configs().end() || it->second.empty()) ? fallback : it->second;
 }
 
 } // namespace
@@ -196,9 +190,6 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
     jstring jBackendType,
     jobject jListener,
     jbyteArray jSessionConf,
-    jstring jRunId,
-    jstring jQueryId,
-    jstring jRound,
     jlong jTaskAttemptId)
 {
     try {
@@ -229,13 +220,14 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
         }
         std::string backendType(backendTypeC);
         env->ReleaseStringUTFChars(jBackendType, backendTypeC);
-        const std::string runId = JStringToStdString(env, jRunId, "unknown");
-        const std::string queryId = JStringToStdString(env, jQueryId, "unknown");
-        const std::string round = JStringToStdString(env, jRound, "unknown");
 
         // The JVM sends only the settings NMM construction needs (not the
-        // whole session conf): currently spark.gluten.memory.reservationBlockSize.
+        // whole session conf): spark.gluten.memory.reservationBlockSize and the
+        // telemetry labels of the task (omni.telemetry.run_id / qid / round).
         int64_t reservationBlockSize = 0;
+        std::string runId = "unknown";
+        std::string queryId = "unknown";
+        std::string round = "unknown";
         if (jSessionConf != nullptr) {
             const jsize length = env->GetArrayLength(jSessionConf);
             std::vector<jbyte> bytes(static_cast<size_t>(length));
@@ -249,6 +241,9 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_memory_OmniNativeMemoryManagerJni
             if (it != conf.configs().end()) {
                 reservationBlockSize = std::stoll(it->second);
             }
+            runId = ConfValueOr(conf, "omni.telemetry.run_id", runId);
+            queryId = ConfValueOr(conf, "omni.telemetry.qid", queryId);
+            round = ConfValueOr(conf, "omni.telemetry.round", round);
         }
 
         // Use promoted gluten::OmniSparkAllocationListener (ExceptionClear +

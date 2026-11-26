@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -13,8 +14,8 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
+
 package org.apache.gluten.vectorized;
 
 import static org.junit.Assert.assertEquals;
@@ -23,6 +24,11 @@ import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
+/**
+ * Checks how a column vector resolves the task pool it is created in.
+ *
+ * @since 2026
+ */
 public class OmniColumnVectorPoolResolverTest {
     @Test
     public void taskFreeResolutionDoesNotCreateManager() {
@@ -40,14 +46,18 @@ public class OmniColumnVectorPoolResolverTest {
     public void activeTaskResolutionFailureAndErrorPropagateUnchanged() {
         IllegalStateException failure = new IllegalStateException("NMM creation failed");
         try {
-            OmniColumnVector.resolveColumnVectorPoolAddress(true, () -> { throw failure; });
+            OmniColumnVector.resolveColumnVectorPoolAddress(true, () -> {
+                throw failure;
+            });
             fail("must propagate NMM failure");
         } catch (IllegalStateException caught) {
             assertSame(failure, caught);
         }
         AssertionError error = new AssertionError("JNI linkage failure");
         try {
-            OmniColumnVector.resolveColumnVectorPoolAddress(true, () -> { throw error; });
+            OmniColumnVector.resolveColumnVectorPoolAddress(true, () -> {
+                throw error;
+            });
             fail("must propagate JVM Error");
         } catch (AssertionError caught) {
             assertSame(error, caught);

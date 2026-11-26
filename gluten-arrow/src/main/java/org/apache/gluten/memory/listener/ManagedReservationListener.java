@@ -52,7 +52,7 @@ public class ManagedReservationListener implements ReservationListener {
       } catch (Exception e) {
         if (!(e instanceof OutOfMemoryException)
             || !((OutOfMemoryException) e).isAdvisory()) {
-          LOG.error("Error reserving memory from target", e);
+            LOG.error("Error reserving memory from target", e);
         }
         throw e;
       }

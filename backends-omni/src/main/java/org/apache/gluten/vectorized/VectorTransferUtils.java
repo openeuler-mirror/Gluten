@@ -79,7 +79,15 @@ public class VectorTransferUtils {
                 vecs, colTypes, batchSize, OmniColumnVector.resolveColumnVectorPoolAddress());
     }
 
-    /** Wraps vectors using the task pool already resolved by the batch producer. */
+    /**
+     * Wraps vectors using the task pool already resolved by the batch producer.
+     *
+     * @param vecs native vectors to wrap
+     * @param colTypes types of the columns
+     * @param batchSize number of rows in the batch
+     * @param taskPoolAddress address of the task's Omni memory pool
+     * @return the columnar batch over the vectors
+     */
     public static ColumnarBatch vectorsToNativeColumnarBatch(
             Vec[] vecs, List<TypeNode> colTypes, int batchSize, long taskPoolAddress) {
         if (taskPoolAddress == 0L && org.apache.spark.task.TaskResources.inSparkTask()) {
