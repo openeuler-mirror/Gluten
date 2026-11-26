@@ -25,18 +25,29 @@ import org.apache.spark.util.Utils;
 
 import java.util.function.Function;
 
+/**
+ * Memory target that throws when the wrapped target cannot grant a reservation in full.
+ *
+ * @since 1.3.0
+ */
 public class ThrowOnOomMemoryTarget implements MemoryTarget {
   private final MemoryTarget target;
-  private final boolean advisory;
+    private final boolean isAdvisory;
 
   public ThrowOnOomMemoryTarget(MemoryTarget target) {
     this(target, false);
   }
 
-  public ThrowOnOomMemoryTarget(MemoryTarget target, boolean advisory) {
-    this.target = target;
-    this.advisory = advisory;
-  }
+    /**
+     * Creates a target whose denials can be advisory.
+     *
+     * @param target target the reservations are taken from
+     * @param isAdvisory whether a denial is reported without logging, statistics or a stack trace
+     */
+    public ThrowOnOomMemoryTarget(MemoryTarget target, boolean isAdvisory) {
+        this.target = target;
+        this.isAdvisory = isAdvisory;
+    }
 
   @Override
   public long borrow(long size) {
@@ -50,8 +61,8 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
     if (granted != 0L) {
       target.repay(granted);
     }
-    if (advisory) {
-      throw new OutOfMemoryException("Spark reservation denied", true);
+    if (isAdvisory) {
+        throw new OutOfMemoryException("Spark reservation denied", true);
     }
     // Log memory usage
     if (TaskResources.inSparkTask()) {
@@ -114,14 +125,13 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
     throw new OutOfMemoryException(errorBuilder.toString());
   }
 
-  private static String getSqlConfStringOrNa(
-      String confKey, Function<String, String> ifPresent) {
-    final SQLConf sqlConf = SQLConf.get();
-    if (!sqlConf.contains(confKey)) {
-      return "N/A";
+    private static String getSqlConfStringOrNa(String confKey, Function<String, String> ifPresent) {
+        final SQLConf sqlConf = SQLConf.get();
+        if (!sqlConf.contains(confKey)) {
+            return "N/A";
+        }
+        return ifPresent.apply(sqlConf.getConfString(confKey));
     }
-    return ifPresent.apply(sqlConf.getConfString(confKey));
-  }
 
   private static String reformatBytes(String in) {
     return Utils.bytesToString(Utils.byteStringAsBytes(in));
@@ -155,6 +165,11 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
         this.isAdvisory = isAdvisory;
     }
 
+    /**
+     * Tells whether the denial is advisory.
+     *
+     * @return true when the caller is expected to handle the denial itself
+     */
     public boolean isAdvisory() {
         return isAdvisory;
     }
