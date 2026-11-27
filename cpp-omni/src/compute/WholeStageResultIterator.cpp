@@ -11,6 +11,10 @@
 #include <nlohmann/json.hpp>
 
 namespace omniruntime {
+namespace {
+constexpr int64_t NANOS_PER_MILLI = 1000000;
+}
+
 std::string BoolToString(const bool value)
 {
     return value ? "true" : "false";
@@ -362,16 +366,22 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kSpilledFiles)[metricIndex] = second->spilledFiles;
         metrics_->get(omniruntime::OmniMetrics::kScanTime)[metricIndex] =
             static_cast<long>(second->totalScanWallNanos);
-        metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] = second->addInputTime.cpuNanos;
-        metrics_->get(omniruntime::OmniMetrics::kGetOutputTime)[metricIndex] = second->getOutputTime.cpuNanos;
+        // Timing metrics on the Java side (createTimingMetric) expect milliseconds,
+        // while native CpuWallTiming carries nanoseconds. Convert once at egress.
+        metrics_->get(omniruntime::OmniMetrics::kAddInputTime)[metricIndex] =
+            second->addInputTime.cpuNanos / NANOS_PER_MILLI;
+        metrics_->get(omniruntime::OmniMetrics::kGetOutputTime)[metricIndex] =
+            second->getOutputTime.cpuNanos / NANOS_PER_MILLI;
         metrics_->get(omniruntime::OmniMetrics::kAddInputCpuCount)[metricIndex] = second->addInputTime.count;
         metrics_->get(omniruntime::OmniMetrics::kGetOutputCpuCount)[metricIndex] = second->getOutputTime.count;
 
         metrics_->get(omniruntime::OmniMetrics::kBuildInputRows)[metricIndex] = second->buildInputRows;
         metrics_->get(omniruntime::OmniMetrics::kBuildNumInputVecBatches)[metricIndex] =
             second->buildNumInputVecBatches;
-        metrics_->get(omniruntime::OmniMetrics::kBuildAddInputTime)[metricIndex] = second->buildAddInputTime.cpuNanos;
-        metrics_->get(omniruntime::OmniMetrics::kBuildGetOutputTime)[metricIndex] = second->buildGetOutputTime.cpuNanos;
+        metrics_->get(omniruntime::OmniMetrics::kBuildAddInputTime)[metricIndex] =
+            second->buildAddInputTime.cpuNanos / NANOS_PER_MILLI;
+        metrics_->get(omniruntime::OmniMetrics::kBuildGetOutputTime)[metricIndex] =
+            second->buildGetOutputTime.cpuNanos / NANOS_PER_MILLI;
 
         metrics_->get(omniruntime::OmniMetrics::kLookupInputRows)[metricIndex] = second->lookupInputRows;
         metrics_->get(omniruntime::OmniMetrics::kLookupNumInputVecBatches)[metricIndex] =
@@ -380,9 +390,9 @@ void WholeStageResultIterator::buildMetricsForNative(
         metrics_->get(omniruntime::OmniMetrics::kLookupNumOutputVecBatches)[metricIndex] =
             second->lookupNumOutputVecBatches;
         metrics_->get(omniruntime::OmniMetrics::kLookupAddInputTime)[metricIndex] =
-            second->lookupAddInputTime.cpuNanos;
+            second->lookupAddInputTime.cpuNanos / NANOS_PER_MILLI;
         metrics_->get(omniruntime::OmniMetrics::kLookupGetOutputTime)[metricIndex] =
-            second->lookupGetOutputTime.cpuNanos;
+            second->lookupGetOutputTime.cpuNanos / NANOS_PER_MILLI;
         metricIndex += 1;
     }
 }
