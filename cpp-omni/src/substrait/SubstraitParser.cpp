@@ -706,6 +706,7 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"log1p", {FUNCTION_OMNI_EXPR_TYPE, "log1p"}},
     {"log2", {FUNCTION_OMNI_EXPR_TYPE, "log2"}},
     {"log10", {FUNCTION_OMNI_EXPR_TYPE, "log10"}},
+    {"ln", {FUNCTION_OMNI_EXPR_TYPE, "ln"}},
     {"log", {FUNCTION_OMNI_EXPR_TYPE, "log"}},
     {"sign", {FUNCTION_OMNI_EXPR_TYPE, "sign"}},
     {"sinh", {FUNCTION_OMNI_EXPR_TYPE, "sinh"}},
