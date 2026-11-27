@@ -553,6 +553,7 @@ SubstraitParser::substraitOmniFunctionMap = {
     {"array", {FUNCTION_OMNI_EXPR_TYPE, "array"}},
     {"get_array_item", {FUNCTION_OMNI_EXPR_TYPE, "get_array_item"}},
     {"round", {FUNCTION_OMNI_EXPR_TYPE, "round"}},
+    {"bround", {FUNCTION_OMNI_EXPR_TYPE, "bround"}},
     {"rlike", {FUNCTION_OMNI_EXPR_TYPE, "RLike"}},
     {"like", {FUNCTION_OMNI_EXPR_TYPE, "LIKE"}},
     {"size", {FUNCTION_OMNI_EXPR_TYPE, "size"}},
