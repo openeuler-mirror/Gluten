@@ -205,6 +205,22 @@ class Splitter {
 
     // Data structures required to handle row formats
     std::vector<std::vector<std::unique_ptr<RowInfo>>> partition_rows; // pid : std::vector<row>
+    // Non-owning descriptors; row bytes remain owned by partition_arena_.
+    struct CachedRowView { uint8_t *row; int32_t length; };
+    std::vector<std::vector<CachedRowView>> partition_row_views_;
+    bool row_info_pool_enabled_ = false;
+    size_t CachedRowCount(int32_t pid) const {
+        return row_info_pool_enabled_ ? partition_row_views_[pid].size() : partition_rows[pid].size();
+    }
+    CachedRowView CachedRowAt(int32_t pid, size_t index) const {
+        if (row_info_pool_enabled_) { return partition_row_views_[pid][index]; }
+        const auto &info = partition_rows[pid][index];
+        return {info->row, info->length};
+    }
+    void ClearCachedRows(int32_t pid) {
+        partition_rows[pid].clear();
+        partition_row_views_[pid].clear();
+    }
     RowBatch *array_partition_rows;
     std::vector<std::vector<RowBatch *>> partition_row_batch;
     std::vector<uint32_t> partition_row_batch_count;
