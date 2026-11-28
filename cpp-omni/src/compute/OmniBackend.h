@@ -22,10 +22,13 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <filesystem>
+#include <cstdint>
 
 #include "util/config/ConfigBase.h"
 
 namespace gluten {
+class AllocationListener;
+class OmniBroadcastMemoryManager;
 // This kind string must be same with OmniBackend#name in java side.
 inline static const std::string kOmniBackendKind{"omni"};
 
@@ -36,6 +39,9 @@ public:
     ~OmniBackend() {}
 
     static void create(const std::unordered_map<std::string, std::string> &conf);
+    static void configureBroadcastCache(std::unique_ptr<AllocationListener> listener);
+    static void shutdownBroadcastCache();
+    static int64_t broadcastCacheOutstandingBytes();
 
 private:
     explicit OmniBackend(const std::unordered_map<std::string, std::string> &conf)
@@ -47,10 +53,11 @@ private:
 
     void initUdf() const;
 
-    static std::unique_ptr<OmniBackend> instance_;
+    static std::shared_ptr<OmniBackend> instance_;
     std::string cachePathPrefix_;
     std::string cacheFilePrefix_;
 
     std::shared_ptr<omniruntime::config::ConfigBase> backendConf_;
+    std::shared_ptr<OmniBroadcastMemoryManager> broadcastMemoryManager_;
 };
 } // namespace gluten

@@ -48,6 +48,7 @@ endif()
 add_subdirectory(shuffle)
 add_subdirectory(utils)
 add_subdirectory(benchmark)
+add_subdirectory(memory)        # Phase 2 Plan 2.1 — OmniSparkAllocationListener tests
 
 # configure
 set(TP_TEST_TARGET tptest)
@@ -55,10 +56,21 @@ set(MY_LINK
         shuffletest
         utilstest
         benchmark_test
+        memorytest              # Phase 2 Plan 2.1
         )
 
 # find gtest package
 find_package(GTest REQUIRED)
+
+# `memorytest` contains an Invocation API test. Because it is linked into
+# tptest through --whole-archive, link libjvm on the final executable as well;
+# relying on a static library's transitive link interface leaves
+# JNI_CreateJavaVM unresolved on OpenEuler/JDK8.
+find_library(TP_JVM_LIB jvm PATHS
+        $ENV{JAVA_HOME}/lib/server
+        $ENV{JAVA_HOME}/jre/lib/${CMAKE_SYSTEM_PROCESSOR}/server
+        $ENV{JAVA_HOME}/lib/${CMAKE_SYSTEM_PROCESSOR}/server
+        NO_DEFAULT_PATH)
 
 # compile a executable file
 add_executable(${TP_TEST_TARGET} ${ROOT_SRCS} ${TEST_ROOT_SRCS})
@@ -76,7 +88,9 @@ target_link_libraries(${TP_TEST_TARGET}
         dl
         arrow
         boostkit-omniop-vector-2.2.0-aarch64
-        securec
+        boundscheck
+        LLVM-15
+        ${TP_JVM_LIB}
         spark_columnar_plugin)
 
 target_compile_options(${TP_TEST_TARGET} PUBLIC -g -O2 -fPIC)

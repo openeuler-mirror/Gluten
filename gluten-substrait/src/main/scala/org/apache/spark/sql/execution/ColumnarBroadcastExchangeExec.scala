@@ -80,7 +80,8 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
               mode,
               child,
               longMetric("numOutputRows"),
-              longMetric("dataSize"))
+              longMetric("dataSize"),
+              broadcastCacheKey)
         }
 
         val broadcasted = GlutenTimeMetric.millis(longMetric("broadcastTime")) {
@@ -125,6 +126,15 @@ case class ColumnarBroadcastExchangeExec(mode: BroadcastMode, child: SparkPlan)
   }
 
   override val runId: UUID = UUID.randomUUID
+
+  // A single materialized exchange has one identity through AQE/reuse wrappers.
+  // The SQL execution scope prevents a later action from adopting old native
+  // cache entries. Calls outside a SQL execution leave caching disabled.
+  def broadcastCacheKey: String = {
+    Option(sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY))
+      .map(id => s"omni-bhj:${sparkContext.applicationId}:$id:$runId")
+      .getOrElse("")
+  }
 
   @transient
   private val timeout: Long = SQLConf.get.broadcastTimeout

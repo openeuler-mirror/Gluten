@@ -36,13 +36,19 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
     jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs, jstring local_dirs_jstr,
     jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
-    jlong executor_spill_memory_threshold);
+    jlong executor_spill_memory_threshold,
+    // Per-task NMM handle. Decl MUST match
+    // the .cpp definition so the extern "C" linkage from this header covers the
+    // function and the symbol exports as C-mangled (Java_..._nativeMake) rather
+    // than C++ mangled (_Z61Java_..._nativeMake...); a mismatch surfaces as
+    // UnsatisfiedLinkError at runtime.
+    jlong nmmHandle, jlong task_offheap_bytes);
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativeMakeForRSS(
     JNIEnv *env, jobject,
     jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
     jstring compression_type_jstr, jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
-    jlong executor_spill_memory_threshold, jobject partitionPusher);
+    jlong executor_spill_memory_threshold, jobject partitionPusher, jlong nmmHandle);
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_split(JNIEnv *env, jobject jObj,
     jlong splitter_id, jlong jVecBatchAddress);
@@ -75,7 +81,7 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
     jobject wrapper, jlong iterHandle);
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env,
-    jobject wrapper, jstring schemaJson);
+    jobject wrapper, jstring schemaJson, jlong taskPoolAddress);
 
 JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_nativeConvertRowToColumnar(
     JNIEnv *env, jobject wrapper, jlong r2cHandle, jlongArray rowLength, jlong memoryAddress);
@@ -84,10 +90,10 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWra
     jobject wrapper, jlong r2cHandle);
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env,
-    jobject wrapper, jlong size);
+    jobject wrapper, jlong taskPoolAddress, jlong size);
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(JNIEnv *env,
-    jobject wrapper, jlong address, jlong size);
+    jobject wrapper, jlong taskPoolAddress, jlong address, jlong size);
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeNext(JNIEnv *env,
     jobject wrapper, jlong iterHandle);
@@ -112,8 +118,11 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_init_OmniNativeBackendInitializer_
 JNIEXPORT void JNICALL Java_org_apache_gluten_udf_UdfJniWrapper_registerFunctionSignatures( // NOLINT
     JNIEnv *env, jclass);
 
+// taskPoolAddress is a raw OmniTaskMemoryPool address obtained from getPoolAddress.
+// Its owning task memory manager must outlive the deserializer.
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_makeNativeDeserializer(JNIEnv *env, jobject obj,
-    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle);
+    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle,
+    jlong taskPoolAddress);
 
 JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_closeDeserializer(JNIEnv *env, jobject obj, jlong handler);
 
@@ -132,6 +141,9 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_ShuffleColumnarBatch
  */
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeInvalidateBroadcastHashTable(
     JNIEnv *env, jclass, jstring buildHashTableId);
+
+JNIEXPORT jlongArray JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeBroadcastCacheSnapshot(
+    JNIEnv *env, jclass);
 
 #ifdef __cplusplus
 }

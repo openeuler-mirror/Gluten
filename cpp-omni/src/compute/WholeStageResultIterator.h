@@ -26,7 +26,6 @@
 #include "common/debug.h"
 #include "plannode/planFragment.h"
 #include "operator/config/operator_config.h"
-#include "memory/memory_manager.h"
 #include "metrics/omni_metrics.h"
 #include "compute/ColumnarBatchIterator.h"
 #include "util/config/ConfigBase.h"
@@ -45,10 +44,13 @@ using FileProperties = omniruntime::FileProperties;
 using RowIdProperties = omniruntime::connector::hive::RowIdProperties;
 using HiveConnector = omniruntime::connector::hive::HiveConnector;
 
+namespace gluten { class MemoryManager; }
+
 namespace omniruntime {
 class WholeStageResultIterator : public ColumnarBatchIterator {
 public:
-    WholeStageResultIterator(MemoryManager *memoryManager, const std::shared_ptr<const PlanNode> &planNode,
+    // Borrowed task memory manager; its lifetime encloses this iterator.
+    WholeStageResultIterator(gluten::MemoryManager *memoryManager, const std::shared_ptr<const PlanNode> &planNode,
         const std::vector<PlanNodeId> &scanNodeIds, const std::vector<PlanNodeId> &streamIds,
         const std::string& spillDir, const std::unordered_map<std::string, std::string> &confMap,
         const std::vector<std::shared_ptr<SplitInfo>>& scanSplitInfos);
@@ -85,7 +87,7 @@ private:
     /// Get the Spark confs to Velox query context.
     std::unordered_map<std::string, std::string> GetQueryContextConf(const std::string &spillDir) const;
 
-    MemoryManager *memoryManager_;
+    gluten::MemoryManager *memoryManager_;
 
     /// Config, task and plan.
     OperatorConfig operatorConfig;

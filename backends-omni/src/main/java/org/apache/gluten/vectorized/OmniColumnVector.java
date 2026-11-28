@@ -19,7 +19,9 @@ package org.apache.gluten.vectorized;
 import nova.hetu.omniruntime.utils.OmniRuntimeException;
 import nova.hetu.omniruntime.vector.*;
 
+import org.apache.gluten.backendsapi.BackendsApiManager;
 import org.apache.gluten.expression.OmniExpressionAdaptor;
+import org.apache.gluten.memory.OmniNativeMemoryManager$;
 import org.apache.gluten.substrait.type.DecimalTypeNode;
 import org.apache.gluten.substrait.type.ListNode;
 import org.apache.gluten.substrait.type.MapNode;
@@ -47,6 +49,7 @@ import org.apache.spark.sql.types.BinaryType;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.types.TimestampType;
+import org.apache.spark.task.TaskResources;
 import org.apache.spark.unsafe.Platform;
 import org.apache.spark.unsafe.types.UTF8String;
 
@@ -98,9 +101,11 @@ public class OmniColumnVector extends WritableColumnVector {
     public static OmniColumnVector[] allocateColumns(
             int capacity, StructField[] fields, boolean initVec) {
         OmniColumnVector[] vectors = new OmniColumnVector[fields.length];
+        long taskPoolAddress = resolveColumnVectorPoolAddress();
         try {
             for (int i = 0; i < fields.length; i++) {
-                vectors[i] = new OmniColumnVector(capacity, fields[i].dataType(), initVec);
+                vectors[i] =
+                        new OmniColumnVector(capacity, fields[i].dataType(), initVec, taskPoolAddress);
             }
             return vectors;
         } catch (Exception e) {
@@ -118,9 +123,11 @@ public class OmniColumnVector extends WritableColumnVector {
 
     public static OmniColumnVector[] allocateColumns(int capacity, TypeNode[] typeNode, boolean initVec) {
         OmniColumnVector[] vectors = new OmniColumnVector[typeNode.length];
+        long taskPoolAddress = resolveColumnVectorPoolAddress();
         try {
             for (int i = 0; i < typeNode.length; i++) {
-                vectors[i] = new OmniColumnVector(capacity, populateVec(typeNode[i]), initVec);
+                vectors[i] =
+                        new OmniColumnVector(capacity, populateVec(typeNode[i]), initVec, taskPoolAddress);
             }
             return vectors;
         } catch (Exception e) {
@@ -230,13 +237,71 @@ public class OmniColumnVector extends WritableColumnVector {
     private boolean initVec;
     private int[] offsets;
 
-    public OmniColumnVector(int capacity, DataType type, boolean initVec) {
+    // Construction-time task pool. Only standalone/task-free vectors use a null pool.
+    private long taskPoolAddress;
+
+    /**
+     * Creates a vector that is charged to the memory pool of the current task.
+     *
+     * @param capacity number of rows the vector can hold
+     * @param type Spark data type of the column
+     * @param isInitVec whether the native vector is allocated right away
+     */
+    public OmniColumnVector(int capacity, DataType type, boolean isInitVec) {
+        this(capacity, type, isInitVec, resolveColumnVectorPoolAddress());
+    }
+
+    // Batch transfers share the already resolved task pool across all column wrappers.
+    OmniColumnVector(int capacity, DataType type, boolean isInitVec, long taskPoolAddress) {
         super(capacity, type);
-        this.initVec = initVec;
+        this.initVec = isInitVec;
+        bindConstructionTaskPoolAddress(taskPoolAddress);
         if (this.initVec) {
             reserveInternal(capacity);
         }
         reset();
+    }
+
+    /**
+     * Resolves the memory pool that a vector created on this thread is charged to.
+     *
+     * @return address of the current task's Omni memory pool, 0 outside a Spark task
+     */
+    public static long resolveColumnVectorPoolAddress() {
+        return resolveColumnVectorPoolAddress(
+                TaskResources.inSparkTask(),
+                () -> OmniNativeMemoryManager$.MODULE$
+                        .contextInstance(BackendsApiManager.getBackendName())
+                        .getPoolAddress());
+    }
+
+    /**
+     * Resolves the pool address from the task state and a pool supplier.
+     *
+     * @param isInSparkTask whether the calling thread runs a Spark task
+     * @param resolvePool supplies the pool address of the running task
+     * @return the pool address, 0 outside a Spark task
+     */
+    static long resolveColumnVectorPoolAddress(boolean isInSparkTask, java.util.function.LongSupplier resolvePool) {
+        if (!isInSparkTask) {
+            return 0L;
+        }
+        final long pool = resolvePool.getAsLong();
+        if (pool == 0L) {
+            throw new IllegalStateException("Active Spark task has no Omni memory pool");
+        }
+        return pool;
+    }
+
+    private void bindConstructionTaskPoolAddress(long taskPoolAddress) {
+        this.taskPoolAddress = taskPoolAddress;
+        // Spark constructs child wrappers in super(), before the parent pool is assigned.
+        // Those wrappers do not allocate yet; bind their pool before reserveInternal can run.
+        if (childColumns != null) {
+            for (int i = 0; i < childColumns.length; i++) {
+                getOmniChild(i).bindConstructionTaskPoolAddress(taskPoolAddress);
+            }
+        }
     }
 
     private Vec getStringDataVec() {
@@ -1276,42 +1341,42 @@ public class OmniColumnVector extends WritableColumnVector {
     @Override
     protected void reserveInternal(int newCapacity) {
         if (type instanceof BooleanType || type instanceof NullType) {
-            booleanDataVec = new BooleanVec(newCapacity);
+            booleanDataVec = new BooleanVec(newCapacity, taskPoolAddress);
         } else if (type instanceof ByteType) {
-            byteDataVec = new ByteVec(newCapacity);
+            byteDataVec = new ByteVec(newCapacity, taskPoolAddress);
         } else if (type instanceof ShortType) {
-            shortDataVec = new ShortVec(newCapacity);
+            shortDataVec = new ShortVec(newCapacity, taskPoolAddress);
         } else if (type instanceof IntegerType) {
-            intDataVec = new IntVec(newCapacity);
+            intDataVec = new IntVec(newCapacity, taskPoolAddress);
         } else if (type instanceof DecimalType) {
             if (DecimalType.is64BitDecimalType(type)) {
-                longDataVec = new LongVec(newCapacity);
+                longDataVec = new LongVec(newCapacity, taskPoolAddress);
             } else {
-                decimal128DataVec = new Decimal128Vec(newCapacity);
+                decimal128DataVec = new Decimal128Vec(newCapacity, taskPoolAddress);
             }
         } else if (type instanceof LongType || type instanceof TimestampType) {
-            longDataVec = new LongVec(newCapacity);
+            longDataVec = new LongVec(newCapacity, taskPoolAddress);
         } else if (type instanceof FloatType) {
-            floatDataVec = new FloatVec(newCapacity);
+            floatDataVec = new FloatVec(newCapacity, taskPoolAddress);
         } else if (type instanceof DoubleType) {
-            doubleDataVec = new DoubleVec(newCapacity);
+            doubleDataVec = new DoubleVec(newCapacity, taskPoolAddress);
         } else if (type instanceof StringType) {
             // need to set with real column size, suppose char(200) utf8
-            charsTypeDataVec = new VarcharVec(newCapacity);
+            charsTypeDataVec = new VarcharVec(newCapacity, taskPoolAddress);
         } else if (type instanceof BinaryType) {
             // need to set with real column size, suppose char(200) utf8
-            charsTypeDataVec = new VarcharVec(newCapacity);
+            charsTypeDataVec = new VarcharVec(newCapacity, taskPoolAddress);
         } else if (type instanceof DateType) {
-            intDataVec = new IntVec(newCapacity);
+            intDataVec = new IntVec(newCapacity, taskPoolAddress);
         } else if (type instanceof ArrayType) {
             nova.hetu.omniruntime.type.ArrayDataType dataType = (nova.hetu.omniruntime.type.ArrayDataType) OmniExpressionAdaptor.sparkTypeToOmniTypeWithComplex(type, Metadata.empty());
-            arrayDataVec = new ArrayVec(dataType, newCapacity, true);
+            arrayDataVec = new ArrayVec(dataType, newCapacity, true, taskPoolAddress);
         } else if (type instanceof MapType){
             nova.hetu.omniruntime.type.MapDataType dataType = (nova.hetu.omniruntime.type.MapDataType) OmniExpressionAdaptor.sparkTypeToOmniTypeWithComplex(type, Metadata.empty());
-            mapDataVec = new MapVec(dataType, newCapacity, true);
+            mapDataVec = new MapVec(dataType, newCapacity, true, taskPoolAddress);
         } else if (type instanceof StructType) {
             nova.hetu.omniruntime.type.StructDataType dataType = (nova.hetu.omniruntime.type.StructDataType) OmniExpressionAdaptor.sparkTypeToOmniTypeWithComplex(type, Metadata.empty());
-            structVec = new StructVec(dataType, newCapacity, true);
+            structVec = new StructVec(dataType, newCapacity, true, taskPoolAddress);
         } else {
             throw new UnsupportedOperationException("reserveInternal is not supported for type:" + type);
         }
@@ -1320,7 +1385,7 @@ public class OmniColumnVector extends WritableColumnVector {
 
     @Override
     protected OmniColumnVector reserveNewColumn(int capacity, DataType type) {
-        return new OmniColumnVector(capacity, type, false);
+        return new OmniColumnVector(capacity, type, false, taskPoolAddress);
     }
 
     public void setChild(WritableColumnVector child, int index) {

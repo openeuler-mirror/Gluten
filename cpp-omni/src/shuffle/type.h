@@ -29,7 +29,10 @@ using namespace omniruntime::mem;
 static constexpr int32_t kDefaultSplitterBufferSize = 4096;
 static constexpr int32_t kDefaultNumSubDirs = 64;
 static constexpr double spillThreshold = 0.9;
-static int64_t offHeapSize = MemoryManager::GetGlobalMemoryLimit();
+// The legacy process-global memory limit query no longer exists; shuffle relies
+// on Spark-side memory accounting. A per-task limit could be read from
+// gluten::OmniMemoryManager if an arbitrator-aware shuffle path needs it.
+inline constexpr int64_t offHeapSize = 0;
 
 struct SplitOptions {
     int32_t buffer_size = kDefaultSplitterBufferSize;
@@ -42,12 +45,21 @@ struct SplitOptions {
     int64_t thread_id = -1;
     int64_t task_attempt_id = -1;
 
-    Allocator *allocator = Allocator::GetAllocator();
+    // SplitOptions is a POD-ish settings struct populated at JNI entry before the
+    // splitter or its task-bound pool exists, so this IIFE-static nullBridge
+    // supplies a no-pool Allocator default. Splitter construction re-binds
+    // .allocator to the task pool when one is available.
+    Allocator *allocator = []() -> Allocator * {
+        static Allocator nullBridge{nullptr};
+        return &nullBridge;
+    }();
 
     uint64_t spill_batch_row_num = 10000; // default value
     uint64_t task_spill_mem_threshold = 2L * 1024 * 1024 * 1024; // default value
     uint64_t executor_spill_mem_threshold = spillThreshold * offHeapSize; // default value
     uint64_t compress_block_size = 64 * 1024; // default value
+    // The task's offheap share (offheap size / task slots); 0 when unknown.
+    int64_t task_offheap_bytes = 0;
 
     bool rss_mode = false;
 

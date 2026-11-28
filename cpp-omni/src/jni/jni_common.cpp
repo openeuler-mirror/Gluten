@@ -21,6 +21,7 @@
 #define THESTRAL_PLUGIN_MASTER_JNI_COMMON_CPP
 
 #include "jni_common.h"
+#include "ScopedJniResources.h"
 #include "io/SparkFile.hh"
 #include "SparkJniWrapper.hh"
 #include "JniUdf.h"
@@ -84,11 +85,15 @@ JniColumnarBatchIterator::JniColumnarBatchIterator(JNIEnv *env, jobject jColumna
 
 JniColumnarBatchIterator::~JniColumnarBatchIterator()
 {
-    JNIEnv *env = nullptr;
-    AttachCurrentThreadAsDaemonOrThrow(vm_, &env);
+    gluten::ScopedJniEnv scope(vm_);
+    JNIEnv *env = scope.get();
+    if (env == nullptr) {
+        // JVM shutdown / failed attachment: do not throw from a destructor.
+        std::fprintf(stderr, "[OMNI-JNI] Unable to release iterator global references: no JNIEnv\n");
+        return;
+    }
     env->DeleteGlobalRef(jColumnarBatchItr_);
     env->DeleteGlobalRef(serializedColumnarBatchIteratorClass_);
-    vm_->DetachCurrentThread();
 }
 
 VectorBatch *JniColumnarBatchIterator::Next()

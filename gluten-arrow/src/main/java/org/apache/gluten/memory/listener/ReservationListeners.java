@@ -34,15 +34,32 @@ public final class ReservationListeners {
 
   public static ReservationListener create(
       String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats) {
-    if (!TaskResources.inSparkTask()) {
-      throw new IllegalStateException(
-          "Spillable reservation listener must be used in a Spark task.");
-    }
-    return create0(name, spiller, mutableStats);
+    return create(name, spiller, mutableStats, false);
   }
 
+    /**
+     * Creates a spillable listener whose denials can be advisory. Use advisory denials only
+     * when the native caller handles a rejected reservation.
+     *
+     * @param name name of the memory consumer
+     * @param spiller spiller called when Spark asks the consumer to free memory
+     * @param mutableStats usage statistics builders of the consumer's children
+     * @param isAdvisory whether a denial is reported without logging and without a stack trace
+     * @return the listener
+     */
+    public static ReservationListener create(
+            String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
+            boolean isAdvisory) {
+        if (!TaskResources.inSparkTask()) {
+            throw new IllegalStateException(
+                    "Spillable reservation listener must be used in a Spark task.");
+        }
+        return create0(name, spiller, mutableStats, isAdvisory);
+    }
+
   private static ReservationListener create0(
-      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats) {
+      String name, Spiller spiller, Map<String, MemoryUsageStatsBuilder> mutableStats,
+      boolean isAdvisory) {
     // Memory target.
     final double overAcquiredRatio = GlutenConfig.get().memoryOverAcquiredRatio();
     final long reservationBlockSize = GlutenConfig.get().memoryReservationBlockSize();
@@ -54,11 +71,12 @@ public final class ReservationListeners {
         MemoryTargets.newConsumer(
             tmm, consumer.name() + ".OverAcquire", Spillers.NOOP, Collections.emptyMap());
     final MemoryTarget target =
-        MemoryTargets.throwOnOom(
+        new ThrowOnOomMemoryTarget(
             MemoryTargets.overAcquire(
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(consumer),
                 MemoryTargets.dynamicOffHeapSizingIfEnabled(overConsumer),
-                overAcquiredRatio));
+                overAcquiredRatio),
+            isAdvisory);
 
     // Listener.
     return new ManagedReservationListener(target, TaskResources.getSharedUsage(), tmm);

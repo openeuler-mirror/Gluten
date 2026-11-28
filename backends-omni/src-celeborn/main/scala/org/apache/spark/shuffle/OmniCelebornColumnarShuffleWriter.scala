@@ -18,7 +18,9 @@ package org.apache.spark.shuffle
 
 import com.huawei.boostkit.spark.jni.SparkJniWrapper
 import com.huawei.boostkit.spark.vectorized.SplitResult
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.runtime.OmniRuntimes
 import org.apache.gluten.utils.OmniAdaptorUtil
 
 import org.apache.spark._
@@ -153,7 +155,9 @@ class OmniCelebornColumnarShuffleWriter[K, V](
       shuffleSpillBatchRowNum,
       shuffleTaskSpillMemoryThreshold,
       shuffleExecutorSpillMemoryThreshold,
-      celebornPartitionPusher)
+      celebornPartitionPusher,
+      OmniRuntimes.contextInstance(
+        BackendsApiManager.getBackendName, "omni-celeborn-shuffle-writer").getNmmHandle())
     nativeShuffleWriter = nativeSplitter
   }
 

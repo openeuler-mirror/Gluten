@@ -382,6 +382,16 @@ trait SparkPlanExecApi {
       numOutputRows: SQLMetric,
       dataSize: SQLMetric): BuildSideRelation
 
+  /** A materialization identity shared by its broadcast payload and native consumers. */
+  def createBroadcastRelation(
+      mode: BroadcastMode,
+      child: SparkPlan,
+      numOutputRows: SQLMetric,
+      dataSize: SQLMetric,
+      broadcastCacheKey: String): BuildSideRelation = {
+    createBroadcastRelation(mode, child, numOutputRows, dataSize)
+  }
+
   def doCanonicalizeForBroadcastMode(mode: BroadcastMode): BroadcastMode = {
     mode.canonicalized
   }

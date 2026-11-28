@@ -73,8 +73,9 @@ TEST(StringViewTypeMappingTest, UnknownVariationIsRejected)
 TEST(StringViewTypeMappingTest, LiteralVariationIsSelfDescribing)
 {
     const std::unordered_map<uint64_t, std::string> functionMap;
-    SubstraitOmniExprConverter varcharConverter(functionMap);
-    SubstraitOmniExprConverter switchOnConverter(functionMap);
+    const std::unordered_map<std::string, std::string> confMap;
+    SubstraitOmniExprConverter varcharConverter(functionMap, confMap);
+    SubstraitOmniExprConverter switchOnConverter(functionMap, confMap);
 
     // No variation -> VARCHAR, regardless of the converter flag.
     const auto plainLit = StringLiteral("tiny");
@@ -104,8 +105,9 @@ TEST(StringViewTypeMappingTest, ConcurrentDecodeIsStable)
 {
     auto parseLiteralType = [](uint32_t variationRef) {
         const std::unordered_map<uint64_t, std::string> functionMap;
-        // Flag deliberately toggled to prove it does not affect the (variation-driven) decode.
-        SubstraitOmniExprConverter converter(functionMap);
+        const std::unordered_map<std::string, std::string> confMap;
+        // Each converter is independent; the variation reference alone drives the decoded type.
+        SubstraitOmniExprConverter converter(functionMap, confMap);
         auto *expr = converter.ToOmniExpr(StringLiteralWithVariation("tiny", variationRef));
         const auto typeId = expr->GetReturnTypeId();
         delete expr;

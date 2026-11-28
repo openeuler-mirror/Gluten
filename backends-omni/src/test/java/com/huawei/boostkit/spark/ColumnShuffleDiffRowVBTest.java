@@ -82,7 +82,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -97,7 +97,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 0; i < 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 999, partitionNum, true, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -113,7 +115,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -128,7 +130,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 0,
                 4096,
                 1024*1024*1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 0; i < 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 999, partitionNum, true, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -144,7 +148,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -159,7 +163,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 0; i < 1024; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 1, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -175,7 +181,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -190,7 +196,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 0; i < 1; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 1024, partitionNum, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -205,7 +213,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_INT, OMNI_LONG, OMNI_DOUBLE, OMNI_VARCHAR, OMNI_CHAR};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int numPartition = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -220,7 +228,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 1; i < 1000; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, i, numPartition, false, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());
@@ -235,7 +245,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_VARCHAR};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -250,7 +260,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         VecBatch vecBatchTmp1 = new VecBatch(buildValChar(3, "N"));
         jniWrapper.split(splitterId, vecBatchTmp1.getNativeVectorBatch());
         VecBatch vecBatchTmp2 = new VecBatch(buildValChar(2, "F"));
@@ -275,7 +287,7 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
         DataType.DataTypeId[] idTypes = {OMNI_INT};
         DataType[] types = dataTypeId2DataType(idTypes);
         String tmpStr = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -290,7 +302,9 @@ public class ColumnShuffleDiffRowVBTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         VecBatch vecBatchTmp1 = new VecBatch(buildValInt(3, 1));
         jniWrapper.split(splitterId, vecBatchTmp1.getNativeVectorBatch());
         VecBatch vecBatchTmp2 = new VecBatch(buildValInt(2, 2));

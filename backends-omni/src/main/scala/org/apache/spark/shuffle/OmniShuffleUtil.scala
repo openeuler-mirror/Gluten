@@ -44,6 +44,13 @@ import nova.hetu.omniruntime.operator.project.OmniProjectOperatorFactory
 import nova.hetu.omniruntime.utils.ShuffleHashHelper
 import nova.hetu.omniruntime.vector.{IntVec, VecBatch}
 
+// Backend lookup so this util can obtain
+// the task-scoped OmniRuntime and pass its pool address to
+// ShuffleHashHelper.computePartitionIds — routing hash-util allocations through
+// the per-task pool (closes the last unscoped JNI surface, failure mode 2).
+import org.apache.gluten.backendsapi.BackendsApiManager
+import org.apache.gluten.runtime.OmniRuntimes
+
 import scala.collection.JavaConverters.asScalaIteratorConverter
 
 object OmniShuffleUtil {
@@ -230,6 +237,22 @@ object OmniShuffleUtil {
           (_, cbIter) => {
             val addPid2ColumnBatch = addPidToColumnBatch()
             val isAllExpressionSimple = isAllSimpleExpression(expressions)
+            // Resolve a task-scoped OmniRuntime and obtain the backend's
+            // task-shared OmniTaskMemoryPool address via the gluten-side
+            // getPoolAddress bridge. Pass that as nmmHandle to
+            // ShuffleHashHelper.computePartitionIds so the partitionIds Vector
+            // allocation is charged to the per-task pool. Returns 0 in test
+            // setups where no Spark task is active; the native helper then
+            // falls back to the legacy unbound Vector ctor.
+            val taskPoolAddress: Long =
+              try {
+                val runtime = OmniRuntimes.contextInstance(
+                  BackendsApiManager.getBackendName,
+                  "omni-shuffle-writer")
+                runtime.getPoolAddress()
+              } catch {
+                case _: IllegalStateException => 0L  // not in a Spark task (test path)
+              }
             if (isAllExpressionSimple) {
               val outputIndexMap = getExprIdMap(outputAttributes)
               val exprIds = getExprIdFromExpressions(expressions)
@@ -247,7 +270,8 @@ object OmniShuffleUtil {
                     ShuffleHashHelper.computePartitionIds(
                       projectedVecs,
                       numPartitions,
-                      cb.numRows())
+                      cb.numRows(),
+                      taskPoolAddress)
                   addPid2ColumnBatch(new IntVec(nativeIntVecAddr), cb)
               }
             } else {
@@ -265,7 +289,11 @@ object OmniShuffleUtil {
                     SpillConfig.NONE,
                     new OverflowConfig(OmniAdaptorUtil.overflowConf()),
                     IS_SKIP_VERIFY_EXP))
-              val op = factory.createOperator()
+              // Forward the per-task pool address
+              // computed above so the OmniProjectOperator constructs pool-bound. Mirror
+              // of the ShuffleHashHelper.computePartitionIds nmmHandle wiring 40 lines
+              // up. 0L on the test-harness path falls back to nullptr-pool inside JNI.
+              val op = factory.createOperator(taskPoolAddress)
               // close operator
               addLeakSafeTaskCompletionListener[Unit](
                 _ => {

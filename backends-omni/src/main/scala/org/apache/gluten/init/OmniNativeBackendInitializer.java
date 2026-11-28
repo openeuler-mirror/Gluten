@@ -2,10 +2,11 @@ package org.apache.gluten.init;
 
 import nova.hetu.omniruntime.memory.MemoryManager;
 import nova.hetu.omniruntime.operator.OmniOperatorFactoryContext;
-import org.apache.gluten.config.GlutenConfig;
-import org.apache.gluten.utils.ConfigUtil;
 import scala.runtime.BoxedUnit;
 
+import org.apache.gluten.config.GlutenConfig;
+import org.apache.gluten.memory.listener.ReservationListener;
+import org.apache.gluten.utils.ConfigUtil;
 import org.apache.spark.network.util.JavaUtils;
 import org.apache.spark.util.SparkShutdownManagerUtil;
 import org.slf4j.Logger;
@@ -20,6 +21,7 @@ public final class OmniNativeBackendInitializer {
     private static final Map<String, OmniNativeBackendInitializer> instances = new ConcurrentHashMap<>();
 
     private final AtomicBoolean initialized = new AtomicBoolean(false);
+    private final AtomicBoolean broadcastCacheInitialized = new AtomicBoolean(false);
     private final String backendName;
 
     private OmniNativeBackendInitializer(String backendName) {
@@ -61,4 +63,45 @@ public final class OmniNativeBackendInitializer {
     }
 
     private native void initialize(byte[] configPlan);
+
+    /**
+     * Starts the executor-level broadcast hash table cache once.
+     *
+     * @param listener listener that accounts the cached tables in Spark storage memory
+     */
+    public void initializeBroadcastCache(ReservationListener listener) {
+        if (!broadcastCacheInitialized.compareAndSet(false, true)) {
+            return;
+        }
+        boolean isStarted = false;
+        try {
+            initializeBroadcastCache0(listener);
+            isStarted = true;
+        } finally {
+            if (!isStarted) {
+                broadcastCacheInitialized.set(false);
+            }
+        }
+    }
+
+    /**
+     * Stops the broadcast hash table cache if it was started.
+     */
+    public void shutdownBroadcastCache() {
+        if (broadcastCacheInitialized.compareAndSet(true, false)) {
+            boolean isStopped = false;
+            try {
+                shutdownBroadcastCache0();
+                isStopped = true;
+            } finally {
+                if (!isStopped) {
+                    broadcastCacheInitialized.set(true);
+                }
+            }
+        }
+    }
+
+    private native void initializeBroadcastCache0(ReservationListener listener);
+
+    private native void shutdownBroadcastCache0();
 }

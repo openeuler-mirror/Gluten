@@ -14,11 +14,17 @@
 #include "type/data_type.h"
 #include "vector/vector_batch.h"
 
+namespace omniruntime::mem {
+class OmniTaskMemoryPool;
+}
+
 namespace gluten {
 
 class OmniRowToColumnarConverter {
 public:
-    explicit OmniRowToColumnarConverter(const std::string &schemaJson);
+    OmniRowToColumnarConverter(
+        const std::string &schemaJson,
+        omniruntime::mem::OmniTaskMemoryPool *taskPool);
 
     omniruntime::vec::VectorBatch *Convert(int64_t numRows, int64_t *rowLength, uint8_t *memoryAddress) const;
 
@@ -26,6 +32,7 @@ public:
 
 private:
     std::vector<omniruntime::type::DataTypeId> fieldTypes_;
+    omniruntime::mem::OmniTaskMemoryPool *taskPool_;
 
     static std::vector<omniruntime::type::DataTypeId> ParseSchema(const std::string &schemaJson);
 

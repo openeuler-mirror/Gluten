@@ -41,12 +41,8 @@ object OmniBroadcastBuildSideCache extends Logging {
       return
     }
     logDebug(s"[OmniBHJCache] Invalidating native hash table cache for id: $buildHashTableId")
-    try {
-      OmniPlanEvaluatorJniWrapper.nativeInvalidateBroadcastHashTable(buildHashTableId)
-    } catch {
-      case e: Exception =>
-        logWarning(
-          s"[OmniBHJCache] Failed to invalidate native hash table for id: $buildHashTableId", e)
-    }
+    // Let an RPC failure reach the driver; it must not acknowledge a cleanup
+    // that did not reach the native cache.
+    OmniPlanEvaluatorJniWrapper.nativeInvalidateBroadcastHashTable(buildHashTableId)
   }
 }

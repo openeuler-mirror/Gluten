@@ -23,12 +23,31 @@ import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.task.TaskResources;
 import org.apache.spark.util.Utils;
 
+import java.util.function.Function;
+
+/**
+ * Memory target that throws when the wrapped target cannot grant a reservation in full.
+ *
+ * @since 1.3.0
+ */
 public class ThrowOnOomMemoryTarget implements MemoryTarget {
   private final MemoryTarget target;
+    private final boolean isAdvisory;
 
   public ThrowOnOomMemoryTarget(MemoryTarget target) {
-    this.target = target;
+    this(target, false);
   }
+
+    /**
+     * Creates a target whose denials can be advisory.
+     *
+     * @param target target the reservations are taken from
+     * @param isAdvisory whether a denial is reported without logging, statistics or a stack trace
+     */
+    public ThrowOnOomMemoryTarget(MemoryTarget target, boolean isAdvisory) {
+        this.target = target;
+        this.isAdvisory = isAdvisory;
+    }
 
   @Override
   public long borrow(long size) {
@@ -41,6 +60,9 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
     // failed to reclaim enough memory.
     if (granted != 0L) {
       target.repay(granted);
+    }
+    if (isAdvisory) {
+        throw new OutOfMemoryException("Spark reservation denied", true);
     }
     // Log memory usage
     if (TaskResources.inSparkTask()) {
@@ -63,47 +85,53 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
             String.format(
                 "\t%s=%s",
                 GlutenConfig$.MODULE$.GLUTEN_OFFHEAP_SIZE_IN_BYTES_KEY(),
-                reformatBytes(
-                    SQLConf.get()
-                        .getConfString(GlutenConfig$.MODULE$.GLUTEN_OFFHEAP_SIZE_IN_BYTES_KEY()))))
+                getSqlConfStringOrNa(
+                    GlutenConfig$.MODULE$.GLUTEN_OFFHEAP_SIZE_IN_BYTES_KEY(),
+                    ThrowOnOomMemoryTarget::reformatBytes)))
         .append(System.lineSeparator())
         .append(
             String.format(
                 "\t%s=%s",
                 GlutenConfig$.MODULE$.GLUTEN_TASK_OFFHEAP_SIZE_IN_BYTES_KEY(),
-                reformatBytes(
-                    SQLConf.get()
-                        .getConfString(
-                            GlutenConfig$.MODULE$.GLUTEN_TASK_OFFHEAP_SIZE_IN_BYTES_KEY()))))
+                getSqlConfStringOrNa(
+                    GlutenConfig$.MODULE$.GLUTEN_TASK_OFFHEAP_SIZE_IN_BYTES_KEY(),
+                    ThrowOnOomMemoryTarget::reformatBytes)))
         .append(System.lineSeparator())
         .append(
             String.format(
                 "\t%s=%s",
                 GlutenConfig$.MODULE$.GLUTEN_CONSERVATIVE_TASK_OFFHEAP_SIZE_IN_BYTES_KEY(),
-                reformatBytes(
-                    SQLConf.get()
-                        .getConfString(
-                            GlutenConfig$.MODULE$
-                                .GLUTEN_CONSERVATIVE_TASK_OFFHEAP_SIZE_IN_BYTES_KEY()))))
+                getSqlConfStringOrNa(
+                    GlutenConfig$.MODULE$.GLUTEN_CONSERVATIVE_TASK_OFFHEAP_SIZE_IN_BYTES_KEY(),
+                    ThrowOnOomMemoryTarget::reformatBytes)))
         .append(System.lineSeparator())
         .append(
             String.format(
                 "\t%s=%s",
                 GlutenConfig$.MODULE$.SPARK_OFFHEAP_ENABLED(),
-                SQLConf.get().getConfString(GlutenConfig$.MODULE$.SPARK_OFFHEAP_ENABLED())))
+                getSqlConfStringOrNa(
+                    GlutenConfig$.MODULE$.SPARK_OFFHEAP_ENABLED(), value -> value)))
         .append(System.lineSeparator())
         .append(
             String.format(
                 "\t%s=%s",
                 GlutenConfig$.MODULE$.GLUTEN_DYNAMIC_OFFHEAP_SIZING_ENABLED(),
-                SQLConf.get()
-                    .getConfString(GlutenConfig$.MODULE$.GLUTEN_DYNAMIC_OFFHEAP_SIZING_ENABLED())))
+                getSqlConfStringOrNa(
+                    GlutenConfig$.MODULE$.GLUTEN_DYNAMIC_OFFHEAP_SIZING_ENABLED(), value -> value)))
         .append(System.lineSeparator());
     // Dump all consumer usages to exception body
     errorBuilder.append(SparkMemoryUtil.dumpMemoryTargetStats(target));
     errorBuilder.append(System.lineSeparator());
     throw new OutOfMemoryException(errorBuilder.toString());
   }
+
+    private static String getSqlConfStringOrNa(String confKey, Function<String, String> ifPresent) {
+        final SQLConf sqlConf = SQLConf.get();
+        if (!sqlConf.contains(confKey)) {
+            return "N/A";
+        }
+        return ifPresent.apply(sqlConf.getConfString(confKey));
+    }
 
   private static String reformatBytes(String in) {
     return Utils.bytesToString(Utils.byteStringAsBytes(in));
@@ -125,8 +153,25 @@ public class ThrowOnOomMemoryTarget implements MemoryTarget {
   }
 
   public static class OutOfMemoryException extends RuntimeException {
+    private final boolean isAdvisory;
+
     public OutOfMemoryException(String message) {
-      super(message);
+        super(message);
+        this.isAdvisory = false;
+    }
+
+    private OutOfMemoryException(String message, boolean isAdvisory) {
+        super(message, null, true, !isAdvisory);
+        this.isAdvisory = isAdvisory;
+    }
+
+    /**
+     * Tells whether the denial is advisory.
+     *
+     * @return true when the caller is expected to handle the denial itself
+     */
+    public boolean isAdvisory() {
+        return isAdvisory;
     }
   }
 

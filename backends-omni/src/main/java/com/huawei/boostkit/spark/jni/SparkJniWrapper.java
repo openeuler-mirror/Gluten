@@ -34,7 +34,14 @@ public class SparkJniWrapper {
       long shuffleCompressBlockSize,
       int shuffleSpillBatchRowNum,
       long shuffleTaskSpillMemoryThreshold,
-      long shuffleExecutorSpillMemoryThreshold) {
+      long shuffleExecutorSpillMemoryThreshold,
+      // Per-task NMM handle, decoded on the
+      // native side to obtain the OmniTaskMemoryPool that the Splitter binds its
+      // allocators to. Sharing this pool across compute + shuffle (one per task)
+      // eliminates the cross-pool free in Splitter::DoSplit::ReleaseVectorBatch.
+      long nmmHandle,
+      // The task's offheap share (offheap size / task slots), which sizes partition buffers.
+      long taskOffHeapBytes) {
     return nativeMake(
         part.getShortName(),
         part.getNumPartitions(),
@@ -48,7 +55,9 @@ public class SparkJniWrapper {
         shuffleCompressBlockSize,
         shuffleSpillBatchRowNum,
         shuffleTaskSpillMemoryThreshold,
-        shuffleExecutorSpillMemoryThreshold);
+        shuffleExecutorSpillMemoryThreshold,
+        nmmHandle,
+        taskOffHeapBytes);
   }
 
   public native long nativeMake(
@@ -64,7 +73,9 @@ public class SparkJniWrapper {
       long shuffleCompressBlockSize,
       int shuffleSpillBatchRowNum,
       long shuffleTaskSpillMemoryThreshold,
-      long shuffleExecutorSpillMemoryThreshold);
+      long shuffleExecutorSpillMemoryThreshold,
+      long nmmHandle,
+      long taskOffHeapBytes);
 
   /**
    * Split one record batch represented by bufAddrs and bufSizes into several batches. The batch is
@@ -118,7 +129,8 @@ public class SparkJniWrapper {
       int shuffleSpillBatchRowNum,
       long shuffleTaskSpillMemoryThreshold,
       long shuffleExecutorSpillMemoryThreshold,
-      Object partitionPusher) {
+      Object partitionPusher,
+      long nmmHandle) {
     return nativeMakeForRSS(
         part.getShortName(),
         part.getNumPartitions(),
@@ -130,7 +142,8 @@ public class SparkJniWrapper {
         shuffleSpillBatchRowNum,
         shuffleTaskSpillMemoryThreshold,
         shuffleExecutorSpillMemoryThreshold,
-        partitionPusher);
+        partitionPusher,
+        nmmHandle);
   }
 
   public native long nativeMakeForRSS(
@@ -144,7 +157,8 @@ public class SparkJniWrapper {
       int shuffleSpillBatchRowNum,
       long shuffleTaskSpillMemoryThreshold,
       long shuffleExecutorSpillMemoryThreshold,
-      Object partitionPusher);
+      Object partitionPusher,
+      long nmmHandle);
 
     /**
      * make shuffle deserializer hold by native
@@ -153,10 +167,22 @@ public class SparkJniWrapper {
      * @param compressCodec            compress Codec
      * @param shuffleCompressBlockSize configured compress block size
      * @param isRowShuffle             if support row shuffle
+     * @param taskPoolAddress          the already-decoded per-task OmniTaskMemoryPool*
+     *                                 address (not the gluten nmmHandle), resolved via
+     *                                 OmniNativeMemoryManagerJniWrapper.getPoolAddress(
+     *                                 OmniRuntimes.contextInstance(backend, "omni-shuffle-reader")
+     *                                 .getNmmHandle()). The native side reinterpret_casts it
+     *                                 back to OmniTaskMemoryPool*, as computePartitionIds does,
+     *                                 and threads it into ShuffleReaderDeserializer and
+     *                                 DecompressionStream so decoded vectors are pool-bound.
+     *                                 0L = no Spark task active (test path); native then uses
+     *                                 the unaccounted no-pool constructors. The signature must
+     *                                 match SparkJniWrapper.hh/.cpp.
      * @return Deserializer result
      */
     public native long makeNativeDeserializer(JniByteInputStream inputStream, String compressCodec,
-                                              int shuffleCompressBlockSize, boolean isRowShuffle);
+                                              int shuffleCompressBlockSize, boolean isRowShuffle,
+                                              long taskPoolAddress);
 
     /**
      * Release resources

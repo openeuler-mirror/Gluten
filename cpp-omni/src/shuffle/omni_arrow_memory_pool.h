@@ -30,17 +30,16 @@
 //
 // Every Arrow allocation (e.g. arrow::AllocateResizableBuffer, BufferBuilder)
 // that is constructed with this pool is routed through
-// omniruntime::mem::Allocator::Alloc/Free, which in turn reports to
-// MemoryManager::GetGlobalAccountedMemory().  This guarantees the shuffle spill
-// threshold check — which reads GetGlobalAccountedMemory() — does not miss any
-// Arrow buffer and therefore avoids silent OOM.
+// omniruntime::mem::Allocator::Alloc/Free. A task-bound allocator updates its
+// OmniTaskMemoryPool and Spark-facing listener synchronously, so shuffle
+// reclaim and arbitration observe every Arrow buffer.
 //
 // Design reference: 260629-Shuffle-arrow-design-detail.md §13.1.
 class OmniMemoryPoolAdapter : public arrow::MemoryPool {
 public:
     // Construct an adapter that forwards to the given omni Allocator.
     // The caller retains ownership of \p alloc (typically
-    // Allocator::GetAllocator() or SplitOptions::allocator).
+    // OmniTaskMemoryPool::getBoundAllocator() or SplitOptions::allocator).
     explicit OmniMemoryPoolAdapter(omniruntime::mem::Allocator *alloc) : alloc_(alloc) {}
 
     // --- arrow::MemoryPool overrides (Arrow 11 three-parameter signatures) ---

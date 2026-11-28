@@ -20,6 +20,7 @@ import nova.hetu.omniruntime.vector.VecBatch
 import nova.hetu.omniruntime.vector.serialize.VecBatchSerializerFactory
 import org.apache.gluten.expression.ConverterUtils
 import org.apache.gluten.vectorized.VectorTransferUtils
+import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, IdentityBroadcastMode}
@@ -33,14 +34,14 @@ import scala.collection.mutable.ArrayBuffer
  * @param mode         the Spark broadcast mode
  * @param output       output attributes of the build side
  * @param batches      serialized columnar batches (driver-side broadcast payload)
- * @param buildHashTableId unique id for the executor-level BHJ hash table cache;
- *                     empty string means caching is disabled for this relation
+ * @param broadcastCacheKey exchange descriptor shared by all compatible join
+ *                          signatures; empty string disables caching
  */
 case class OmniColumnarBuildSideRelation(
     mode: BroadcastMode,
     output: Seq[Attribute],
     batches: Array[Array[Byte]],
-    buildHashTableId: String = "")
+    broadcastCacheKey: String = "")
   extends BuildSideRelation {
 
   private def transformProjection: UnsafeProjection = {
@@ -57,16 +58,37 @@ case class OmniColumnarBuildSideRelation(
 
     new Iterator[ColumnarBatch] {
       var batchId = 0
+      private var poolOwner: TaskContext = null
+      private var resolvedPoolAddress = 0L
+      private var poolResolved = false
+
+      private def currentTaskPoolAddress(): Long = {
+        val context = TaskContext.get()
+        // The cache belongs to this iterator, not the shared broadcast relation.
+        // Refresh on a context change and reject access after task completion.
+        if (context != null && context.isCompleted()) {
+          throw new IllegalStateException("Cannot deserialize a broadcast after task completion")
+        }
+        if (!poolResolved || (context ne poolOwner)) {
+          val address = org.apache.gluten.vectorized.OmniColumnVector.resolveColumnVectorPoolAddress()
+          poolOwner = context
+          resolvedPoolAddress = address
+          poolResolved = true
+        }
+        resolvedPoolAddress
+      }
 
       override def hasNext: Boolean = {
         batchId < batches.length
       }
 
       override def next: ColumnarBatch = {
-        val vecBatch = deserializer.deserialize(batches(batchId))
+        // Reuse this iterator's task pool and preserve it in the batch's Java wrappers.
+        val taskPoolAddress = currentTaskPoolAddress()
+        val vecBatch = deserializer.deserialize(batches(batchId), taskPoolAddress)
         val vecs = vecBatch.getVectors
-        val colBatch =
-          VectorTransferUtils.vectorsToNativeColumnarBatch(vecs, dataTypes, vecBatch.getRowCount)
+        val colBatch = VectorTransferUtils.vectorsToNativeColumnarBatch(
+          vecs, dataTypes, vecBatch.getRowCount, taskPoolAddress)
         batchId += 1
         colBatch
       }
@@ -75,13 +97,9 @@ case class OmniColumnarBuildSideRelation(
 
   override def asReadOnlyCopy(): OmniColumnarBuildSideRelation = this
 
-  /**
-   * Called by Spark when the broadcast variable is unpersisted.
-   * Notify the native executor-level cache to free the hash table memory.
-   */
-  override def reset(): Unit = {
-    OmniBroadcastBuildSideCache.invalidate(buildHashTableId)
-  }
+  // Spark may reset a relation while another consumer of the same exchange is
+  // running. The SQL execution owner retires all executor entries at query end.
+  override def reset(): Unit = {}
 
   /**
    * Transform columnar broadcast value to Array[InternalRow] by key and distinct. NOTE: This method

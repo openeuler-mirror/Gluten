@@ -29,6 +29,9 @@ trait SubstraitBackend extends Backend {
   final override def onDriverShutdown(): Unit = {
     listenerApi().onDriverShutdown()
   }
+  final override def onDriverMessage(message: AnyRef): Option[AnyRef] = {
+    listenerApi().onDriverMessage(message)
+  }
   final override def onExecutorStart(pc: PluginContext): Unit = {
     listenerApi().onExecutorStart(pc)
   }

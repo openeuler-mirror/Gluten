@@ -597,6 +597,15 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
       child: SparkPlan,
       numOutputRows: SQLMetric,
       dataSize: SQLMetric): BuildSideRelation = {
+    createBroadcastRelation(mode, child, numOutputRows, dataSize, "")
+  }
+
+  override def createBroadcastRelation(
+      mode: BroadcastMode,
+      child: SparkPlan,
+      numOutputRows: SQLMetric,
+      dataSize: SQLMetric,
+      broadcastCacheKey: String): BuildSideRelation = {
 
     val input = OmniExecUtil.buildSideRDD(mode, child)
       .collect()
@@ -607,12 +616,8 @@ class OmniSparkPlanExecApi extends SparkPlanExecApi {
         s"Cannot broadcast the table that is larger than 8GB: ${dataSize.value >> 30} GB")
     }
 
-    // Embed the build hash table id so that the executor-level cache can be keyed by it.
-    // The id must match `BroadcastHashJoinExecTransformerBase.buildHashTableId` which uses
-    // `buildPlan.id.toString`; here `child` IS the build plan, so `child.id` is the same.
-    val htId = "BuiltHashTable-" + child.id
     val relation = OmniColumnarBuildSideRelation(
-      mode, child.output, input.map(_.getBatches), buildHashTableId = htId)
+      mode, child.output, input.map(_.getBatches), broadcastCacheKey = broadcastCacheKey)
     // todo: add EmptyHashedRelation & HashedRelationWithAllNullKeys
     relation
   }

@@ -45,6 +45,7 @@ class OmniHashAggregateMetricsUpdaterImpl(val metrics: Map[String, SQLMetric])
 
   val numSpilledBytes: SQLMetric = metrics("numSpilledBytes")
   val numSpilledRows: SQLMetric = metrics("numSpilledRows")
+  val numSpilledFiles: SQLMetric = metrics("numSpilledFiles")
 
   override def updateAggregationMetrics(
     aggregationMetrics: java.util.ArrayList[OperatorMetrics],
@@ -60,6 +61,7 @@ class OmniHashAggregateMetricsUpdaterImpl(val metrics: Map[String, SQLMetric])
     numInputBytes += aggMetrics.getNumInputBytes
     numSpilledBytes += aggMetrics.getSpilledBytes
     numSpilledRows += aggMetrics.getSpilledRows
+    numSpilledFiles += aggMetrics.getSpilledFiles
 
     getOutputCount += aggMetrics.getOutputCpuCount
     getOutputTime += aggMetrics.getGetOutputTime
@@ -77,6 +79,5 @@ class OmniHashAggregateMetricsUpdaterImpl(val metrics: Map[String, SQLMetric])
     }
   }
 }
-
 
 

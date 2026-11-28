@@ -66,7 +66,24 @@ public class ShuffleDataSerializer {
         }
     }
 
-    public static ColumnarBatch deserialize(boolean isRowShuffle, byte[] bytes, int readSize) {
+    /**
+     * Deserializes one shuffle block into a columnar batch.
+     *
+     * The task pool address is handed to the native parse context so the JNI vector
+     * constructors in deserializer.cpp charge the vectors to the task. This method has no
+     * callers in the current gluten tree: the read path goes through
+     * ShuffleColumnarBatchOutIterator, makeNativeDeserializer and Decompression.cc, so the
+     * parameter is plumbed for symmetry.
+     *
+     * @param isRowShuffle whether the block holds row-shuffle data
+     * @param bytes buffer holding the block
+     * @param readSize number of valid bytes in the buffer
+     * @param taskPoolAddress address of the task's Omni memory pool; 0 outside a Spark task,
+     *        where the vectors are created without a pool
+     * @return the deserialized batch
+     */
+    public static ColumnarBatch deserialize(boolean isRowShuffle, byte[] bytes, int readSize,
+                                            long taskPoolAddress) {
         ColumnVector[] vecs = null;
         long address = -1;
         ShuffleDataSerializerUtils deserializer = null;
@@ -75,7 +92,7 @@ public class ShuffleDataSerializer {
             unsafe.copyMemory(bytes, BYTE_ARRAY_BASE_OFFSET, null, address, readSize);
 
             deserializer = new ShuffleDataSerializerUtils();
-            deserializer.init(address, readSize, isRowShuffle);
+            deserializer.init(address, readSize, isRowShuffle, taskPoolAddress);
             int vecCount = deserializer.getVecCount();
             int rowCount = deserializer.getRowCount();
 

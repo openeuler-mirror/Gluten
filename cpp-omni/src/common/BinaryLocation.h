@@ -18,6 +18,9 @@
 
 #ifndef SPARK_THESTRAL_PLUGIN_BINARYLOCATION_H
 #define SPARK_THESTRAL_PLUGIN_BINARYLOCATION_H
+#include <cstdint>
+#include <vector>
+#include "OmniStlAllocator.h"
 class VCLocation {
 public:
     VCLocation(uint64_t vc_addr, uint32_t vc_len, bool isnull)
@@ -43,14 +46,34 @@ public:
     bool is_null;
 };
 
+// vc_list holds POD VCLocation index entries (pointer + length + null flag) for
+// one shuffle batch. It is the single largest pool-bypassing allocation in the
+// splitter (measured ~122 GB cumulative across SF1). Backing it with
+// OmniStlAllocator charges its storage to the per-task pool. The allocator is
+// supplied at construction from the splitter's pool-bound options_.allocator
+// (Splitter rebinds that to taskMemoryPool_->getBoundAllocator()); a nullptr
+// allocator (test / no-pool path) falls back to std::malloc.
+using VCLocationList = std::vector<VCLocation, OmniStlAllocator<VCLocation>>;
+
 class VCBatchInfo {
 public:
-    VCBatchInfo(uint32_t vcb_capacity) {
-        this->vc_list.reserve(vcb_capacity);
-        this->vcb_capacity =  vcb_capacity;
-        this->vcb_total_len = 0;
+    explicit VCBatchInfo(uint32_t vcb_capacity, omniruntime::mem::Allocator *alloc = nullptr)
+            : vcb_capacity(vcb_capacity),
+              vcb_total_len(0),
+              vc_list(OmniStlAllocator<VCLocation>(alloc)) {
+        // No eager reserve(vcb_capacity). Now that vc_list is pool-charged, an
+        // eager reserve of spill_batch_row_num (=10000 => 240 KB) per batch
+        // charges the per-task pool for capacity that demand-paging never makes
+        // resident: AddMemory counts the full reservation but untouched pages
+        // never hit RSS. Measured on SF1 this over-charged the pool by GBs on
+        // shuffle-heavy queries (q4: +4976 MB charged vs +254 MB resident =>
+        // accounting_pct shot to 337%). Letting vc_list grow geometrically to
+        // the actual fill keeps the charge within ~1-2x of resident.
     }
 
+    // Keep move operations explicit: this transfers the allocator-aware
+    // vc_list buffer without copying it, while the default destructor releases
+    // the storage through the allocator carried by the vector.
     VCBatchInfo(VCBatchInfo&& other) noexcept
         : vc_list(std::move(other.vc_list)),
           vcb_capacity(other.vcb_capacity),
@@ -82,7 +105,11 @@ public:
         return vcb_total_len;
     }
 
-    std::vector<VCLocation> &getVcList() {
+    VCLocationList &getVcList() {
+        return vc_list;
+    }
+
+    const VCLocationList &getVcList() const {
         return vc_list;
     }
 
@@ -97,7 +124,7 @@ public:
 public:
     uint32_t vcb_capacity;
     uint32_t vcb_total_len;
-    std::vector<VCLocation> vc_list;
+    VCLocationList vc_list;
     bool hasNullFlag = false;
 
 };

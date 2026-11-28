@@ -25,8 +25,11 @@
 #include "shuffle/arrow_frame.h"
 #include "shuffle/arrow_columnar_deserializer.h"
 #include "shuffle/arrow_row_deserializer.h"
+#include "memory/omni_task_memory_pool.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 
 using namespace omniruntime::vec;
 
@@ -41,19 +44,26 @@ struct ColumnarParseContext {
     const uint8_t* arrowCursor = nullptr;
     int64_t arrowRemaining = 0;
     int32_t arrowCurrentRowCount = 0;  // current batch row count
+    // Task pool the parsed vectors are charged to; nullptr outside a Spark task.
+    omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr;
 };
 
 // Row parse context — returned as jlong handle to Java
 struct RowParseContext {
     std::unique_ptr<RowShuffleBatchContext> arrowCtx;
+    // Task pool the parsed vectors are charged to; nullptr outside a Spark task.
+    omniruntime::mem::OmniTaskMemoryPool* taskPool = nullptr;
 };
 
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length)
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress)
 {
     JNI_FUNC_START
     auto* ctx = new ColumnarParseContext();
+    // 0 (no Spark task active) decodes to nullptr; the vector factories then take the
+    // unaccounted no-pool path. Same convention as computePartitionIds and nativeMake.
+    ctx->taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
     const auto* data = reinterpret_cast<const uint8_t*>(address);
 
     // Check for Arrow magic "OMSA"
@@ -149,6 +159,8 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
     ColumnarBatchBody arrowBatchBody;
 
     omniruntime::vec::BaseVector* vecs[vecCount]{};
+    // Bound by columnarShuffleParseInit; nullptr outside a Spark task.
+    auto* taskPool = ctx->taskPool;
 
     JNI_FUNC_START
 
@@ -186,9 +198,22 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
             auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
             if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
                 auto dataType = DescriptorToOmniType(desc);
-                vecs[i] = VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+                vecs[i] = VectorHelper::CreateComplexVector(taskPool, dataType.get(), rowCount);
+            } else if (vectorDataTypeId == OMNI_VARCHAR || vectorDataTypeId == OMNI_CHAR ||
+                       vectorDataTypeId == OMNI_VARBINARY) {
+                // A string column's buffers are [validity, offsets, values]. Size the string buffer
+                // to this block's values instead of the 32 KB default, as
+                // DecompressionStream::columnarShuffleParseArrowBatch does: a block of a few rows
+                // would otherwise pin 32 KB per string column for as long as the vector lives.
+                const std::size_t valuesIdx = bufIdx + 2;
+                const int64_t valuesBytes =
+                    (valuesIdx < arrowBatchBody.buffers.size() && arrowBatchBody.buffers[valuesIdx] != nullptr)
+                    ? arrowBatchBody.buffers[valuesIdx]->size() : 0;
+                const int32_t capacityInBytes = static_cast<int32_t>(std::min<int64_t>(
+                    std::max<int64_t>(valuesBytes, 1), std::numeric_limits<int32_t>::max()));
+                vecs[i] = VectorHelper::CreateFlatVector(taskPool, vectorDataTypeId, rowCount, capacityInBytes);
             } else {
-                vecs[i] = VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+                vecs[i] = VectorHelper::CreateFlatVector(taskPool, vectorDataTypeId, rowCount);
             }
             vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
 
@@ -205,10 +230,12 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
 
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length)
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress)
 {
     JNI_FUNC_START
     auto* ctx = new RowParseContext();
+    // See columnarShuffleParseInit above.
+    ctx->taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
     const auto* data = reinterpret_cast<const uint8_t*>(address);
 
     // Check for Arrow magic "OMSA"
@@ -280,6 +307,8 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShufflePa
 
     omniruntime::vec::BaseVector* vecs[vecCount];
     std::vector<omniruntime::type::DataTypeId> omniDataTypeIds(vecCount);
+    // Bound by rowShuffleParseInit; nullptr outside a Spark task.
+    auto* taskPool = ctx->taskPool;
 
     JNI_FUNC_START
     jint *typeIdArrayElements = env->GetIntArrayElements(typeIdArray, NULL);
@@ -298,9 +327,9 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShufflePa
         auto vectorDataTypeId = static_cast<omniruntime::type::DataTypeId>(desc.typeId);
         if (vectorDataTypeId == OMNI_ARRAY || vectorDataTypeId == OMNI_MAP || vectorDataTypeId == OMNI_ROW) {
             auto dataType = DescriptorToOmniType(desc);
-            vecs[i] = VectorHelper::CreateComplexVector(dataType.get(), rowCount);
+            vecs[i] = VectorHelper::CreateComplexVector(taskPool, dataType.get(), rowCount);
         } else {
-            vecs[i] = VectorHelper::CreateVector(OMNI_FLAT, vectorDataTypeId, rowCount);
+            vecs[i] = VectorHelper::CreateFlatVector(taskPool, vectorDataTypeId, rowCount);
         }
         vecNativeIdArrayElements[i] = reinterpret_cast<jlong>(vecs[i]);
     }

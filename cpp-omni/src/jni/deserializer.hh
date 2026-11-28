@@ -31,9 +31,15 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
     JNIEnv *env, jobject obj, jlong address, jintArray typeIdArray, jintArray precisionArray,
     jintArray scaleArray, jlongArray vecNativeIdArray);
 
+// Trailing jlong taskPoolAddress carries the per-task OmniTaskMemoryPool* address resolved by
+// the Spark caller (OmniNativeMemoryManagerJniWrapper.getPoolAddress). The parse context keeps
+// it and the batch parse charges the vectors it creates to that pool. 0 = no Spark task
+// active; the native side then falls back to the unaccounted no-pool vector constructors.
+// Declaration must stay in sync with the .cpp definition for extern "C" linkage to produce
+// the unmangled `Java_..._columnarShuffleParseInit` symbol.
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length);
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress);
 
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuffleParseClose(
@@ -52,9 +58,10 @@ Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_columnarShuf
     JNIEnv *env, jobject obj, jlong address, jintArray typeIdArray, jintArray precisionArray,
     jintArray scaleArray, jlongArray vecNativeIdArray);
 
+// See the columnarShuffleParseInit counterpart above.
 JNIEXPORT jlong JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShuffleParseInit(
-    JNIEnv *env, jobject obj, jlong address, jint length);
+    JNIEnv *env, jobject obj, jlong address, jint length, jlong taskPoolAddress);
 
 JNIEXPORT void JNICALL
 Java_com_huawei_boostkit_spark_serialize_ShuffleDataSerializerUtils_rowShuffleParseClose(

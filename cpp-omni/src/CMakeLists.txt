@@ -1,4 +1,4 @@
-include_directories(SYSTEM "/user/local/include")
+include_directories(SYSTEM "/usr/local/include")
 
 set (PROJ_TARGET spark_columnar_plugin)
 
@@ -107,6 +107,7 @@ add_custom_command(OUTPUT ${SUBSTRAIT_PROTO_OUTPUT_FILES}
         --proto_path=${SUBSTRAIT_PROTO_SRC_DIR}
         --cpp_out=${SUBSTRAIT_PROTO_OUTPUT_DIR}
         ${SUBSTRAIT_PROTO_FILES}
+        DEPENDS ${SUBSTRAIT_PROTO_FILES}
         COMMENT "Running Substrait PROTO compiler"
         VERBATIM)
 add_custom_command(OUTPUT ${GLUTEN_PROTO_OUTPUT_FILES}
@@ -114,9 +115,18 @@ add_custom_command(OUTPUT ${GLUTEN_PROTO_OUTPUT_FILES}
         --proto_path ${GLUTEN_PROTO_SRC_DIR}/
         --cpp_out ${PROTO_OUTPUT_DIR}
         ${GLUTEN_PROTO_FILES}
+        DEPENDS ${GLUTEN_PROTO_FILES}
         COMMENT "Running Gluten PROTO compiler"
         VERBATIM)
-add_library (${PROJ_TARGET} SHARED ${SOURCE_FILES} ${PROTO_SRCS} ${PROTO_HDRS} ${SUBSTRAIT_PROTO_HDRS} ${SUBSTRAIT_PROTO_SRCS} ${GLUTEN_PROTO_HDRS} ${GLUTEN_PROTO_SRCS})
+# OmniMemoryManager calls
+# gluten::MemoryManager::{create,registerFactory,release}, defined in
+# gluten/cpp/core/memory/MemoryManager.cc. The Omni backend never linked gluten
+# core (unlike cpp/velox, which does target_link_libraries(velox PUBLIC gluten)),
+# so those symbols were undefined at dlopen time and the plugin failed to load.
+# MemoryManager.cc is self-contained (MemoryManager.h + header-only
+# utils/Registry.h), so compile it straight into libspark.
+set(GLUTEN_CORE_SRCS ${GLUTEN_HOME}/cpp/core/memory/MemoryManager.cc)
+add_library (${PROJ_TARGET} SHARED ${SOURCE_FILES} ${GLUTEN_CORE_SRCS} ${PROTO_SRCS} ${PROTO_HDRS} ${SUBSTRAIT_PROTO_HDRS} ${SUBSTRAIT_PROTO_SRCS} ${GLUTEN_PROTO_HDRS} ${GLUTEN_PROTO_SRCS})
 
 #JNI
 target_include_directories(${PROJ_TARGET} PUBLIC $ENV{JAVA_HOME}/include)
@@ -124,6 +134,80 @@ target_include_directories(${PROJ_TARGET} PUBLIC $ENV{JAVA_HOME}/include/linux)
 target_include_directories(${PROJ_TARGET} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
 option(BUILD_CPP_UDAF_EXAMPLES "Build sample libmyudaf/libmyextraudaf under cpp-omni" OFF)
+
+# The new gluten/cpp-omni/src/memory/OmniMemoryManager.cc and the listener/JNI
+# TUs below need ${GLUTEN_HOME}/cpp/core on their compile include path so they
+# can find gluten-core memory headers (#include "memory/MemoryManager.h" etc.).
+# Omni headers (memory/omni_task_memory_pool.h, operator/reclaim_context.h, ...)
+# come from the installed tree on CPLUS_INCLUDE_PATH (${OMNI_HOME}/lib/include),
+# never from an OmniOperator source checkout: CI builds Gluten without one.
+#
+# CRITICAL: we DO NOT add cpp/core to the *target-wide* include path — doing so
+# shadows OmniOperator's /opt/Adaptor/lib/include/compute/ResultIterator.h with
+# gluten's cpp/core/compute/ResultIterator.h, breaking every other cpp-omni TU
+# that references the unqualified ResultIterator (omniruntime::ResultIterator).
+#
+# Therefore: scope the include path to *just these source files* via
+# set_source_files_properties + INCLUDE_DIRECTORIES. A proper cross-target link
+# contract (e.g. a gluten_core library that cpp-omni links against) would let
+# this per-file scoping be retired.
+set(_GLUTEN_CORE_INCLUDES
+    ${GLUTEN_HOME}/cpp/core
+)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/memory/OmniMemoryManager.cc)
+    set_source_files_properties(
+        memory/OmniMemoryManager.cc
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
+    )
+endif()
+set_source_files_properties(
+    compute/OmniBackend.cpp
+    jni/SparkJniWrapperGlobalMemory.cpp
+    PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
+)
+
+# SparkJniWrapperMemory.cpp holds the JNI entry points
+# that touch gluten/cpp/core types (jniCastOrThrow<gluten::MemoryManager>,
+# gluten::MemoryManager::create, SparkAllocationListener). It is split off from
+# SparkJniWrapper.cpp specifically so the cpp/core include path does NOT shadow
+# OmniOperator's compute/Runtime.h / compute/ResultIterator.h in SparkJniWrapper.cpp.
+# Same per-file scoping rationale as OmniMemoryManager.cc above.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/SparkJniWrapperMemory.cpp)
+    set_source_files_properties(
+        jni/SparkJniWrapperMemory.cpp
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
+    )
+endif()
+# Register OmniSparkAllocationListener TU for cpp/core include scope
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/OmniSparkAllocationListener.cpp)
+    # Needs gluten/cpp/core for memory/AllocationListener.h (per-file scope avoids
+    # the compute/ResultIterator.h shadowing described above).
+    set_source_files_properties(
+        jni/OmniSparkAllocationListener.cpp
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
+    )
+endif()
+# Register OmniBlockAllocationListener TU for cpp/core include scope
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/jni/OmniBlockAllocationListener.cpp)
+    # Needs gluten/cpp/core for memory/AllocationListener.h (per-file scope avoids
+    # the compute/ResultIterator.h shadowing described above).
+    set_source_files_properties(
+        jni/OmniBlockAllocationListener.cpp
+        PROPERTIES INCLUDE_DIRECTORIES "${_GLUTEN_CORE_INCLUDES}"
+    )
+endif()
+# The compiled-in gluten-core MemoryManager.cc needs
+# gluten/cpp/core on its include path (#include "utils/Registry.h"). Per-file
+# scope only — avoids the cpp/core target-wide compute/ResultIterator.h shadow trap.
+set_source_files_properties(
+    ${GLUTEN_HOME}/cpp/core/memory/MemoryManager.cc
+    PROPERTIES INCLUDE_DIRECTORIES "${GLUTEN_HOME}/cpp/core"
+)
+# The OmniMemoryManager downcast that GetTaskMemoryPool() needs lives inside
+# OmniMemoryManager.cc as a free function (omniruntime::ToOmniTaskPoolOrNull);
+# see memory/RuntimeMemoryHelper.h. OmniMemoryManager.cc already has
+# _GLUTEN_CORE_INCLUDES applied above.
+
 add_subdirectory(udf/examples)
 
 target_link_libraries (${PROJ_TARGET} PUBLIC
@@ -131,6 +215,10 @@ target_link_libraries (${PROJ_TARGET} PUBLIC
         sasl2
         protobuf
         z
+        # omni libboostkit-omniop-reader needs zlib-ng (zng_* symbols).
+        # In a standalone Omni run libz-ng arrives via java-binding.so; gluten loads
+        # only libspark, so libspark must pull libz-ng itself or reader.so fails dlopen.
+        z-ng
         snappy
         lz4
         zstd

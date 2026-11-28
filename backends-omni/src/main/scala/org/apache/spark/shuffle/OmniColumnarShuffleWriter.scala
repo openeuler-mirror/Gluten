@@ -18,7 +18,9 @@ package org.apache.spark.shuffle
 
 import com.huawei.boostkit.spark.jni.SparkJniWrapper
 import com.huawei.boostkit.spark.vectorized.SplitResult
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.runtime.OmniRuntimes
 import org.apache.gluten.utils.OmniAdaptorUtil
 
 import org.apache.spark.SparkEnv
@@ -80,6 +82,14 @@ class OmniColumnarShuffleWriter[K, V](
 
   private val jniWrapper = new SparkJniWrapper()
 
+  // Obtain a task-scoped OmniRuntime so shuffle-write allocations route through
+  // the backend's task-shared OmniTaskMemoryPool. Runtime state is keyed by
+  // (backend, name), while every runtime for that backend shares the same NMM.
+  // Compute-allocated vectors that the splitter releases also route home via
+  // Vector.pool_ (const-pool invariant).
+  private val omniRuntime =
+    OmniRuntimes.contextInstance(BackendsApiManager.getBackendName, "omni-shuffle-writer")
+
   private var nativeSplitter: Long = 0
 
   // TODO: use GlutenSplitResult
@@ -115,7 +125,12 @@ class OmniColumnarShuffleWriter[K, V](
         shuffleCompressBlockSize,
         shuffleSpillBatchRowNum,
         shuffleTaskSpillMemoryThreshold,
-        shuffleExecutorSpillMemoryThreshold
+        shuffleExecutorSpillMemoryThreshold,
+        // Supply the task's NMM handle so
+        // the native Splitter binds its SimpleArenaAllocators / AlignedBuffers
+        // to the task pool. Decoded on the native side via jniCastOrThrow.
+        omniRuntime.getNmmHandle(),
+        GlutenConfig.get.taskOffHeapMemorySize
       )
     }
 

@@ -858,7 +858,13 @@ object GlutenConfig {
       COLUMNAR_OMNI_AQE_SHUFFLE_MERGE.key,
       ENABLE_PDQ_SORT.key,
       ENABLE_INPLACE_PDQ_SORT.key,
-      ENABLE_TIM_SORT.key)
+      ENABLE_TIM_SORT.key,
+      // Per-task off-heap share (offHeap / task slots), computed by GlutenPlugin at driver
+      // start: native operators that size themselves by the task share read it (the
+      // partial-aggregation flush cap, like Velox's maxPartialAggregationMemory).
+      GLUTEN_TASK_OFFHEAP_SIZE_IN_BYTES_KEY,
+      GLUTEN_OFFHEAP_SIZE_IN_BYTES_KEY,
+      GLUTEN_NUM_TASK_SLOTS_PER_EXECUTOR_KEY)
     nativeConfMap.putAll(conf.filter(e => keys.contains(e._1)).asJava)
     nativeConfMap.putAll(conf.filter(e => e._1.contains("omni")).asJava)
     // return

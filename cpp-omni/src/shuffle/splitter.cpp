@@ -21,8 +21,11 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <utility>
 #include "shuffle/arrow_columnar_serializer.h"
 #include "shuffle/arrow_row_serializer.h"
 #include "shuffle/arrow_frame.h"
@@ -32,9 +35,94 @@
 #include "shuffle/omni_rss_push_client.h"
 #include <arrow/io/file.h>
 
+// Full pool definition for
+// getBoundAllocator() called from Split_Init. Resolves via this TU's
+// installed Omni include tree (OMNI_HOME/lib/include).
+#include "memory/omni_task_memory_pool.h"
+#include "operator/reclaim_context.h"
+#include "util/omni_exception.h"
+
+namespace {
+// Growable in-memory sink for ArrowOutputStream: the compressed partition
+// segments of a memory spill land here in the spill-file layout.
+class VectorOutputStream : public spark::OutputStream {
+public:
+    uint64_t getLength() const override { return buffer_.size(); }
+    uint64_t getNaturalWriteSize() const override { return 128 * 1024; }
+    void write(const void *buf, size_t length) override
+    {
+        const auto *bytes = static_cast<const uint8_t *>(buf);
+        buffer_.insert(buffer_.end(), bytes, bytes + length);
+    }
+    const std::string &getName() const override { return name_; }
+    void close() override {}
+    std::vector<uint8_t> Release() { return std::move(buffer_); }
+
+private:
+    std::vector<uint8_t> buffer_;
+    std::string name_{"memory-spill"};
+};
+} // namespace
+
 using namespace omniruntime::vec;
 using namespace omniruntime::vec::unsafe;
 using namespace omniruntime::type;
+
+namespace {
+// First capacity, in rows, of a growable partition buffer.
+constexpr int32_t kInitialGrowableBufferRows = 64;
+
+bool IsEnvironmentSwitchEnabled(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+}
+
+bool IsOperatorVerboseEnabled()
+{
+    static const bool enabled = IsEnvironmentSwitchEnabled("OMNI_OPERATOR_VERBOSE");
+    return enabled;
+}
+
+bool IsReclaimSuccessTelemetryEnabled()
+{
+    return IsEnvironmentSwitchEnabled("OMNI_RECLAIM_VERBOSE") ||
+        IsEnvironmentSwitchEnabled("OMNI_RECLAIM_VERBOSE_SUCCESS");
+}
+} // namespace
+
+// OmniStlAllocator thunks (declared in common/OmniStlAllocator.h). This TU
+// already has the full Allocator definition, so route vector storage through
+// the task-bound allocator while retaining the no-pool fallback used by tests.
+void *OmniStlAllocBytes(omniruntime::mem::Allocator *alloc, std::size_t bytes)
+{
+    if (bytes == 0) {
+        return nullptr;
+    }
+    if (bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+        throw std::bad_alloc();
+    }
+    if (alloc != nullptr) {
+        return alloc->Alloc(static_cast<int64_t>(bytes));
+    }
+    void *ptr = std::malloc(bytes);
+    if (ptr == nullptr) {
+        throw std::bad_alloc();
+    }
+    return ptr;
+}
+
+void OmniStlFreeBytes(omniruntime::mem::Allocator *alloc, void *ptr, std::size_t bytes) noexcept
+{
+    if (ptr == nullptr) {
+        return;
+    }
+    if (alloc != nullptr) {
+        alloc->Free(ptr, static_cast<int64_t>(bytes));
+        return;
+    }
+    std::free(ptr);
+}
 
 SplitOptions SplitOptions::Defaults() { return SplitOptions(); }
 
@@ -61,14 +149,16 @@ void Splitter::BuildPartition2Row(int32_t num_rows)
 }
 
 // 计算分区id,每个batch初始化
-int Splitter::ComputeAndCountPartitionId(VectorBatch& vb) {
+int Splitter::ComputeAndCountPartitionId(VectorBatch& vb, bool updateCachedCounts) {
     auto num_rows = vb.GetRowCount();
     memset(partition_id_cnt_cur_, 0, num_partitions_ * sizeof(int32_t));
     partition_id_.resize(num_rows);
 
     if (singlePartitionFlag) {
         partition_id_cnt_cur_[0] = num_rows;
-        partition_id_cnt_cache_[0] += num_rows;
+        if (updateCachedCounts) {
+            partition_id_cnt_cache_[0] += num_rows;
+        }
         for (auto i = 0; i < num_rows; ++i) {
             partition_id_[i] = 0;
         }
@@ -76,12 +166,14 @@ int Splitter::ComputeAndCountPartitionId(VectorBatch& vb) {
         auto pidVector = vb.Get(0);
         if (pidVector->GetEncoding() == OMNI_ENCODING_CONST) {
             int32_t constPid = reinterpret_cast<ConstVector<int32_t> *>(pidVector)->GetConstValue();
-            if (constPid >= num_partitions_) {
+            if (constPid < 0 || constPid >= num_partitions_) {
                 LogsError(" Illegal pid Value: %d >= partition number %d .", constPid, num_partitions_);
                 throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
             }
             partition_id_cnt_cur_[constPid] += num_rows;
-            partition_id_cnt_cache_[constPid] += num_rows;
+            if (updateCachedCounts) {
+                partition_id_cnt_cache_[constPid] += num_rows;
+            }
             for (auto i = 0; i < num_rows; ++i) {
                 partition_id_[i] = constPid;
             }
@@ -89,26 +181,30 @@ int Splitter::ComputeAndCountPartitionId(VectorBatch& vb) {
             auto hash_vct = reinterpret_cast<Vector<DictionaryContainer<int32_t>> *>(pidVector);
             for (auto i = 0; i < num_rows; ++i) {
                 int32_t pid = hash_vct->GetValue(i);
-                if (pid >= num_partitions_) {
+                if (pid < 0 || pid >= num_partitions_) {
                     LogsError(" Illegal pid Value: %d >= partition number %d .", pid, num_partitions_);
                     throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
                 }
                 partition_id_[i] = pid;
                 partition_id_cnt_cur_[pid]++;
-                partition_id_cnt_cache_[pid]++;
+                if (updateCachedCounts) {
+                    partition_id_cnt_cache_[pid]++;
+                }
             }
         } else if (pidVector->GetEncoding() == OMNI_FLAT) {
             auto hash_vct = reinterpret_cast<Vector<int32_t> *>(pidVector);
             for (auto i = 0; i < num_rows; ++i) {
                 // positive mod
                 int32_t pid = hash_vct->GetValue(i);
-                if (pid >= num_partitions_) {
+                if (pid < 0 || pid >= num_partitions_) {
                     LogsError(" Illegal pid Value: %d >= partition number %d .", pid, num_partitions_);
                     throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
                 }
                 partition_id_[i] = pid;
                 partition_id_cnt_cur_[pid]++;
-                partition_id_cnt_cache_[pid]++;
+                if (updateCachedCounts) {
+                    partition_id_cnt_cache_[pid]++;
+                }
             }
         } else {
          	throw std::runtime_error(
@@ -181,6 +277,54 @@ int Splitter::AllocatePartitionBuffers(int32_t partition_id, int32_t new_size) {
         }
     }
 
+    partition_buffer_size_[partition_id] = new_size;
+    return 0;
+}
+
+bool Splitter::GrowsInPlace(int32_t partition_id, int32_t rows) const
+{
+    return growPartitionBuffers_ && partition_buffer_size_[partition_id] > 0 &&
+        partition_buffer_idx_base_[partition_id] + rows <= options_.buffer_size;
+}
+
+int32_t Splitter::NextPartitionBufferRows(int32_t partition_id, int32_t rows) const
+{
+    if (!growPartitionBuffers_) {
+        return std::max(rows, options_.buffer_size);
+    }
+    if (GrowsInPlace(partition_id, rows)) {
+        // Doubling keeps the copies linear in the rows a buffer ends up holding.
+        const int64_t needed = int64_t{partition_buffer_idx_base_[partition_id]} + rows;
+        const int64_t doubled = int64_t{2} * partition_buffer_size_[partition_id];
+        return static_cast<int32_t>(std::min<int64_t>(options_.buffer_size, std::max(needed, doubled)));
+    }
+    return std::max(rows, std::min(kInitialGrowableBufferRows, options_.buffer_size));
+}
+
+int Splitter::GrowPartitionBuffers(int32_t partition_id, int32_t new_size) {
+    const int32_t rows = partition_buffer_idx_base_[partition_id];
+    for (size_t col = 0; col < fixed_width_array_idx_.size(); ++col) {
+        const auto col_idx_schema = singlePartitionFlag ? fixed_width_array_idx_[col] : fixed_width_array_idx_[col] - 1;
+        const int64_t type_size = int64_t{1} << column_type_id_[col_idx_schema];
+        auto &values = partition_fixed_width_arrow_buffers_[col][partition_id];
+        auto st = values->Resize(new_size * type_size, /*shrink_to_fit=*/false);
+        if (!st.ok()) {
+            throw std::runtime_error("GrowPartitionBuffers Arrow resize failed: " + st.ToString());
+        }
+        partition_fixed_width_value_addrs_[col][partition_id] = values->mutable_data();
+
+        auto &validity = partition_fixed_width_buffers_[col][partition_id][0];
+        if (validity != nullptr) {
+            auto *grown = static_cast<uint8_t *>(options_.allocator->Alloc(new_size));
+            if (grown == nullptr) {
+                throw std::runtime_error("Allocator for ValidityBuffer Failed! ");
+            }
+            memcpy(grown, validity->data_, rows);
+            memset(grown + rows, 0, new_size - rows);
+            validity = std::make_shared<Buffer>(grown, rows, new_size, options_.allocator);
+            partition_fixed_width_validity_addrs_[col][partition_id] = grown;
+        }
+    }
     partition_buffer_size_[partition_id] = new_size;
     return 0;
 }
@@ -453,7 +597,7 @@ void Splitter::SplitBinaryVector(BaseVector *varcharVector, int col_schema) {
                         (uint64_t)constDst, constStrLen, constIsNull);
                     vc_partition_array_buffers_[pid][col_schema].back().vcb_total_len += constStrLen;
                 } else {
-                    VCBatchInfo svc(options_.spill_batch_row_num);
+                    VCBatchInfo svc(options_.spill_batch_row_num, options_.allocator);
                     svc.getVcList().emplace_back((uint64_t)constDst, constStrLen, constIsNull);
                     svc.vcb_total_len += constStrLen;
                     if constexpr (hasNull) {
@@ -500,7 +644,7 @@ void Splitter::SplitBinaryVector(BaseVector *varcharVector, int col_schema) {
                     vc_partition_array_buffers_[pid][col_schema].back().getVcList().emplace_back((uint64_t)dst, str_len, is_null);
                     vc_partition_array_buffers_[pid][col_schema].back().vcb_total_len += str_len;
                 } else {
-                    VCBatchInfo svc(options_.spill_batch_row_num);
+                    VCBatchInfo svc(options_.spill_batch_row_num, options_.allocator);
                     svc.getVcList().emplace_back((uint64_t)dst, str_len, is_null);
                     svc.vcb_total_len += str_len;
                     if constexpr (hasNull) {
@@ -546,7 +690,7 @@ void Splitter::SplitBinaryVector(BaseVector *varcharVector, int col_schema) {
                     vc_partition_array[col_schema].back().getVcList().emplace_back((uint64_t)dst, str_len, is_null);
                     vc_partition_array[col_schema].back().vcb_total_len += str_len;
                 } else {
-                    VCBatchInfo svc(options_.spill_batch_row_num);
+                    VCBatchInfo svc(options_.spill_batch_row_num, options_.allocator);
                     svc.getVcList().emplace_back((uint64_t)dst, str_len, is_null);
                     if constexpr (hasNull) {
                         HandleNull(svc, is_null);
@@ -1269,15 +1413,14 @@ int Splitter::SplitFixedWidthValidityBuffer(VectorBatch& vb){
             for (auto pid = 0; pid < num_partitions_; ++pid) {
                 if (partition_id_cnt_cur_[pid] > 0 && dst_addrs[pid] == nullptr) {
                     // init bitmap if it's null
-                    auto new_size = partition_id_cnt_cur_[pid] > options_.buffer_size
-                        ? partition_id_cnt_cur_[pid]
-                        : options_.buffer_size;
+                    // Cover the whole value buffer: rows already in it before this batch read as valid.
+                    auto new_size = partition_buffer_size_[pid];
                     auto ptr_tmp = static_cast<uint8_t *>(options_.allocator->Alloc(new_size));
                     if (nullptr == ptr_tmp) {
                         throw std::runtime_error("Allocator for ValidityBuffer Failed! ");
                     }
                     std::shared_ptr<Buffer> validity_buffer (
-                        new Buffer((uint8_t *)ptr_tmp, partition_id_cnt_cur_[pid], new_size));
+                        new Buffer((uint8_t *)ptr_tmp, partition_id_cnt_cur_[pid], new_size, options_.allocator));
                     dst_addrs[pid] = const_cast<uint8_t*>(validity_buffer->data_);
                     memset(validity_buffer->data_, 0, new_size);
                     partition_fixed_width_buffers_[col][pid][0] = std::move(validity_buffer);
@@ -1327,7 +1470,8 @@ int Splitter::SplitFixedWidthValidityBuffer(VectorBatch& vb){
     return 0;
 }
 
-int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
+int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers, arrow::MemoryPool *bufferPool) {
+    arrow::MemoryPool *pool = bufferPool != nullptr ? bufferPool : arrow_pool_.get();
     // 定宽列改用 Arrow buffer 缓存批（Task 9: 阶段A —— 一个缓存批 = 一帧，零拷贝引用）
     // Task 11: 也须处理仅有复杂类型数据的情况（fixed_width_array_idx_ 可能为空）
     bool hasFixedData = (partition_buffer_idx_base_[partition_id] > 0 && fixed_width_array_idx_.size() > 0);
@@ -1415,7 +1559,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         std::shared_ptr<arrow::Buffer> arrow_validity = nullptr;
                         if (hasNull && gatherRows > 0) {
                             int32_t byteCount = (gatherRows + 7) / 8;
-                            auto vr = arrow::AllocateResizableBuffer(byteCount, arrow_pool_.get());
+                            auto vr = arrow::AllocateResizableBuffer(byteCount, pool);
                             if (!vr.ok()) {
                                 throw std::runtime_error(
                                     "CacheVectorBatch Arrow varchar validity alloc failed: " + vr.status().ToString());
@@ -1428,7 +1572,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
 
                         // --- offsets: int32 数组，(gatherRows+1) × 4 字节 ---
                         int64_t offsetsSize = static_cast<int64_t>(gatherRows + 1) * sizeof(int32_t);
-                        auto orStatus = arrow::AllocateResizableBuffer(offsetsSize, arrow_pool_.get());
+                        auto orStatus = arrow::AllocateResizableBuffer(offsetsSize, pool);
                         if (!orStatus.ok()) {
                             throw std::runtime_error(
                                 "CacheVectorBatch Arrow varchar offsets alloc failed: " + orStatus.status().ToString());
@@ -1437,7 +1581,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         int32_t* offsets = reinterpret_cast<int32_t*>(offsetsBuf->mutable_data());
 
                         // --- values: 拼接字符串体 ---
-                        auto vr2 = arrow::AllocateResizableBuffer(totalValuesSize, arrow_pool_.get());
+                        auto vr2 = arrow::AllocateResizableBuffer(totalValuesSize, pool);
                         if (!vr2.ok()) {
                             throw std::runtime_error(
                                 "CacheVectorBatch Arrow varchar values alloc failed: " + vr2.status().ToString());
@@ -1488,7 +1632,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         arrow_batch.buffers.push_back(nullptr);  // validity 全有效
 
                         int32_t offsetsLen = (num_rows + 1) * static_cast<int32_t>(sizeof(int32_t));
-                        auto offsetsR = arrow::AllocateBuffer(offsetsLen, arrow_pool_.get());
+                        auto offsetsR = arrow::AllocateBuffer(offsetsLen, pool);
                         if (!offsetsR.ok()) {
                             throw std::runtime_error("CacheVectorBatch empty offsets alloc failed: "
                                                      + offsetsR.status().ToString());
@@ -1497,7 +1641,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         std::memset(emptyOffsetsBuf->mutable_data(), 0, static_cast<size_t>(offsetsLen));
                         arrow_batch.buffers.push_back(std::move(emptyOffsetsBuf));  // offsets 全 0
 
-                        auto valuesR = arrow::AllocateBuffer(0, arrow_pool_.get());
+                        auto valuesR = arrow::AllocateBuffer(0, pool);
                         if (!valuesR.ok()) {
                             throw std::runtime_error("CacheVectorBatch empty values alloc failed: "
                                                      + valuesR.status().ToString());
@@ -1568,7 +1712,7 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
 
                         if (has_null) {
                             int32_t byte_count = (num_rows + 7) / 8;
-                            auto vr = arrow::AllocateResizableBuffer(byte_count, arrow_pool_.get());
+                            auto vr = arrow::AllocateResizableBuffer(byte_count, pool);
                             if (!vr.ok()) {
                                 throw std::runtime_error(
                                     "CacheVectorBatch Arrow validity alloc failed: " + vr.status().ToString());
@@ -1604,8 +1748,11 @@ int Splitter::CacheVectorBatch(int32_t partition_id, bool reset_buffers) {
                         // AllocatePartitionBuffers 时 Resize(needed_size) 保留了完整容量，
                         // 这里 Resize(actual_data_size) 确保 size() = 实际写入字节数，
                         // 使 WriteColumnarBatch 用 b->size() 写出正确的字节数（不多写垃圾）。
-                        // actual_data_size <= capacity（由 CheckCapacityAndAllocate 保证），不会触发 Reallocate。
-                        arrow_values->Resize(actual_data_size);
+                        // actual_data_size <= capacity（由 CheckCapacityAndAllocate 保证）。
+                        // Shrinking to fit reallocates, which takes the smaller buffer before freeing
+                        // the old one. A reclaim spill writes and releases this batch right away and
+                        // has no headroom in the task pool, so it keeps the capacity.
+                        arrow_values->Resize(actual_data_size, /*shrink_to_fit=*/bufferPool == nullptr);
                         arrow_batch.buffers.push_back(arrow_values);
                     } else {
                         arrow_batch.buffers.push_back(nullptr);
@@ -1688,8 +1835,10 @@ int Splitter::DoSplit(VectorBatch& vb) {
         if ((hasFixed || hasComplex) &&
             partition_id_cnt_cur_[pid] > 0 &&
             partition_buffer_idx_base_[pid] + partition_id_cnt_cur_[pid] > partition_buffer_size_[pid]) {
-            auto new_size = partition_id_cnt_cur_[pid] > options_.buffer_size ? partition_id_cnt_cur_[pid] : options_.buffer_size;
-            if (partition_buffer_size_[pid] == 0) {
+            auto new_size = NextPartitionBufferRows(pid, partition_id_cnt_cur_[pid]);
+            if (GrowsInPlace(pid, partition_id_cnt_cur_[pid])) {
+                GrowPartitionBuffers(pid, new_size);
+            } else if (partition_buffer_size_[pid] == 0) {
                 AllocatePartitionBuffers(pid, new_size);
             } else {
                     CacheVectorBatch(pid, true);
@@ -1722,7 +1871,10 @@ int Splitter::DoSplit(VectorBatch& vb) {
 
     // spill
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
-    uint64_t usedMemorySize = omniruntime::mem::MemoryManager::GetGlobalAccountedMemory();
+    // The legacy process-global accounted-memory query no longer exists, so the
+    // executor-level trigger is effectively disabled; the task-level trigger
+    // below still fires from `cached_vectorbatch_size_`.
+    uint64_t usedMemorySize = 0;
     if (usedMemorySize > options_.executor_spill_mem_threshold) {
         if (rss_mode_) {
             TIME_NANO_OR_RAISE(total_spill_time_, SpillToRss());
@@ -1859,6 +2011,8 @@ int Splitter::Split_Init(){
         options_.data_file = CreateTempShuffleFile(configured_dirs_[0]);
     }
 
+    fixed_value_width_bytes_ = 0;
+    binary_value_column_idx_.clear();
     for (uint i = 0; i < column_type_id_.size(); ++i) {
         switch (column_type_id_[i]) {
             case ShuffleTypeId::SHUFFLE_1BYTE:
@@ -1866,11 +2020,15 @@ int Splitter::Split_Init(){
             case ShuffleTypeId::SHUFFLE_4BYTE:
             case ShuffleTypeId::SHUFFLE_8BYTE:
             case ShuffleTypeId::SHUFFLE_DECIMAL128:
+                fixed_value_width_bytes_ += uint64_t{1} << column_type_id_[i];
                 if (singlePartitionFlag) {
                     fixed_width_array_idx_.push_back(i);
                 } else {
                     fixed_width_array_idx_.push_back(i + 1);
                 }
+                break;
+            case ShuffleTypeId::SHUFFLE_BINARY:
+                binary_value_column_idx_.push_back(static_cast<int32_t>(i));
                 break;
             case ShuffleTypeId::SHUFFLE_ARRAY:
             case ShuffleTypeId::SHUFFLE_MAP:
@@ -1885,7 +2043,26 @@ int Splitter::Split_Init(){
                 break;
         }
     }
+
+    // Velox (VeloxHashShuffleWriter::calculatePartitionBufferSize) gives preallocated partition
+    // buffers at most a quarter of the task's offheap share. A full buffer_size per partition
+    // outgrows that once partitions are many: 600 partitions x 8192 rows x 37 bytes is 182 MB
+    // against a 200 MB share. Those buffers are mostly empty when Spark spills the task, so a
+    // spill frees capacity rather than rows, the next batch allocates it again, and the writer is
+    // spilled every few batches with a handful of rows per partition. Buffers therefore start
+    // small and grow with the rows, so they hold rows rather than empty capacity. This is not
+    // limited to a small share: with a normal share the same empty capacity is what gets spilled
+    // whenever a sibling operator holds most of the task (q3 SF1000 st16: a pinned final
+    // aggregation, 4300 writer spills of 93 MB capacity per task for 2 MB of rows each).
+    const uint64_t bytesPerRow = fixed_value_width_bytes_ + fixed_width_array_idx_.size(); // values + validity
+    growPartitionBuffers_ = options_.task_offheap_bytes > 0 && bytesPerRow > 0;
+    if (growPartitionBuffers_) {
+        LogsInfo("Splitter partition buffers grow with their rows: partitions=%d buffer_size=%d bytes_per_row=%lu "
+                 "task_offheap=%ld", num_partitions_, options_.buffer_size, bytesPerRow,
+                 static_cast<long>(options_.task_offheap_bytes));
+    }
     auto num_fixed_width = fixed_width_array_idx_.size();
+    fixed_column_has_null_scratch_.assign(num_fixed_width, 0);
     partition_fixed_width_validity_addrs_.resize(num_fixed_width);
     partition_fixed_width_value_addrs_.resize(num_fixed_width);
     partition_fixed_width_buffers_.resize(num_fixed_width);
@@ -1910,7 +2087,26 @@ int Splitter::Split_Init(){
         partition_complex_accumulators_[i].resize(complex_type_array_idx_.size());
     }
 
-    partition_arena_.resize(num_partitions_);
+    // partition_arena_ is std::vector<SimpleArenaAllocator>, which has no default
+    // ctor or late-bound allocator, so each element is built with
+    // `reserve + emplace_back(minChunkSize, allocator)` and its pool-bound Allocator*.
+    // The production gluten path always supplies a pool; test/legacy callers without
+    // a pool fall back to a function-local nullBridge Allocator.
+    {
+        omniruntime::mem::Allocator *boundAlloc = nullptr;
+        if (taskMemoryPool_ != nullptr) {
+            boundAlloc = taskMemoryPool_->getBoundAllocator();
+        } else {
+            // Test/legacy path without a pool: a function-local nullBridge keeps
+            // those callers working without per-task accounting.
+            static omniruntime::mem::Allocator nullBridge{nullptr};
+            boundAlloc = &nullBridge;
+        }
+        partition_arena_.reserve(num_partitions_);
+        for (int32_t pid = 0; pid < num_partitions_; ++pid) {
+            partition_arena_.emplace_back(/*minChunkSize=*/4096, boundAlloc);
+        }
+    }
     partition_row_batch.resize(num_partitions_);
     partition_row_batch_count.resize(num_partitions_);
     std::fill(partition_row_batch_count.begin(), partition_row_batch_count.end(), 0);
@@ -1920,15 +2116,322 @@ int Splitter::Split_Init(){
 
 int Splitter::Split(VectorBatch& vb )
 {
+    std::lock_guard<std::recursive_mutex> guard(reclaimMutex_);
+    columnarMode_ = true;
     LogsTrace(" split vb row number: %d ", vb.GetRowCount());
-    TIME_NANO_OR_RAISE(total_compute_pid_time_, ComputeAndCountPartitionId(vb));
-
-    DoSplit(vb);
+    EnsureInputDataTypes(vb);
+    // Compute routing once into the split scratch. Reservation estimation below
+    // consumes these counts; DoSplit reuses the same IDs instead of rescanning
+    // the PID vector.
+    TIME_NANO_OR_RAISE(total_compute_pid_time_, ComputeAndCountPartitionId(vb, false));
+    ChargeMemorySpills();
+    ReserveForSplit(vb, "Splitter::Split");
+    for (int32_t pid = 0; pid < num_partitions_; ++pid) {
+        partition_id_cnt_cache_[pid] += static_cast<uint64_t>(partition_id_cnt_cur_[pid]);
+    }
+    try {
+        NonReclaimableSection nonReclaimable(this);
+        DoSplit(vb);
+    } catch (...) {
+        if (taskMemoryPool_ != nullptr) {
+            taskMemoryPool_->releaseUnusedReservation();
+        }
+        // DoSplit may already have cached this batch's string vectors; the
+        // splitter owns those now. Release the rest here so the JNI error path
+        // does not free the cached vectors a second time.
+        if (GetInputVecBatch() == &vb) {
+            ReleaseVectorBatch(&vb);
+            ResetInputVecBatch();
+        }
+        throw;
+    }
     return 0;
 }
 
+void Splitter::EnsureInputDataTypes(VectorBatch& vb)
+{
+    if (!inputDataTypes_.empty()) {
+        return;
+    }
+
+    const int32_t firstDataColumn = singlePartitionFlag ? 0 : 1;
+    const int32_t vectorCount = static_cast<int32_t>(vb.GetVectorCount());
+    if (vectorCount != num_fields_ + firstDataColumn) {
+        throw std::runtime_error(
+            "Shuffle input vector count does not match the configured schema");
+    }
+
+    inputDataTypes_.reserve(static_cast<size_t>(num_fields_));
+    for (int32_t column = firstDataColumn; column < vectorCount; ++column) {
+        inputDataTypes_.push_back(VectorHelper::GetDataType(vb.Get(column)));
+    }
+}
+
+int64_t Splitter::EstimateSplitReservation(VectorBatch& vb)
+{
+    const auto add = [](uint64_t left, uint64_t right) {
+        constexpr uint64_t max = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        return left > max - std::min(right, max) ? max : left + right;
+    };
+    const auto multiply = [](uint64_t left, uint64_t right) {
+        constexpr uint64_t max = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        return right != 0 && left > max / right ? max : left * right;
+    };
+
+    if (!columnarMode_) {
+        // Row shuffle never allocates columnar capacity buffers; it needs the
+        // serialized bytes each partition will receive.
+        std::vector<uint64_t> partitionBytes(num_partitions_, 0);
+        if (row_estimate_max_avg_bytes_ > 0) {
+            // Like Velox ensureInputFits(), size from an estimate rather than
+            // serializing the batch twice: rows per partition times the
+            // largest per-batch average row length seen so far. The actual
+            // pool-backed arena growth stays authoritative if a batch runs
+            // larger than the estimate.
+            if (singlePartitionFlag) {
+                partitionBytes[0] = multiply(static_cast<uint64_t>(vb.GetRowCount()),
+                    row_estimate_max_avg_bytes_);
+            } else {
+                for (int pid = 0; pid < num_partitions_; ++pid) {
+                    partitionBytes[pid] = multiply(static_cast<uint64_t>(partition_id_cnt_cur_[pid]),
+                        row_estimate_max_avg_bytes_);
+                }
+            }
+        } else {
+            // First batch: no history yet, so measure the serialized rows with
+            // the same encoders as SplitByRow (dictionary/constant and
+            // variable-width values included).
+            const int firstColumn = singlePartitionFlag ? 0 : 1;
+            std::vector<DataTypeId> types;
+            std::vector<Encoding> encodings;
+            for (int col = firstColumn; col < vb.GetVectorCount(); ++col) {
+                types.push_back(vb.Get(col)->GetTypeId());
+                encodings.push_back(vb.Get(col)->GetEncoding());
+            }
+            RowBuffer rowBuffer(types, encodings);
+            for (int row = 0; row < vb.GetRowCount(); ++row) {
+                rowBuffer.TransValue(vb.GetVectors() + firstColumn, row);
+                const int32_t length = rowBuffer.CalculateCompactLength(types.size());
+                if (length < 0) {
+                    throw std::overflow_error("Serialized shuffle row length overflow");
+                }
+                const int pid = singlePartitionFlag ? 0 : partition_id_[row];
+                partitionBytes[pid] = add(partitionBytes[pid], static_cast<uint64_t>(length));
+            }
+        }
+        uint64_t growth = 0;
+        for (int pid = 0; pid < num_partitions_; ++pid) {
+            const uint64_t bytes = partitionBytes[pid];
+            if (bytes == 0) {
+                continue;
+            }
+            if (singlePartitionFlag) {
+                growth = add(growth, bytes);
+            } else if (bytes > partition_arena_[pid].AvailBytes()) {
+                // Cover geometric/linear chunk rounding and tail waste. This
+                // bound depends on row bytes and arena state, not buffer_size.
+                growth = add(growth, add(multiply(bytes, 2),
+                    partition_arena_[pid].GetNextSize(bytes)));
+            }
+        }
+        const int64_t quantized = omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(
+            static_cast<int64_t>(growth));
+        return quantized < 0 ? std::numeric_limits<int64_t>::max() : quantized;
+    }
+
+    // VectorBatch::CalculateTotalSize() is not a byte-size API: it sums
+    // BaseVector::GetSize(), i.e. element counts. Using it here made a
+    // 48-partition, ten-LONG batch look like a few tens of KiB even though
+    // AllocatePartitionBuffers() was about to materialize ~15 MiB. Use the
+    // already-computed rows per destination and mirror DoSplit's
+    // buffer-growth rules so admission happens before persistent state mutates.
+    //
+    // The schema-derived inputs (`fixed_value_width_bytes_` and
+    // `binary_value_column_idx_`) are precomputed by Split_Init(); the
+    // per-partition buffer state below is still resolved for every batch.
+    const uint64_t fixedValueWidth = fixed_value_width_bytes_;
+
+    // Null presence is a per-batch property, so resolve it once per fixed-width
+    // column instead of re-reading it for every partition. The no-null case
+    // also skips the per-partition fixed-column walk entirely. The flag vector
+    // is splitter-owned scratch (sized in Split_Init) to keep this path free of
+    // per-batch heap allocation.
+    std::vector<uint8_t>& fixedColumnHasNull = fixed_column_has_null_scratch_;
+    bool anyFixedColumnHasNull = false;
+    for (size_t fixedColumn = 0; fixedColumn < fixed_width_array_idx_.size(); ++fixedColumn) {
+        const bool hasNull = vb.Get(fixed_width_array_idx_[fixedColumn])->HasNull();
+        fixedColumnHasNull[fixedColumn] = hasNull ? 1 : 0;
+        anyFixedColumnHasNull = anyFixedColumnHasNull || hasNull;
+    }
+
+    uint64_t fixedBufferGrowth = 0;
+    for (int32_t pid = 0; pid < num_partitions_; ++pid) {
+        const uint64_t count = static_cast<uint64_t>(partition_id_cnt_cur_[pid]);
+        if (count == 0) {
+            continue;
+        }
+        const bool replacesValueBuffers =
+            static_cast<uint64_t>(std::max(partition_buffer_idx_base_[pid], 0)) + count >
+            static_cast<uint64_t>(std::max(partition_buffer_size_[pid], 0));
+        // A grown buffer holds the old one until its rows are copied, so it peaks at the new
+        // capacity too.
+        const uint64_t newCapacity = static_cast<uint64_t>(
+            NextPartitionBufferRows(pid, static_cast<int32_t>(count)));
+        if (replacesValueBuffers) {
+            fixedBufferGrowth = add(
+                fixedBufferGrowth, multiply(newCapacity, fixedValueWidth));
+        }
+
+        // Validity storage is allocated lazily, one byte per row. A value-buffer
+        // replacement also resets its validity buffer through CacheVectorBatch().
+        if (anyFixedColumnHasNull) {
+            for (size_t fixedColumn = 0; fixedColumn < fixed_width_array_idx_.size(); ++fixedColumn) {
+                if (fixedColumnHasNull[fixedColumn] != 0 &&
+                    (replacesValueBuffers ||
+                     partition_fixed_width_validity_addrs_[fixedColumn][pid] == nullptr)) {
+                    fixedBufferGrowth = add(fixedBufferGrowth, newCapacity);
+                }
+            }
+        }
+    }
+
+    // Binary payload bytes stay in the retained input vector; the new
+    // pool-accounted allocation is the VCLocation index. Bound each vector's
+    // geometric growth by 2x its final size, including the transient where the
+    // old allocation remains live until the new allocation succeeds.
+    uint64_t binaryLocationGrowth = 0;
+    const uint64_t batchLimit = std::max<uint64_t>(options_.spill_batch_row_num, 1);
+    for (int32_t pid = 0; pid < num_partitions_; ++pid) {
+        const uint64_t count = static_cast<uint64_t>(partition_id_cnt_cur_[pid]);
+        if (count == 0) {
+            continue;
+        }
+        for (const int32_t column : binary_value_column_idx_) {
+            uint64_t remaining = count;
+            const auto &batches = vc_partition_array_buffers_[pid][column];
+            if (!batches.empty() && batches.back().getVcList().size() < batchLimit) {
+                const auto &locations = batches.back().getVcList();
+                const uint64_t oldSize = locations.size();
+                const uint64_t appended = std::min(remaining, batchLimit - oldSize);
+                const uint64_t finalSize = add(oldSize, appended);
+                if (finalSize > locations.capacity()) {
+                    binaryLocationGrowth = add(binaryLocationGrowth,
+                        multiply(multiply(finalSize, 2), sizeof(VCLocation)));
+                }
+                remaining -= appended;
+            }
+            while (remaining > 0) {
+                const uint64_t chunk = std::min(remaining, batchLimit);
+                binaryLocationGrowth = add(binaryLocationGrowth,
+                    multiply(multiply(chunk, 2), sizeof(VCLocation)));
+                remaining -= chunk;
+            }
+        }
+    }
+
+    // Input vectors and BuildPartition2Row's std::vector scratch are not new
+    // task-pool allocations. Reserving for them here would manufacture an
+    // 8 MiB request even when an existing fixed buffer can absorb the batch.
+    const uint64_t incrementalPeak = add(fixedBufferGrowth, binaryLocationGrowth);
+    // Match Velox MemoryPoolImpl::maybeReserve(): explicit pre-reservation is
+    // rounded once to an 8 MiB growth quantum. The listener then moves whole
+    // reservation blocks (8 MiB by default), which an 8 MiB-aligned request
+    // already is, so no second quantum is added.
+    const int64_t quantized = omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(
+        static_cast<int64_t>(incrementalPeak));
+    return quantized < 0 ? std::numeric_limits<int64_t>::max() : quantized;
+}
+
+// Bytes the row shuffle holds outside the partition arenas once `incomingRows`
+// more rows are buffered: one pointer slot per reserved row and one RowInfo
+// allocation per buffered row. The capacity rule mirrors SplitByRow.
+int64_t Splitter::RowBookkeepingBytes(int32_t incomingRows) const
+{
+    // operator new rounds a RowInfo up to the allocator's 16-byte size classes.
+    constexpr uint64_t rowInfoAllocBytes = (sizeof(RowInfo) + 15) / 16 * 16;
+    const uint64_t incoming = incomingRows > 0 ? static_cast<uint64_t>(incomingRows) : 0;
+    uint64_t slots = 0;
+    uint64_t rows = incoming;
+    for (const auto &partition : partition_rows) {
+        rows += partition.size();
+        uint64_t capacity = partition.capacity();
+        const uint64_t needCapacity = partition.size() + incoming;
+        if (capacity < needCapacity) {
+            capacity = std::max<uint64_t>(capacity * expansion, needCapacity);
+        }
+        slots += capacity;
+    }
+    return static_cast<int64_t>(slots * sizeof(std::unique_ptr<RowInfo>) + rows * rowInfoAllocBytes);
+}
+
+void Splitter::ChargeRowBookkeeping(int32_t incomingRows)
+{
+    if (taskMemoryPool_ == nullptr) {
+        return;
+    }
+    // AddMemory can make Spark reclaim this writer; its spill frees the rows and
+    // the pointer arrays and trims the charge, so size the charge again after it.
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const int64_t delta = RowBookkeepingBytes(incomingRows) - row_bookkeeping_bytes_;
+        if (delta <= 0) {
+            return;
+        }
+        taskMemoryPool_->AddMemory(delta);
+        row_bookkeeping_bytes_ += delta;
+    }
+}
+
+void Splitter::TrimRowBookkeeping()
+{
+    if (taskMemoryPool_ == nullptr || row_bookkeeping_bytes_ <= 0) {
+        return;
+    }
+    const int64_t actual = RowBookkeepingBytes(0);
+    if (row_bookkeeping_bytes_ > actual) {
+        taskMemoryPool_->SubMemory(row_bookkeeping_bytes_ - actual);
+        row_bookkeeping_bytes_ = actual;
+    }
+}
+
+void Splitter::ReserveForSplit(VectorBatch& vb, const char *site)
+{
+    if (taskMemoryPool_ == nullptr) {
+        return;
+    }
+    const int64_t estimate = EstimateSplitReservation(vb);
+    if (estimate <= 0 || taskMemoryPool_->availableReservation() >= estimate) {
+        return;
+    }
+    omniruntime::op::ReservationRequestSection request(
+        nullptr, reclaimableName(), site, estimate);
+    if (taskMemoryPool_->maybeReserve(estimate)) {
+        return;
+    }
+    // Keep pre-reservation best effort, just like Velox ensureInputFits. The
+    // actual pool-backed buffer growth below remains authoritative and can
+    // still arbitrate, reclaim, or report a real allocation failure.
+    if (IsOperatorVerboseEnabled()) {
+        std::fprintf(stderr,
+            "[OMNI-SHUFFLE] event=ensure_input_fits outcome=reservation_denied path=%s writer_pool=%p target=%ld used=%ld reserved=%ld\n",
+            columnarMode_ ? "columnar" : "row",
+            static_cast<void *>(taskMemoryPool_), static_cast<long>(estimate),
+            static_cast<long>(taskMemoryPool_->currentBytes()),
+            static_cast<long>(taskMemoryPool_->reservedBytes()));
+    }
+}
+
 int Splitter::SplitByRow(VectorBatch *vecBatch) {
+    std::lock_guard<std::recursive_mutex> guard(reclaimMutex_);
+    columnarMode_ = false;
+    EnsureInputDataTypes(*vecBatch);
+    TIME_NANO_OR_RAISE(total_compute_pid_time_, ComputeAndCountPartitionId(*vecBatch, false));
+    ReserveForSplit(*vecBatch, "Splitter::SplitByRow");
+    // Charge the per-row bookkeeping this batch adds while the writer can still
+    // be reclaimed: nothing of the batch is buffered yet, so a spill is safe.
+    ChargeRowBookkeeping(vecBatch->GetRowCount());
+    NonReclaimableSection nonReclaimable(this);
     int32_t rowCount = vecBatch->GetRowCount();
+    uint64_t batchRowBytes = 0;
     for (int pid = 0; pid < num_partitions_; ++pid) {
         auto needCapacity = partition_rows[pid].size() + rowCount;
         if (partition_rows[pid].capacity() < needCapacity) {
@@ -1939,57 +2442,24 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
     }
 
     if (singlePartitionFlag) {
-        RowBatch *rowBatch = VectorHelper::TransRowBatchFromVectorBatch(vecBatch);
+        if (taskMemoryPool_ == nullptr) {
+            throw std::invalid_argument("Single-partition row shuffle requires a task memory pool");
+        }
+        auto *poolAlloc = taskMemoryPool_->getBoundAllocator();
+        // Reserve before producing raw owning rows: adoption below cannot grow
+        // the vector. RowBatch only owns its pointer array, not its RowInfo rows.
+        partition_rows[0].reserve(partition_rows[0].size() + rowCount);
+        std::unique_ptr<RowBatch> rowBatch(
+            VectorHelper::TransRowBatchFromVectorBatch(vecBatch, poolAlloc));
         for (int i = 0; i < rowCount; ++i) {
             RowInfo *rowInfo = rowBatch->Get(i);
             partition_rows[0].emplace_back(std::unique_ptr<RowInfo>(rowInfo));
             total_input_size += rowInfo->length;
+            batchRowBytes += static_cast<uint64_t>(rowInfo->length);
         }
-        delete rowBatch;
         delete vecBatch;
     } else {
         auto tmpVectorBatch = new VectorBatch(rowCount);
-        partition_id_.resize(rowCount);
-        memset(partition_id_cnt_cur_, 0, num_partitions_ * sizeof(int32_t));
-        BaseVector *pidCol = vecBatch->Get(0);
-
-        if (pidCol->GetEncoding() == OMNI_ENCODING_CONST) {
-            int32_t constPid = reinterpret_cast<ConstVector<int32_t> *>(pidCol)->GetConstValue();
-            if (constPid >= num_partitions_) {
-                LogsError(" Illegal pid Value: %d >= partition number %d .", constPid, num_partitions_);
-                throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
-            }
-            partition_id_cnt_cur_[constPid] += rowCount;
-            for (int i = 0; i < rowCount; ++i) {
-                partition_id_[i] = constPid;
-            }
-        } else if (pidCol->GetEncoding() == OMNI_DICTIONARY) {
-            auto pidVec = reinterpret_cast<Vector<DictionaryContainer<int32_t>> *>(pidCol);
-            for (int i = 0; i < rowCount; ++i) {
-                auto pid = pidVec->GetValue(i);
-                if (pid >= num_partitions_) {
-                    LogsError(" Illegal pid Value: %d >= partition number %d .", pid, num_partitions_);
-                    throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
-                }
-                partition_id_[i] = pid;
-                partition_id_cnt_cur_[pid]++;
-            }
-        } else if (pidCol->GetEncoding() == OMNI_FLAT) {
-            auto pidVec = reinterpret_cast<Vector<int32_t> *>(pidCol);
-            for (int i = 0; i < rowCount; ++i) {
-                auto pid = pidVec->GetValue(i);
-                if (pid >= num_partitions_) {
-                    LogsError(" Illegal pid Value: %d >= partition number %d .", pid, num_partitions_);
-                    throw std::runtime_error("Shuffle pidVec Illegal pid Value!");
-                }
-                partition_id_[i] = pid;
-                partition_id_cnt_cur_[pid]++;
-            }
-        } else {
-         	throw std::runtime_error(
-         	    std::string("SplitByRow(pid column): unsupported vector encoding ") +
-         	    std::to_string(static_cast<int>(pidCol->GetEncoding())));
-        }
         BuildPartition2Row(rowCount);
         for (int i = 1; i < vecBatch->GetVectorCount(); ++i) {
             tmpVectorBatch->Append(vecBatch->Get(i));
@@ -2010,18 +2480,27 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
             for (; pos < end; ++pos) {
                 rowBuffer->TransValueFromVectorBatch(tmpVectorBatch, static_cast<int32_t>(row_offset_row_id_[pos]));
                 auto oneRowLen = rowBuffer->FillBuffer(partition_arena_[pid]);
-                partition_rows[pid].emplace_back(std::make_unique<RowInfo>(rowBuffer->TakeRowBuffer(), oneRowLen, false));
+                partition_rows[pid].emplace_back(std::make_unique<RowInfo>(rowBuffer->TakeRowBuffer(), oneRowLen));
                 total_input_size += oneRowLen;
+                batchRowBytes += static_cast<uint64_t>(oneRowLen);
             }
         }
 
         delete vecBatch;
         delete tmpVectorBatch;
     }
+    if (rowCount > 0) {
+        const uint64_t batchAvg = (batchRowBytes + rowCount - 1) / static_cast<uint64_t>(rowCount);
+        row_estimate_max_avg_bytes_ = std::max(row_estimate_max_avg_bytes_, batchAvg);
+    }
+    TrimRowBookkeeping();
 
     // spill
     // process level: If the memory usage of the current executor exceeds the threshold, spill is triggered.
-    uint64_t usedMemorySize = omniruntime::mem::MemoryManager::GetGlobalAccountedMemory();
+    // The legacy process-global accounted-memory query no longer exists, so the
+    // executor-level trigger is effectively disabled; the task-level trigger
+    // below still fires from `total_input_size`.
+    uint64_t usedMemorySize = 0;
     if (usedMemorySize > options_.executor_spill_mem_threshold) {
         if (rss_mode_) {
             TIME_NANO_OR_RAISE(total_spill_time_, SpillToRssByRow());
@@ -2032,8 +2511,9 @@ int Splitter::SplitByRow(VectorBatch *vecBatch) {
         total_input_size = 0;
     }
 
-    // task level: Arrow pool 统一记账（覆盖定宽+变长+复杂+行式全部 Arrow buffer）
-    if (arrow_pool_->bytes_allocated() > options_.task_spill_mem_threshold) {
+    // Row payloads live in RowInfo allocations or partition arenas, not the
+    // Arrow pool. Use the accumulated serialized bytes for the row threshold.
+    if (total_input_size > options_.task_spill_mem_threshold) {
         if (rss_mode_) {
             TIME_NANO_OR_RAISE(total_spill_time_, SpillToRssByRow());
         } else {
@@ -2052,7 +2532,7 @@ std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
                   num_partitions_, static_cast<long long>((num_partitions_ + 1) * sizeof(uint64_t)));
         throw std::runtime_error("Allocator for partitionOffsets Failed! ");
     }
-    std::shared_ptr<Buffer> ptrPartitionOffsets (new Buffer((uint8_t*)ptr_tmp, 0, (num_partitions_ + 1) * sizeof(uint64_t)));
+    std::shared_ptr<Buffer> ptrPartitionOffsets (new Buffer((uint8_t*)ptr_tmp, 0, (num_partitions_ + 1) * sizeof(uint64_t), options_.allocator));
     // 每批自带 [4B大端size][文件头][batch帧]，无独立文件头，偏移从 0 开始
     uint64_t pidOffset = 0;
 
@@ -2067,10 +2547,13 @@ std::shared_ptr<Buffer> Splitter::CaculateSpilledTmpFilePartitionOffsets() {
     return ptrPartitionOffsets;
 }
 
-int Splitter::WriteDataFileArrow() {
+int Splitter::WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool) {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
-    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    // Spill files use the final shuffle codec. Each partition ends on a block boundary
+    // (ArrowWriteColumnarPartition flushes), so MergeSpilled appends the compressed segments
+    // to the final file as they are, instead of reading raw bytes back and compressing them
+    // then. partition_serialization_size_ and total_bytes_spilled_ are on-disk (compressed) bytes.
     ArrowFileHeader header;
     header.version = kArrowShuffleVersion;
     header.layout = ShuffleLayout::COLUMNAR;
@@ -2085,7 +2568,7 @@ int Splitter::WriteDataFileArrow() {
 
     auto arrowOut = ArrowOutputStream::Make(
         std::move(outStream),
-        CompressionKind_NONE,
+        options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
         options_.compress_block_size,
@@ -2094,11 +2577,19 @@ int Splitter::WriteDataFileArrow() {
     // 顺序写入每个partition（每批自带 [4B大端size][文件头][batch帧]，
     // headerAlreadyWritten 参数不再控制文件头写出——serializer 内部每批都写文件头）
     for (auto pid = 0; pid < num_partitions_; ++pid) {
+        if (reclaimCachePool != nullptr) {
+            CacheVectorBatch(pid, true, reclaimCachePool);
+            partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+        }
         auto written = ArrowWriteColumnarPartition(
             pid, *arrowOut, header, partition_arrow_batch_,
             /*headerAlreadyWritten=*/true);
         total_bytes_spilled_ += written;
         partition_serialization_size_[pid] = written;
+        if (reclaimCachePool != nullptr) {
+            // Release the partition's buffers before building the next one.
+            partition_arrow_batch_[pid].clear();
+        }
     }
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
@@ -2109,10 +2600,10 @@ int Splitter::WriteDataFileArrow() {
     return 0;
 }
 
-int Splitter::WriteDataFileArrowByRow() {
+int Splitter::WriteDataFileArrowByRow(OmniMemoryPoolAdapter *scratchPool) {
     std::unique_ptr<OutputStream> outStream = writeLocalFile(options_.next_spilled_file_dir + ".data");
 
-    // Spill 临时文件不压缩（便于后续 mmap），使用 CompressionKind_NONE
+    // Spill files use the final shuffle codec; see WriteDataFileArrow.
     ArrowFileHeader header;
     header.version = kArrowShuffleVersion;
     header.layout = ShuffleLayout::ROW;
@@ -2127,7 +2618,7 @@ int Splitter::WriteDataFileArrowByRow() {
 
     auto arrowOut = ArrowOutputStream::Make(
         std::move(outStream),
-        CompressionKind_NONE,
+        options_.compression_type,
         spark::CompressionStrategy_COMPRESSION,
         static_cast<uint64_t>(options_.buffer_size),
         options_.compress_block_size,
@@ -2138,14 +2629,16 @@ int Splitter::WriteDataFileArrowByRow() {
     for (auto pid = 0; pid < num_partitions_; ++pid) {
         auto written = ArrowWriteRowPartition(
             pid, *arrowOut, header, partition_rows,
-            options_.spill_batch_row_num, *arrow_pool_,
+            options_.spill_batch_row_num, scratchPool != nullptr ? *scratchPool : *arrow_pool_,
             /*headerAlreadyWritten=*/true);
         total_bytes_spilled_ += written;
         partition_serialization_size_[pid] = written;
         // 清理该分区的行数据和 arena
         partition_arena_[pid].Reset();
-        partition_rows[pid].clear();
+        // A spill returns memory: free the pointer array as well, not only its rows.
+        std::vector<std::unique_ptr<RowInfo>>().swap(partition_rows[pid]);
     }
+    TrimRowBookkeeping();
     auto closeSt = arrowOut->Close();
     if (!closeSt.ok()) {
         LogsError("WriteDataFileArrowByRow Close failed: msg=%s", closeSt.ToString().c_str());
@@ -2154,14 +2647,17 @@ int Splitter::WriteDataFileArrowByRow() {
     return 0;
 }
 
-// Task 15: mmap 零拷贝透传临时文件段，消除 C8 "磁盘→临时内存"拷贝
-// spill 帧与最终写出帧同构，按 [offset, size) 字节段直接写入最终流，不解析帧内容
-void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
-                                       const std::string& tmpDataFilePath,
-                                       uint64_t partitionOffset,
-                                       uint64_t partitionSize) {
+// Append one partition's segment of a spill file to the final stream. The segment is a run of
+// complete compressed blocks in the final file's own format (the spill writer uses the same codec
+// and flushes per partition), so it is written through without decompressing or recompressing.
+// Returns the bytes added to the final file: the flush that closed the stream's pending block plus
+// the segment itself.
+uint64_t Splitter::TransferSpilledSegments(ArrowOutputStream& out,
+                                           const std::string& tmpDataFilePath,
+                                           uint64_t partitionOffset,
+                                           uint64_t partitionSize) {
     if (partitionSize == 0) {
-        return;
+        return 0;
     }
     auto mmapResult = arrow::io::MemoryMappedFile::Open(tmpDataFilePath, arrow::io::FileMode::READ);
     if (!mmapResult.ok()) {
@@ -2187,15 +2683,7 @@ void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
                                  readResult.status().ToString());
     }
     auto buffer = std::move(readResult).ValueOrDie();
-    auto st = out.Write(buffer->data(), static_cast<int64_t>(partitionSize));
-    if (!st.ok()) {
-        LogsError("TransferSpilledSegments Write failed: path=%s offset=%llu size=%llu msg=%s",
-                  tmpDataFilePath.c_str(),
-                  static_cast<unsigned long long>(partitionOffset),
-                  static_cast<unsigned long long>(partitionSize),
-                  st.ToString().c_str());
-        throw std::runtime_error("TransferSpilledSegments: Write failed: " + st.ToString());
-    }
+    const uint64_t flushed = out.WriteThrough(buffer->data(), static_cast<int64_t>(partitionSize));
     auto closeSt = mmapFile->Close();
     if (!closeSt.ok()) {
         LogsError("TransferSpilledSegments Close mmap failed: path=%s offset=%llu size=%llu msg=%s",
@@ -2205,6 +2693,7 @@ void Splitter::TransferSpilledSegments(ArrowOutputStream& out,
                   closeSt.ToString().c_str());
         throw std::runtime_error("TransferSpilledSegments: Close mmap failed: " + closeSt.ToString());
     }
+    return flushed + partitionSize;
 }
 
 void Splitter::MergeSpilled() {
@@ -2253,11 +2742,30 @@ void Splitter::MergeSpilled() {
                                     - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
             LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
                       pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
-            // flush 获取压缩后字节数
-            uint64_t flushedBytes = arrowOut->FlushAndCount();
-            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
-            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
+            const uint64_t added = TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset,
+                tmpPartitionSize);
+            partition_lengths_[pid] += static_cast<int64_t>(added);
+            total_bytes_written_ += static_cast<int64_t>(added);
+        }
+        // Memory spills evicted to disk, then the ones still in memory (always
+        // the newest): compressed segments in this stream's format, passed through.
+        for (auto &file : evicted_spill_files_) {
+            for (auto &offsets : file.segments) {
+                const uint64_t added = TransferSpilledSegments(*arrowOut, file.path + ".data", offsets[pid],
+                    offsets[pid + 1] - offsets[pid]);
+                partition_lengths_[pid] += static_cast<int64_t>(added);
+                total_bytes_written_ += static_cast<int64_t>(added);
+            }
+        }
+        for (auto &segment : memory_spills_) {
+            const uint64_t size = segment.offsets[pid + 1] - segment.offsets[pid];
+            if (size == 0) {
+                continue;
+            }
+            const uint64_t flushed = arrowOut->WriteThrough(segment.data.data() + segment.offsets[pid],
+                static_cast<int64_t>(size));
+            partition_lengths_[pid] += static_cast<int64_t>(flushed + size);
+            total_bytes_written_ += static_cast<int64_t>(flushed + size);
         }
     }
 
@@ -2271,6 +2779,8 @@ void Splitter::MergeSpilled() {
     ReleaseVarcharVector();
     num_row_splited_ = 0;
     cached_vectorbatch_size_ = 0;
+    memory_spills_.clear();
+    UnchargeMemorySpills();
 }
 
 void Splitter::MergeSpilledByRow() {
@@ -2318,11 +2828,10 @@ void Splitter::MergeSpilledByRow() {
                                     - reinterpret_cast<uint64_t *>(pair.second->data_)[pid];
             LogsDebug(" TransferSpilledSegments pid=%d offset=%d size=%d path=%s",
                       pid, tmpPartitionOffset, tmpPartitionSize, tmpDataFilePath.c_str());
-            TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset, tmpPartitionSize);
-            // flush 获取压缩后字节数
-            uint64_t flushedBytes = arrowOut->FlushAndCount();
-            partition_lengths_[pid] += static_cast<int64_t>(flushedBytes);
-            total_bytes_written_ += static_cast<int64_t>(flushedBytes);
+            const uint64_t added = TransferSpilledSegments(*arrowOut, tmpDataFilePath, tmpPartitionOffset,
+                tmpPartitionSize);
+            partition_lengths_[pid] += static_cast<int64_t>(added);
+            total_bytes_written_ += static_cast<int64_t>(added);
         }
     }
 
@@ -2415,6 +2924,7 @@ void Splitter::WriteSplitByRow() {
         partition_arena_[pid].Reset();
         partition_rows[pid].clear();
     }
+    TrimRowBookkeeping();
 
     auto writeRowCloseSt = arrowOut->Close();
     if (!writeRowCloseSt.ok()) {
@@ -2435,17 +2945,28 @@ int Splitter::DeleteSpilledTmpFile() {
     }
     // 释放内存空间，Reset spilled_tmp_files_info_, 这个地方是否有内存泄漏的风险？？？
     spilled_tmp_files_info_.clear();
+    for (auto &file : evicted_spill_files_) {
+        auto dataFilePath = file.path + ".data";
+        if (IsFileExist(dataFilePath)) {
+            remove(dataFilePath.c_str());
+        }
+    }
+    evicted_spill_files_.clear();
     return 0;
 }
 
-int Splitter::SpillToTmpFile() {
-    for (auto pid = 0; pid < num_partitions_; ++pid) {
-        CacheVectorBatch(pid, true);
-        partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+int Splitter::SpillToTmpFile(bool inReclaim) {
+    if (!inReclaim) {
+        for (auto pid = 0; pid < num_partitions_; ++pid) {
+            CacheVectorBatch(pid, true);
+            partition_buffer_size_[pid] = 0; // 溢写之后将其清零，条件溢写需要重新分配内存
+        }
     }
 
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileArrow();
+    // Inside reclaim the task pool has no headroom left: build each partition's buffers outside
+    // it, right before that partition is written.
+    WriteDataFileArrow(inReclaim ? reclaim_spill_pool_.get() : nullptr);
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     ReleaseVarcharVector();
@@ -2463,36 +2984,373 @@ void Splitter::TestForceSpill() {
     isSpill = true;
 }
 
-int Splitter::SpillToTmpFileByRow() {
+uint64_t Splitter::reclaimableBytes() const
+{
+    // Spark arbitration can arrive on another thread while Split holds this
+    // mutex across a reservation callback. Never wait in that lock order.
+    std::unique_lock<std::recursive_mutex> guard(reclaimMutex_, std::try_to_lock);
+    if (!guard.owns_lock() || isInNonReclaimableSection()) {
+        return 0;
+    }
+
+    const auto addReclaimable = [](uint64_t current, uint64_t value) {
+        return value > std::numeric_limits<uint64_t>::max() - current
+            ? std::numeric_limits<uint64_t>::max()
+            : current + value;
+    };
+
+    if (!columnarMode_) {
+        uint64_t bytes = 0;
+        // Single-partition rows own individual allocations rather than arena
+        // pages. Spill destroys those RowInfo objects and returns their bytes.
+        if (singlePartitionFlag) {
+            for (const auto &row : partition_rows[0]) {
+                if (row != nullptr && row->length > 0) {
+                    bytes = addReclaimable(bytes, static_cast<uint64_t>(row->length));
+                }
+            }
+        }
+        for (const auto &arena : partition_arena_) {
+            bytes = addReclaimable(bytes, arena.ReclaimableBytesOnReset());
+        }
+        // A row spill also frees the RowInfo objects and the pointer arrays.
+        bytes = addReclaimable(bytes, static_cast<uint64_t>(std::max<int64_t>(0, row_bookkeeping_bytes_)));
+        return bytes;
+    }
+    // Segments whose charge is still pending are real memory an eviction frees,
+    // even though the pool does not show them: count them so a reclaim reaches
+    // the eviction below instead of skipping this writer.
+    const uint64_t memorySpillBytes = static_cast<uint64_t>(
+        std::max<int64_t>(0, memory_spill_bytes_) + std::max<int64_t>(0, memory_spill_uncharged_));
+    if (num_row_splited_ == 0) {
+        return memorySpillBytes;
+    }
+
+    // Count pool-backed allocations which SpillToTmpFile actually destroys.
+    // The 2026_930 shuffle path replaced partition_cached_vectorbatch_ with
+    // ArrowColumnarCachedBatch plus live Arrow partition/accumulator buffers.
+    // OmniMemoryPoolAdapter is the single owner-side ledger for all of those
+    // Arrow allocations, so using it here covers both cached and not-yet-cached
+    // data without double-counting shared_ptr aliases. cached_vectorbatch_size_
+    // and total_input_size remain logical serialized sizes and are not suitable
+    // reclaim estimates.
+    uint64_t bytes = 0;
+    if (arrow_pool_ != nullptr) {
+        bytes = static_cast<uint64_t>(std::max<int64_t>(0, arrow_pool_->bytes_allocated()));
+    }
+    for (const auto &column : partition_fixed_width_buffers_) {
+        for (const auto &partition : column) {
+            for (const auto &buffer : partition) {
+                if (buffer != nullptr) {
+                    bytes = addReclaimable(bytes, static_cast<uint64_t>(buffer->capacity_));
+                }
+            }
+        }
+    }
+    for (const auto &partition : vc_partition_array_buffers_) {
+        for (const auto &column : partition) {
+            for (const auto &batch : column) {
+                const uint64_t capacity = batch.getVcList().capacity();
+                const uint64_t vcBytes = capacity > std::numeric_limits<uint64_t>::max() / sizeof(VCLocation)
+                    ? std::numeric_limits<uint64_t>::max()
+                    : capacity * sizeof(VCLocation);
+                bytes = addReclaimable(bytes, vcBytes);
+            }
+        }
+    }
+    for (auto *vector : varcharVectorCache) {
+        // The cache owns flat, dictionary and constant string vectors. Only a
+        // flat vector exposes an unambiguous, exclusively-owned content buffer;
+        // dictionary payload can be shared and constants may reference storage
+        // outside the vector. Keep those encodings conservative instead of
+        // type-punning them as flat vectors (which was both inaccurate and UB).
+        if (vector->GetEncoding() == OMNI_FLAT) {
+            auto *varcharVector = static_cast<Vector<LargeStringContainer<std::string_view>> *>(vector);
+            bytes = addReclaimable(bytes, UnsafeStringVector::GetCapacityInBytes(varcharVector));
+        }
+    }
+    // Memory spills are written to disk by a reclaim the raw buffers cannot serve.
+    bytes = addReclaimable(bytes, memorySpillBytes);
+    return bytes;
+}
+
+int64_t Splitter::reclaim(int64_t targetBytes)
+{
+    if (targetBytes <= 0 || taskMemoryPool_ == nullptr || isInNonReclaimableSection()) {
+        return 0;
+    }
+    if (reclaimInProgress_.test_and_set(std::memory_order_acquire)) {
+        return 0;
+    }
+    struct FlagReset {
+        std::atomic_flag &flag;
+        ~FlagReset() { flag.clear(std::memory_order_release); }
+    } reset{reclaimInProgress_};
+
+    std::unique_lock<std::recursive_mutex> guard(reclaimMutex_, std::try_to_lock);
+    if (!guard.owns_lock() || reclaimableBytes() == 0) {
+        return 0;
+    }
+
+    const int64_t before = taskMemoryPool_->currentBytes();
+    const uint64_t estimated = reclaimableBytes();
+    if (rss_mode_) {
+        if (columnarMode_) {
+            SpillToRss();
+        } else {
+            SpillToRssByRow();
+            total_input_size = 0;
+        }
+    } else {
+        if (columnarMode_) {
+            // Tier 1 (Velox: evict partition buffers): serialize the raw partition
+            // buffers into compressed segments kept in memory; this returns the
+            // raw bytes, the index and the retained input string vectors. Tier 2
+            // (Velox: evict cached payloads) writes those segments to disk only
+            // when tier 1 could not cover the request.
+            if (num_row_splited_ > 0) {
+                SpillToMemory();
+            }
+            ChargeMemorySpills();
+            // Tier 2 only when it is worth a disk write: the cache covers the
+            // shortfall, or holds at least one reservation quantum. A smaller
+            // cache stays (q3 SF1000 st16: 11 MB and open-ended requests against
+            // 1 MB of rows evicted 0.3 MB segments 13 000 times per leg).
+            const int64_t shortfall = targetBytes - (before - taskMemoryPool_->currentBytes());
+            const int64_t worthEvicting = std::min<int64_t>(
+                std::max<int64_t>(shortfall, 1),
+                omniruntime::mem::OmniTaskMemoryPool::quantizedReservationSize(1));
+            if (shortfall > 0 && !memory_spills_.empty() &&
+                memory_spill_bytes_ + memory_spill_uncharged_ >= worthEvicting) {
+                EvictMemorySpills();
+            }
+        } else {
+            SpillToTmpFileByRow(true);
+            total_input_size = 0;
+        }
+        isSpill = true;
+    }
+    const int64_t after = taskMemoryPool_->currentBytes();
+    const int64_t freed = std::max<int64_t>(0, before - after);
+    if (IsReclaimSuccessTelemetryEnabled()) {
+        std::fprintf(stderr,
+            "[OMNI-SHUFFLE] event=pool_reclaim target=%ld estimated=%lu writer_pool=%p before=%ld after=%ld freed=%ld scratch_peak=%ld cached=%ld cached_total=%ld evicted_total=%ld spilled_total=%ld\n",
+            static_cast<long>(targetBytes), static_cast<unsigned long>(estimated),
+            static_cast<void *>(taskMemoryPool_), static_cast<long>(before),
+            static_cast<long>(after), static_cast<long>(freed),
+            static_cast<long>(ReclaimSpillScratchPeakBytes()), static_cast<long>(memory_spill_bytes_),
+            static_cast<long>(total_bytes_cached_), static_cast<long>(total_bytes_evicted_),
+            static_cast<long>(total_bytes_spilled_));
+    }
+    return freed;
+}
+
+int Splitter::SpillToMemory()
+{
+    VectorOutputStream memOut;
+    auto header = BuildColumnarHeader();
+    auto arrowOut = ArrowOutputStream::Make(
+        memOut,
+        options_.compression_type,
+        spark::CompressionStrategy_COMPRESSION,
+        static_cast<uint64_t>(options_.buffer_size),
+        options_.compress_block_size,
+        *spark::getDefaultPool());
+
+    MemorySpillSegment segment;
+    segment.offsets.assign(static_cast<size_t>(num_partitions_) + 1, 0);
+    uint64_t offset = 0;
+    for (auto pid = 0; pid < num_partitions_; ++pid) {
+        // Build each partition's buffers outside the task pool (no headroom
+        // inside reclaim), right before it is serialized, and release them after.
+        CacheVectorBatch(pid, true, reclaim_spill_pool_.get());
+        partition_buffer_size_[pid] = 0;
+        const auto written = ArrowWriteColumnarPartition(
+            pid, *arrowOut, header, partition_arrow_batch_,
+            /*headerAlreadyWritten=*/true);
+        segment.offsets[pid] = offset;
+        offset += static_cast<uint64_t>(written);
+        partition_serialization_size_[pid] = 0;
+        partition_arrow_batch_[pid].clear();
+    }
+    segment.offsets[num_partitions_] = offset;
+    auto closeSt = arrowOut->Close();
+    if (!closeSt.ok()) {
+        LogsError("SpillToMemory Close failed: msg=%s", closeSt.ToString().c_str());
+    }
+    if (memOut.getLength() != offset) {
+        LogsError("SpillToMemory segment size mismatch: stream=%llu partitions=%llu",
+                  static_cast<unsigned long long>(memOut.getLength()), static_cast<unsigned long long>(offset));
+        throw std::runtime_error("SpillToMemory: partition segments do not cover the stream");
+    }
+    segment.data = memOut.Release();
+    const auto bytes = static_cast<int64_t>(segment.data.size());
+    total_bytes_cached_ += bytes;
+    memory_spill_uncharged_ += bytes;
+    memory_spills_.push_back(std::move(segment));
+
+    memset(partition_id_cnt_cache_, 0, num_partitions_ * sizeof(uint64_t));
+    ReleaseVarcharVector();
+    num_row_splited_ = 0;
+    cached_vectorbatch_size_ = 0;
+    for (auto &batches : partition_arrow_batch_) {
+        batches.clear();
+    }
+    return 0;
+}
+
+int64_t Splitter::EvictMemorySpills()
+{
+    // All segments go into one file, back to back; each keeps its partition
+    // boundaries, rebased to the file.
+    EvictedSpillFile file;
+    file.path = CreateTempShuffleFile(NextSpilledFileDir());
+    auto out = writeLocalFile(file.path + ".data");
+    int64_t evicted = 0;
+    uint64_t base = 0;
+    for (auto &segment : memory_spills_) {
+        out->write(segment.data.data(), segment.data.size());
+        for (auto &offset : segment.offsets) {
+            offset += base;
+        }
+        base += segment.data.size();
+        file.segments.push_back(std::move(segment.offsets));
+        evicted += static_cast<int64_t>(segment.data.size());
+    }
+    out->close();
+    total_bytes_spilled_ += evicted;
+    total_bytes_evicted_ += evicted;
+    evicted_spill_files_.push_back(std::move(file));
+    memory_spills_.clear();
+    UnchargeMemorySpills();
+    return evicted;
+}
+
+void Splitter::ChargeMemorySpills()
+{
+    if (memory_spill_uncharged_ <= 0) {
+        return;
+    }
+    if (taskMemoryPool_ == nullptr) {
+        memory_spill_uncharged_ = 0;
+        return;
+    }
+    // The raw buffers this segment replaced were just freed, so the charge
+    // normally fits the pool's existing reservation. When it does not, keep the
+    // bytes pending and charge them from the next Split, outside reclaim.
+    //
+    // AddMemory calls the Spark listener, and Spark may ask this task for
+    // memory back. The charge must not reclaim this writer: a re-entrant
+    // reclaim would add segments, charge or evict the pending bytes itself, and
+    // the outer charge would then bill them a second time for the rest of the
+    // task. So the writer is non-reclaimable for the call, and exactly the
+    // amount that was charged moves from pending to charged.
+    const int64_t pending = memory_spill_uncharged_;
+    try {
+        NonReclaimableSection nonReclaimable(this);
+        taskMemoryPool_->AddMemory(pending);
+    } catch (const std::exception &e) {
+        LogsDebug("ChargeMemorySpills deferred %ld bytes: %s", static_cast<long>(pending), e.what());
+        return;
+    }
+    memory_spill_bytes_ += pending;
+    memory_spill_uncharged_ -= pending;
+}
+
+void Splitter::UnchargeMemorySpills()
+{
+    if (taskMemoryPool_ != nullptr && memory_spill_bytes_ > 0) {
+        taskMemoryPool_->SubMemory(memory_spill_bytes_);
+    }
+    memory_spill_bytes_ = 0;
+    memory_spill_uncharged_ = 0;
+}
+
+int Splitter::SpillToTmpFileByRow(bool inReclaim) {
     options_.next_spilled_file_dir = CreateTempShuffleFile(NextSpilledFileDir());
-    WriteDataFileArrowByRow();
+    // Inside reclaim the task pool has no headroom left: serialize each batch outside it.
+    WriteDataFileArrowByRow(inReclaim ? reclaim_spill_pool_.get() : nullptr);
     std::shared_ptr<Buffer> ptrTmp = CaculateSpilledTmpFilePartitionOffsets();
     spilled_tmp_files_info_[options_.next_spilled_file_dir] = ptrTmp;
     return 0;
 }
 
-Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_partitions, SplitOptions options, bool flag)
-        : rss_mode_(options.rss_mode),
+Splitter::Splitter(InputDataTypes inputDataTypes, int32_t num_cols, int32_t num_partitions, SplitOptions options, bool flag,
+    omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool)
+        : taskMemoryPool_(taskMemoryPool),
+          rss_mode_(options.rss_mode),
           singlePartitionFlag(flag),
           num_partitions_(num_partitions),
           options_(std::move(options)),
           num_fields_(num_cols),
           input_col_types(inputDataTypes)
 {
+    // Re-bind options_.allocator to
+    // the per-task pool's bound Allocator. SplitOptions is populated at JNI
+    // entry (BEFORE the task-bound pool is known) and defaults to a function-
+    // local nullBridge in type.h:61. Without this re-bind, all options_.allocator
+    // call sites (splitter.cpp:141 / :1080 / :1571 / :1743 / :1747 / :2365)
+    // skip per-task accounting — the largest single source of Spark TMM
+    // invisibility for shuffle-heavy queries (GB-scale on hash/range shuffle).
+    // taskMemoryPool_ == nullptr → keep the nullBridge default (legacy test
+    // rigs, accounting skipped but symmetric Free still works).
+    if (taskMemoryPool_ != nullptr) {
+        options_.allocator = taskMemoryPool_->getBoundAllocator();
+    }
     LogsDebug("Input Schema colNum: %d", num_cols);
     ToSplitterTypeId(num_cols);
     arrow_pool_ = std::make_shared<OmniMemoryPoolAdapter>(options_.allocator);
+    reclaim_spill_pool_ = std::make_shared<OmniMemoryPoolAdapter>(&unpooledAllocator_);
     partition_arrow_batch_.resize(num_partitions_);
+}
+
+Splitter::~Splitter()
+{
+    memory_spills_.clear();
+    UnchargeMemorySpills();
+    if (registeredWithTaskPool_ && taskMemoryPool_ != nullptr) {
+        taskMemoryPool_->unregisterSpillable(this);
+        registeredWithTaskPool_ = false;
+    }
+    std::lock_guard<std::recursive_mutex> guard(reclaimMutex_);
+    NonReclaimableSection nonReclaimable(this);
+    ReleaseOwnedState();
+    // Explicit split pre-reservation is scoped to this writer. Releasing the
+    // owned partition buffers above can leave the task pool with zero used
+    // bytes but a retained reservation equal to the writer's former footprint.
+    // Return that now instead of pinning Spark execution memory until the
+    // task-wide memory manager is destroyed.
+    if (taskMemoryPool_ != nullptr) {
+        try {
+            taskMemoryPool_->releaseUnusedReservation();
+        } catch (const std::exception &error) {
+            // The pool restores its reservation on failure. Keep that credit
+            // for task teardown; a destructor must not terminate the executor.
+            LogsError("Splitter reservation release failed during teardown: %s", error.what());
+        } catch (...) {
+            LogsError("Splitter reservation release failed during teardown");
+        }
+    }
+}
+
+void Splitter::RegisterWithTaskPool()
+{
+    if (!registeredWithTaskPool_ && taskMemoryPool_ != nullptr) {
+        taskMemoryPool_->registerSpillable(this);
+        registeredWithTaskPool_ = true;
+    }
 }
 
 Splitter *Create(InputDataTypes inputDataTypes,
                                  int32_t num_cols,
                                  int32_t num_partitions,
                                  SplitOptions options,
-                                 bool flag)
+                                 bool flag,
+                                 omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool)
 {
-    auto res = new Splitter(inputDataTypes, num_cols, num_partitions, std::move(options), flag);
+    auto res = new Splitter(inputDataTypes, num_cols, num_partitions, std::move(options), flag, taskMemoryPool);
     res->Split_Init();
+    res->RegisterWithTaskPool();
     return res;
 }
 
@@ -2501,11 +3359,12 @@ Splitter *Splitter::Make(
          InputDataTypes inputDataTypes,
          int32_t num_cols,
          int num_partitions,
-         SplitOptions options) {
+         SplitOptions options,
+         omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool) {
     if (short_name == "hash" || short_name == "rr" || short_name == "range") {
-        return Create(inputDataTypes, num_cols, num_partitions, std::move(options), false);
+        return Create(inputDataTypes, num_cols, num_partitions, std::move(options), false, taskMemoryPool);
     } else if (short_name == "single") {
-        return Create(inputDataTypes, num_cols, num_partitions, std::move(options), true);
+        return Create(inputDataTypes, num_cols, num_partitions, std::move(options), true, taskMemoryPool);
     } else {
         throw("ERROR: Unsupported Splitter Type.");
     }
@@ -2643,6 +3502,7 @@ int32_t Splitter::PushRowPartitionToRss(int32_t pid)
     partition_lengths_[pid] += written;
     partition_arena_[pid].Reset();
     partition_rows[pid].clear();
+    TrimRowBookkeeping();
     return written;
 }
 
@@ -2692,8 +3552,13 @@ void Splitter::WriteSplitRssByRow()
 }
 
 int Splitter::Stop() {
+    std::lock_guard<std::recursive_mutex> guard(reclaimMutex_);
+    NonReclaimableSection nonReclaimable(this);
     if (rss_mode_) {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplitRss());
+        if (taskMemoryPool_ != nullptr) {
+            taskMemoryPool_->releaseUnusedReservation();
+        }
         return 0;
     }
     if (isSpill) {
@@ -2703,12 +3568,23 @@ int Splitter::Stop() {
     } else {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplit());
     }
+    // Batch-to-batch headroom is useful only while the writer is accepting
+    // input. Return its unused suffix as soon as native stop completes instead
+    // of waiting for the later Scala ShuffleWriter.close callback.
+    if (taskMemoryPool_ != nullptr) {
+        taskMemoryPool_->releaseUnusedReservation();
+    }
     return 0;
 }
 
 int Splitter::StopByRow() {
+    std::lock_guard<std::recursive_mutex> guard(reclaimMutex_);
+    NonReclaimableSection nonReclaimable(this);
     if (rss_mode_) {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplitRssByRow());
+        if (taskMemoryPool_ != nullptr) {
+            taskMemoryPool_->releaseUnusedReservation();
+        }
         return 0;
     }
     if (isSpill) {
@@ -2717,6 +3593,9 @@ int Splitter::StopByRow() {
         LogsDebug(" Spill For Splitter Stopped. total_spill_row_num_: %ld ", total_spill_row_num_);
     } else {
         TIME_NANO_OR_RAISE(total_write_time_, WriteSplitByRow());
+    }
+    if (taskMemoryPool_ != nullptr) {
+        taskMemoryPool_->releaseUnusedReservation();
     }
     return 0;
 }

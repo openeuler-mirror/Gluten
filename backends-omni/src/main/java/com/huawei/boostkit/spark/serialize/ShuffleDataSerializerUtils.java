@@ -25,12 +25,21 @@ public class ShuffleDataSerializerUtils {
     public ShuffleDataSerializerUtils() {
     }
 
-    public void init(long address, int length, boolean isRowShuffle) {
+    /**
+     * Opens a parse context over one serialized shuffle block.
+     *
+     * @param address native address of the block
+     * @param length length of the block in bytes
+     * @param isRowShuffle whether the block holds row-shuffle data
+     * @param taskPoolAddress address of the task's Omni memory pool, which the parsed vectors are
+     *        charged to; 0 outside a Spark task, where the vectors are created without a pool
+     */
+    public void init(long address, int length, boolean isRowShuffle, long taskPoolAddress) {
         this.isRowShuffle = isRowShuffle;
         if (isRowShuffle) {
-            this.vecBatchAddress = rowShuffleParseInit(address, length);
+            this.vecBatchAddress = rowShuffleParseInit(address, length, taskPoolAddress);
         } else {
-            this.vecBatchAddress = columnarShuffleParseInit(address, length);
+            this.vecBatchAddress = columnarShuffleParseInit(address, length, taskPoolAddress);
         }
     }
 
@@ -66,7 +75,7 @@ public class ShuffleDataSerializerUtils {
         }
     }
 
-    private native long rowShuffleParseInit(long address, int length);
+    private native long rowShuffleParseInit(long address, int length, long taskPoolAddress);
 
     private native int rowShuffleParseVecCount(long vecBatchAddress);
 
@@ -76,7 +85,7 @@ public class ShuffleDataSerializerUtils {
 
     private native void rowShuffleParseBatch(long vecBatchAddress, int[] typeIdArray, int[] precisionArray, int[] scaleArray, long[] vecNativeIdArray);
 
-    private native long columnarShuffleParseInit(long address, int length);
+    private native long columnarShuffleParseInit(long address, int length, long taskPoolAddress);
 
     private native int columnarShuffleParseVecCount(long vecBatchAddress);
 

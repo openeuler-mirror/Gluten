@@ -28,17 +28,47 @@
 
 class Buffer {
 public:
+    // Legacy 3-arg ctor kept for
+    // backwards-compat at the ~5 call sites that don't yet thread an Allocator.
+    // When boundAllocator_==nullptr the dtor falls back to a function-local
+    // nullBridge (legacy behaviour, accounting skipped on Free but mem freed).
     Buffer(uint8_t* data, int64_t size, int64_t capacity, bool isOmniAllocated = true)
             : data_(data),
             size_(size),
             capacity_(capacity),
-            allocatedByOmni(isOmniAllocated) {
+            allocatedByOmni(isOmniAllocated),
+            boundAllocator_(nullptr) {
+    }
+
+    // Preferred ctor — stores the
+    // Allocator* that produced data_ so the dtor's Free routes symmetrically
+    // to the same allocator. Caller (splitter.cpp:146 / :1085 / :1575) passes
+    // options_.allocator (now per-task-pool-bound after the Splitter ctor
+    // re-bind in splitter.cpp:2400-2425). This closes the AddMemory/SubMemory
+    // asymmetry that left ~GB shuffle bytes unaccounted under the per-task
+    // pool's listener (invisible to Spark TMM).
+    Buffer(uint8_t* data, int64_t size, int64_t capacity,
+           omniruntime::mem::Allocator* boundAllocator, bool isOmniAllocated = true)
+            : data_(data),
+            size_(size),
+            capacity_(capacity),
+            allocatedByOmni(isOmniAllocated),
+            boundAllocator_(boundAllocator) {
     }
 
     ~Buffer() {
         if (allocatedByOmni && not releaseFlag) {
-            auto *allocator = omniruntime::mem::Allocator::GetAllocator();
-            allocator->Free(data_, capacity_);
+            // When boundAllocator_
+            // is supplied, route Free through it for symmetric AddMemory/SubMemory
+            // listener events on the per-task pool. nullptr → legacy nullBridge
+            // (call sites that haven't been threaded yet, e.g. external-data
+            // Buffer with isOmniAllocated=false ironically routes the other branch).
+            if (boundAllocator_ != nullptr) {
+                boundAllocator_->Free(data_, capacity_);
+            } else {
+                static omniruntime::mem::Allocator nullBridge{nullptr};
+                nullBridge.Free(data_, capacity_);
+            }
         }
     }
 
@@ -52,6 +82,11 @@ public:
     int64_t capacity_;
     bool allocatedByOmni = true;
     bool releaseFlag = false;
+    // Non-owning. Lifetime invariant: the
+    // Allocator (and the OmniTaskMemoryPool it wraps) must outlive every
+    // Buffer it produced. Production: Splitter owns options_.allocator
+    // (per-task pool), and the Splitter outlives its partition Buffers.
+    omniruntime::mem::Allocator* boundAllocator_ = nullptr;
 };
 
 #endif //CPP_BUFFER_H

@@ -26,6 +26,8 @@
 #include <chrono>
 #include <memory>
 #include <list>
+#include <atomic>
+#include <mutex>
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -37,10 +39,22 @@
 #include "vector/omni_row.h"
 #include "shuffle/omni_arrow_memory_pool.h"
 #include <arrow/buffer.h>
+#include "operator/spillable_operator.h"
 
 // Forward declaration for TransferSpilledSegments
 class ArrowOutputStream;
 class OmniRssPushClient;
+
+// Per-task pool forward decls.
+// Splitter stores `OmniTaskMemoryPool*` (decoded from the nmmHandle in
+// nativeMake) and a pool-bound `Allocator*` so each `partition_arena_`
+// SimpleArenaAllocator binds to the same pool as the rest of the task.
+// Forward decl block keeps splitter.h cheap to include — no full
+// `omni_task_memory_pool.h` pull here.
+namespace omniruntime { namespace mem {
+class OmniTaskMemoryPool;
+class Allocator;
+}}
 
 using namespace std;
 using namespace spark;
@@ -97,12 +111,29 @@ struct ComplexColumnAccumulator {
     void Release();
 };
 
-class Splitter {
+class Splitter : public omniruntime::op::SpillableOperator {
+    class NonReclaimableSection {
+    public:
+        explicit NonReclaimableSection(Splitter *splitter) : splitter_(splitter)
+        {
+            splitter_->nonReclaimableDepth_.fetch_add(1, std::memory_order_acq_rel);
+        }
+        ~NonReclaimableSection()
+        {
+            splitter_->nonReclaimableDepth_.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    private:
+        Splitter *splitter_;
+    };
+
     virtual int DoSplit(VectorBatch& vb);
 
-    int WriteDataFileArrow();
+    // reclaimCachePool != nullptr: cache each partition with that pool right before writing it.
+    int WriteDataFileArrow(arrow::MemoryPool *reclaimCachePool = nullptr);
 
-    int WriteDataFileArrowByRow();
+    // `scratchPool` builds each batch outside the task pool; a reclaim passes one because the
+    // task pool has no headroom left while it spills.
+    int WriteDataFileArrowByRow(OmniMemoryPoolAdapter *scratchPool = nullptr);
 
     std::shared_ptr<Buffer> CaculateSpilledTmpFilePartitionOffsets();
 
@@ -126,9 +157,17 @@ class Splitter {
     std::shared_ptr<arrow::Buffer> OmniNullsToArrowBitmap(
         const uint8_t* nullBytes, int32_t numRows);
 
-    int ComputeAndCountPartitionId(VectorBatch& vb);
+    int ComputeAndCountPartitionId(VectorBatch& vb, bool updateCachedCounts = true);
 
     int AllocatePartitionBuffers(int32_t partition_id, int32_t new_size);
+
+    // Growable buffers keep their rows while they grow, up to buffer_size rows.
+    bool GrowsInPlace(int32_t partition_id, int32_t rows) const;
+
+    // Capacity, in rows, of the buffer that takes `rows` more rows once the current one is full.
+    int32_t NextPartitionBufferRows(int32_t partition_id, int32_t rows) const;
+
+    int GrowPartitionBuffers(int32_t partition_id, int32_t new_size);
 
     int SplitFixedWidthValueBuffer(VectorBatch& vb);
 
@@ -139,7 +178,8 @@ class Splitter {
     template<bool HasNull>
     void SplitBinaryVector(BaseVector *varcharVector, int col_schema);
 
-    int CacheVectorBatch(int32_t partition_id, bool reset_buffers);
+    // bufferPool: where newly built buffers come from; nullptr means arrow_pool_.
+    int CacheVectorBatch(int32_t partition_id, bool reset_buffers, arrow::MemoryPool *bufferPool = nullptr);
 
     void ToSplitterTypeId(int num_cols);
 
@@ -150,7 +190,7 @@ class Splitter {
     void MergeSpilledByRow();
 
     // Task 15: mmap 零拷贝透传临时文件段（行/列共用），消除 C8 拷贝
-    void TransferSpilledSegments(ArrowOutputStream& out,
+    uint64_t TransferSpilledSegments(ArrowOutputStream& out,
                                  const std::string& tmpDataFilePath,
                                  uint64_t partitionOffset,
                                  uint64_t partitionSize);
@@ -219,6 +259,26 @@ class Splitter {
     std::vector<int32_t> fixed_width_array_idx_; // 记录各定长类型列的序号，VB 列id序列
     std::vector<int32_t> binary_array_idx_; //记录各变长类型列序号
     std::vector<int32_t> complex_type_array_idx_; // 记录各复杂类型列序号 (array, map, struct)
+    // Schema-invariant inputs of EstimateSplitReservation(), computed once by
+    // Split_Init() when the shuffle-typed schema is final: total fixed-width
+    // value bytes added by one capacity unit, and the schema indices of the
+    // SHUFFLE_BINARY columns whose VCLocation indexes grow per batch.
+    uint64_t fixed_value_width_bytes_ = 0;
+    // Set by Split_Init() when full partition buffers would not fit the task's
+    // offheap share: buffers then start small and grow with the rows instead.
+    bool growPartitionBuffers_ = false;
+    std::vector<int32_t> binary_value_column_idx_;
+    // Reusable scratch for EstimateSplitReservation(): the per-batch HasNull
+    // flags of the fixed-width columns. Sized once in Split_Init() so the
+    // estimator adds no per-batch heap allocation. Both call paths (Split and
+    // SplitByRow) hold reclaimMutex_ across the reservation, so the scratch
+    // reuse is serialized with its only writer.
+    mutable std::vector<uint8_t> fixed_column_has_null_scratch_;
+    // Row shuffle sizes its pre-reservation from the largest per-batch
+    // average serialized row length written so far, instead of serializing
+    // every row a second time just to measure it. Zero until the first row
+    // batch is written; that first batch is still measured row by row.
+    uint64_t row_estimate_max_avg_bytes_ = 0;
     int32_t *partition_buffer_size_; // 各分区的buffer大小
     int32_t *partition_buffer_idx_base_; //当前已缓存的各partition行数据记录，用于定位缓冲buffer当前可用位置
     int32_t *partition_buffer_idx_offset_; //split定长列时用于统计offset的临时变量
@@ -232,6 +292,34 @@ class Splitter {
 
     // --- Arrow 化新增成员 (Task 9: 定宽列散列改 Arrow ResizableBuffer) ---
     std::shared_ptr<OmniMemoryPoolAdapter> arrow_pool_;                            // Arrow 内存统一记账适配器
+    // A reclaim spill runs inside Spark's spill of this task, when the task pool has no headroom
+    // left, so the buffers it builds to write a partition come from here: outside the task pool,
+    // released as soon as that partition is written.
+    Allocator unpooledAllocator_{nullptr};
+    std::shared_ptr<OmniMemoryPoolAdapter> reclaim_spill_pool_;
+    // Compressed partition segments kept in memory instead of a spill file. A
+    // reclaim serializes the raw partition buffers (and the input string vectors
+    // they reference) into the spill-file layout in memory, like Velox's cached
+    // payloads, which is about a quarter of the raw bytes; only a later reclaim
+    // that the raw buffers cannot serve writes these segments to disk.
+    struct MemorySpillSegment {
+        std::vector<uint8_t> data;
+        std::vector<uint64_t> offsets; // num_partitions_ + 1 partition boundaries in data
+    };
+    std::vector<MemorySpillSegment> memory_spills_;
+    int64_t memory_spill_bytes_ = 0;          // bytes of memory_spills_ charged to the task pool
+    int64_t memory_spill_uncharged_ = 0;      // bytes of memory_spills_ not yet charged
+    int64_t total_bytes_cached_ = 0;          // telemetry: bytes serialized into memory_spills_
+    int64_t total_bytes_evicted_ = 0;         // telemetry: memory_spills_ bytes written to disk
+    struct EvictedSpillFile {
+        std::string path;
+        std::vector<std::vector<uint64_t>> segments; // per segment: num_partitions_ + 1 file offsets
+    };
+    std::vector<EvictedSpillFile> evicted_spill_files_;
+    int SpillToMemory();
+    int64_t EvictMemorySpills();
+    void ChargeMemorySpills();
+    void UnchargeMemorySpills();
     std::vector<std::vector<std::shared_ptr<arrow::ResizableBuffer>>> partition_fixed_width_arrow_buffers_; // [col][pid] 定宽列 Arrow 值缓冲
     std::vector<std::vector<ArrowColumnarCachedBatch>> partition_arrow_batch_;     // [pid][batchIdx] Arrow 化缓存批
 
@@ -246,10 +334,35 @@ class Splitter {
     std::vector<uint32_t> partition_row_batch_count;
     uint64_t total_input_size = 0; // total row size in bytes
     uint32_t expansion = 2; // expansion coefficient
+    // Row shuffle keeps one RowInfo object and one pointer slot per buffered row
+    // outside the partition arenas. These bytes are charged to the task pool
+    // (accounting only; the memory itself stays with operator new).
+    int64_t row_bookkeeping_bytes_ = 0;
 
     std::vector<DataTypePtr> inputDataTypes_;
 
+    // Per-task pool decoded from the
+    // nmmHandle JNI argument at nativeMake time. Non-owning; the Spark task
+    // (via OmniNativeMemoryManager / OmniRuntime TaskResources) outlives the
+    // Splitter. Used to construct pool-bound allocators for partition arenas
+    // and any owned AlignedBuffers. nullptr means "no task pool was supplied"
+    // (test path / legacy caller); arena allocations then fall back to the
+    // bridge default-ctor allocator (Wave-4 deletes that path).
+    omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool_ = nullptr;
+
 private:
+    int64_t EstimateSplitReservation(VectorBatch& vb);
+    int64_t RowBookkeepingBytes(int32_t incomingRows) const;
+    void ChargeRowBookkeeping(int32_t incomingRows);
+    void TrimRowBookkeeping();
+    void ReserveForSplit(VectorBatch& vb, const char *site);
+
+    // JNI supplies the full logical schema before the first batch. Direct C++
+    // callers historically did not, which left complex/row serialization to
+    // index an empty vector. Infer it once from the actual input batch for that
+    // compatibility path; production takes only the already-populated check.
+    void EnsureInputDataTypes(VectorBatch& vb);
+
     void BuildPartition2Row(int32_t row_count);
 
     void ReleaseVarcharVector()
@@ -283,6 +396,12 @@ private:
 
     // Data structures required to handle col formats
     std::set<BaseVector *> varcharVectorCache;
+    bool splitEntrypointProbeLogged_ = false;
+    mutable std::recursive_mutex reclaimMutex_;
+    std::atomic<int32_t> nonReclaimableDepth_{0};
+    std::atomic_flag reclaimInProgress_ = ATOMIC_FLAG_INIT;
+    bool registeredWithTaskPool_ = false;
+    bool columnarMode_ = false;
 public:
     // Common structures for row formats and col formats
     bool singlePartitionFlag = false;
@@ -304,22 +423,40 @@ public:
 
     int StopByRow();
 
-    int SpillToTmpFile();
+    int SpillToTmpFile(bool inReclaim = false);
 
-    int SpillToTmpFileByRow();
+    int SpillToTmpFileByRow(bool inReclaim = false);
+
+    uint64_t reclaimableBytes() const override;
+    int64_t reclaim(int64_t targetBytes) override;
+    bool isInNonReclaimableSection() const noexcept override
+    {
+        return nonReclaimableDepth_.load(std::memory_order_acquire) != 0;
+    }
+    omniruntime::op::Operator *operatorBase() noexcept override { return nullptr; }
+    const char *reclaimableName() const noexcept override { return "ShuffleSplitter"; }
+
+    void RegisterWithTaskPool();
 
     Splitter(InputDataTypes inputDataTypes,
              int32_t num_cols,
              int32_t num_partitions,
              SplitOptions options,
-             bool flag);
+             bool flag,
+             omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool = nullptr);
 
     static Splitter *Make(
             const std::string &short_name,
             InputDataTypes inputDataTypes,
             int32_t num_cols,
             int num_partitions,
-            SplitOptions options); 
+            SplitOptions options,
+            omniruntime::mem::OmniTaskMemoryPool *taskMemoryPool = nullptr);
+
+    // Non-owning accessor for the per-task pool. Used
+    // by TransRowBatchFromVectorBatch and other splitter-internal allocators
+    // to bind to the same pool as the rest of the task.
+    omniruntime::mem::OmniTaskMemoryPool *GetTaskMemoryPool() const { return taskMemoryPool_; }
     
     std::string NextSpilledFileDir();
 
@@ -328,6 +465,11 @@ public:
     int64_t TotalBytesWritten() const { return total_bytes_written_; }
 
     int64_t TotalBytesSpilled() const { return total_bytes_spilled_; }
+    int64_t TotalBytesCached() const { return total_bytes_cached_; }
+    int64_t TotalBytesEvicted() const { return total_bytes_evicted_; }
+
+    // Largest working memory a reclaim spill held outside the task pool. Reported only.
+    int64_t ReclaimSpillScratchPeakBytes() const { return reclaim_spill_pool_->max_memory(); }
 
     // Testing helper: force spill and set isSpill flag so Stop() calls MergeSpilled()
     void TestForceSpill();
@@ -357,8 +499,23 @@ public:
 
     const std::vector<int64_t>& PartitionLengths() const { return partition_lengths_; }
 
-    virtual ~Splitter()
+
+    virtual ~Splitter();
+
+private:
+    void ReleaseOwnedState()
     {
+        // Drop every pool-backed owner before returning the task's unused
+        // reservation.  This path also covers cancellation, where Stop() never
+        // got a chance to flush and clear the cached columnar batches.
+        ReleaseVarcharVector();
+        partition_rows.clear();
+        TrimRowBookkeeping();
+	partition_arrow_batch_.clear();
+	partition_fixed_width_arrow_buffers_.clear();
+	partition_complex_accumulators_.clear();
+	vc_partition_array_buffers_.clear();
+	partition_arena_.clear();
 	delete[] partition_id_cnt_cur_;
 	delete[] partition_id_cnt_cache_;
 	delete[] partition_buffer_size_;
@@ -370,7 +527,11 @@ public:
 	partition_fixed_width_buffers_.clear();
 	partition_binary_builders_.clear();
 	spilled_tmp_files_info_.clear();
+	memory_spills_.clear();
+	evicted_spill_files_.clear();
     }
+
+public:
 
     omniruntime::vec::VectorBatch *GetInputVecBatch()
     {

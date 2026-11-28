@@ -26,6 +26,7 @@
 #include "io/Decompression.hh"
 #include "common/common.h"
 #include "jni_common.h"
+#include "ScopedJniResources.h"
 #include "compute/OmniPlanConverter.h"
 #include "substrait/SubstraitToOmniPlanValidator.h"
 #include "compute/WholeStageResultIterator.h"
@@ -33,6 +34,7 @@
 #ifdef STRINGVIEW_ENABLE
 #include "compute/OmniRowToColumnarConverter.h"
 #include "memory/allocator.h"
+#include "memory/omni_task_memory_pool.h"
 #endif
 #include "config/OmniConfig.h"
 #include "util/config/QueryConfig.h"
@@ -40,19 +42,30 @@
 #include "substrait/SubstraitToOmniPlan.h"
 #include "SparkJniWrapper.hh"
 #include "compute/OmniBackend.h"
+#include "operator/join/broadcast_hash_table_cache_control.h"
 #include "JniUdf.h"
 #include "shuffle/omni_rss_push_client.h"
 
-// Forward declaration only — implementation lives in lib boostkit-omniop-operator.
-namespace omniruntime {
-namespace op {
-class BroadcastHashTableCache {
-public:
-    static BroadcastHashTableCache& getInstance();
-    void invalidate(const std::string& buildHashTableId);
-};
-} // namespace op
-} // namespace omniruntime
+// The JNI entry points that touch gluten/cpp/core types
+// (jniCastOrThrow<gluten::MemoryManager>, gluten::MemoryManager::create, the
+// OmniNativeMemoryManagerJniWrapper natives) live in a separate TU,
+// SparkJniWrapperMemory.cpp, so the cpp/core include path can be applied
+// per-file without shadowing OmniOperator's compute/Runtime.h and
+// compute/ResultIterator.h here.
+//
+// We only need a forward decl to thread the JNI-decoded MemoryManager pointer
+// from the boundary into `omniruntime::Runtime`'s ctor.
+namespace gluten { class MemoryManager; }
+// Decode helper defined out-of-line in SparkJniWrapperMemory.cpp.
+gluten::MemoryManager *DecodeNmmHandleOrThrow(JNIEnv *env, jlong nmmHandle);
+
+// Forward decl + downcast helper so
+// nativeMake can extract the per-task OmniTaskMemoryPool* from the nmmHandle
+// and pass it to Splitter::Make. Backend-kind validation lives in OmniMemoryManager.cc
+// (which has cpp/core on its per-file include path); the helper is declared in
+// memory/RuntimeMemoryHelper.h — a forward-decl-only header that does NOT
+// transitively pull cpp/core / compute headers (avoids the shadow trap).
+#include "memory/RuntimeMemoryHelper.h"
 
 using namespace spark;
 using namespace google::protobuf::io;
@@ -62,7 +75,13 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
     jstring compression_type_jstr, jstring data_file_jstr, jint num_sub_dirs, jstring local_dirs_jstr,
     jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
-    jlong executor_spill_memory_threshold)
+    jlong executor_spill_memory_threshold,
+    // Per-task NMM handle from Scala caller
+    // (OmniColumnarShuffleWriter via SparkJniWrapper.make). Decoded below into
+    // gluten::MemoryManager* and threaded into the Splitter as the per-task pool
+    // so partition arenas allocate against the same pool as compute (one pool
+    // per task across compute + shuffle).
+    jlong nmmHandle, jlong task_offheap_bytes)
 {
     JNI_FUNC_START
         if (partitioning_name_jstr == nullptr) {
@@ -118,6 +137,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
         if (buffer_size > 0) {
             splitOptions.buffer_size = buffer_size;
         }
+        splitOptions.task_offheap_bytes = task_offheap_bytes;
         if (num_sub_dirs > 0) {
             splitOptions.num_sub_dirs = num_sub_dirs;
         }
@@ -156,8 +176,18 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
             splitOptions.thread_id = (int64_t)sid;
         }
 
+        // Decode the nmmHandle into the
+        // per-task gluten::MemoryManager*, then downcast to OmniTaskMemoryPool*
+        // via the free-function bridge defined in OmniMemoryManager.cc
+        // (omniruntime::ToOmniTaskPoolOrNull — RuntimeMemoryHelper.h forward
+        // decl). Null pool path: ToOmniTaskPoolOrNull returns nullptr when the
+        // MemoryManager isn't a gluten::OmniMemoryManager (test harness etc.);
+        // Splitter then falls back to the bridge default-ctor allocator path.
+        gluten::MemoryManager *mm = DecodeNmmHandleOrThrow(env, nmmHandle);
+        omniruntime::mem::OmniTaskMemoryPool *taskPool = omniruntime::ToOmniTaskPoolOrNull(mm);
+
         auto splitter = Splitter::Make(partitioning_name, inputDataTypesTmp, jNumCols, num_partitions,
-            std::move(splitOptions));
+            std::move(splitOptions), taskPool);
         splitter->SetInputDataTypes(inputDataTypes);
         return reinterpret_cast<intptr_t>(static_cast<void*>(splitter));
     JNI_FUNC_END(runtimeExceptionClass)
@@ -167,7 +197,7 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
     JNIEnv *env, jobject,
     jstring partitioning_name_jstr, jint num_partitions, jstring jInputType, jint jNumCols, jint buffer_size,
     jstring compression_type_jstr, jlong compress_block_size, jint spill_batch_row, jlong task_spill_memory_threshold,
-    jlong executor_spill_memory_threshold, jobject partitionPusher)
+    jlong executor_spill_memory_threshold, jobject partitionPusher, jlong nmmHandle)
 {
     JNI_FUNC_START
         if (partitioning_name_jstr == nullptr) {
@@ -249,8 +279,13 @@ JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_nativ
             return 0;
         }
 
+        auto *mm = DecodeNmmHandleOrThrow(env, nmmHandle);
+        auto *taskPool = omniruntime::ToOmniTaskPoolOrNull(mm);
+        if (taskPool == nullptr) {
+            throw std::invalid_argument("RSS shuffle requires an Omni task memory pool");
+        }
         auto splitter = Splitter::Make(partitioning_name, inputDataTypesTmp, jNumCols, num_partitions,
-            std::move(splitOptions));
+            std::move(splitOptions), taskPool);
         splitter->SetInputDataTypes(inputDataTypes);
         splitter->SetRssPushClient(
             std::make_shared<OmniRssPushClient>(vm, partitionPusher, pushMethod));
@@ -355,20 +390,14 @@ JNIEXPORT void JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_close(
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
 
-inline uint8_t *getByteArrayElementsSafe(JNIEnv *env, jbyteArray array)
-{
-    auto nativeArray = env->GetByteArrayElements(array, nullptr);
-    return reinterpret_cast<uint8_t*>(nativeArray);
-}
-
 JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeValidateWithFailureReason(
     JNIEnv *env, jobject wrapper, jbyteArray planArray)
 {
     JNI_FUNC_START
-        auto planData = getByteArrayElementsSafe(env, planArray);
+        gluten::ScopedByteArrayElements planData(env, planArray);
         auto planSize = env->GetArrayLength(planArray);
 
-        CodedInputStream codedStream{planData, planSize};
+        CodedInputStream codedStream{planData.data(), planSize};
         codedStream.SetRecursionLimit(100000);
         ::substrait::Plan substraitPlan;
         substraitPlan.ParseFromCodedStream(&codedStream);
@@ -402,16 +431,18 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWr
         auto conf = ctx->GetConfMap();
         conf[omniruntime::config::QueryConfig::kSparkPartitionId] = std::to_string(partitionId);
 
-        auto buf = getByteArrayElementsSafe(env, planArr);
+        gluten::ScopedByteArrayElements buf(env, planArr);
         auto planSize = env->GetArrayLength(planArr);
-        ctx->ParsePlan(buf, planSize, std::nullopt);
+        ctx->ParsePlan(buf.data(), planSize, std::nullopt);
 
         // Handle the Java iters
         jsize itersLen = env->GetArrayLength(iterArr);
         std::vector<std::shared_ptr<omniruntime::ResultIterator>> inputIters;
         for (int idx = 0; idx < itersLen; idx++) {
-            jobject iter = env->GetObjectArrayElement(iterArr, idx);
-            auto arrayIter = std::make_unique<JniColumnarBatchIterator>(env, iter);
+            gluten::ScopedLocalRef<jobject> iter(env, env->GetObjectArrayElement(iterArr, idx));
+            if (env->ExceptionCheck()) return -1L;
+            if (iter.get() == nullptr) throw std::invalid_argument("Null input iterator");
+            auto arrayIter = std::make_unique<JniColumnarBatchIterator>(env, iter.get());
             auto resultIter = std::make_shared<omniruntime::ResultIterator>(std::move(arrayIter));
             inputIters.push_back(std::move(resultIter));
         }
@@ -419,14 +450,15 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWr
         // splitInfosArr 添加到localFiles protobuf.cc
         std::vector<::substrait::ReadRel_LocalFiles> localFiles;
         for (jsize i = 0, splitInfoArraySize = env->GetArrayLength(splitInfosArr); i < splitInfoArraySize; i++) {
-            jbyteArray splitInfoArray = static_cast<jbyteArray>(env->GetObjectArrayElement(splitInfosArr, i));
-            jsize splitInfoSize = env->GetArrayLength(splitInfoArray);
-            jbyte* nativeArray = env->GetByteArrayElements(splitInfoArray, nullptr);
-            uint8_t* splitInfoData = reinterpret_cast<uint8_t*>(nativeArray);
+            gluten::ScopedLocalRef<jbyteArray> splitInfoArray(env,
+                static_cast<jbyteArray>(env->GetObjectArrayElement(splitInfosArr, i)));
+            if (env->ExceptionCheck()) return -1L;
+            if (splitInfoArray.get() == nullptr) throw std::invalid_argument("Null split info");
+            jsize splitInfoSize = env->GetArrayLength(splitInfoArray.get());
+            gluten::ScopedByteArrayElements splitInfoData(env, splitInfoArray.get());
             ::substrait::ReadRel_LocalFiles localFile;
-            ParseProtobuf(splitInfoData, splitInfoSize, &localFile);
+            ParseProtobuf(splitInfoData.data(), splitInfoSize, &localFile);
             localFiles.push_back(localFile);
-            env->ReleaseByteArrayElements(splitInfoArray, nativeArray, JNI_ABORT);
         }
         ctx->setLocalFiles(localFiles);
         auto spillDirStr = JStringToCString(env, spillDir);
@@ -540,7 +572,7 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOut
 
 #ifdef STRINGVIEW_ENABLE
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env,
-    jobject wrapper, jstring schemaJson)
+    jobject wrapper, jstring schemaJson, jlong taskPoolAddress)
 {
     JNI_FUNC_START
         if (schemaJson == nullptr) {
@@ -550,7 +582,8 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWr
         const char *schemaChars = env->GetStringUTFChars(schemaJson, JNI_FALSE);
         std::string schema(schemaChars);
         env->ReleaseStringUTFChars(schemaJson, schemaChars);
-        auto *converter = new gluten::OmniRowToColumnarConverter(schema);
+        auto *taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool *>(taskPoolAddress);
+        auto *converter = new gluten::OmniRowToColumnarConverter(schema, taskPool);
         return reinterpret_cast<jlong>(converter);
     JNI_FUNC_END(runtimeExceptionClass)
 }
@@ -586,14 +619,22 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWra
 }
 
 JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env,
-    jobject wrapper, jlong size)
+    jobject wrapper, jlong taskPoolAddress, jlong size)
 {
     JNI_FUNC_START
         if (size <= 0) {
             env->ThrowNew(runtimeExceptionClass, "row buffer size must be positive");
             return 0;
         }
-        void *buffer = omniruntime::mem::Allocator::GetAllocator()->Alloc(size);
+        auto *taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool *>(taskPoolAddress);
+        // Standalone callers have no Spark task pool. Keep that compatibility
+        // path explicit while production allocations use the same task-bound
+        // allocator as the output vectors created by the converter.
+        static omniruntime::mem::Allocator compatibilityAllocator{nullptr};
+        auto *allocator = taskPool == nullptr
+            ? &compatibilityAllocator
+            : taskPool->getBoundAllocator();
+        void *buffer = allocator->Alloc(size);
         if (buffer == nullptr) {
             env->ThrowNew(runtimeExceptionClass, "failed to allocate row buffer");
             return 0;
@@ -603,13 +644,18 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWr
 }
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(JNIEnv *env,
-    jobject wrapper, jlong address, jlong size)
+    jobject wrapper, jlong taskPoolAddress, jlong address, jlong size)
 {
     JNI_FUNC_START
         if (address == 0) {
             return;
         }
-        omniruntime::mem::Allocator::GetAllocator()->Free(reinterpret_cast<void *>(address), size);
+        auto *taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool *>(taskPoolAddress);
+        static omniruntime::mem::Allocator compatibilityAllocator{nullptr};
+        auto *allocator = taskPool == nullptr
+            ? &compatibilityAllocator
+            : taskPool->getBoundAllocator();
+        allocator->Free(reinterpret_cast<void *>(address), size);
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
 #else
@@ -621,7 +667,8 @@ void ThrowStringViewDisabled(JNIEnv *env)
 }
 } // namespace
 
-JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(JNIEnv *env, jobject, jstring)
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_init(
+    JNIEnv *env, jobject, jstring, jlong)
 {
     ThrowStringViewDisabled(env);
     return 0;
@@ -637,14 +684,15 @@ JNIEXPORT jobject JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJni
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_close(JNIEnv *, jobject, jlong)
 {}
 
-JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(JNIEnv *env, jobject, jlong)
+JNIEXPORT jlong JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_allocateRowBuffer(
+    JNIEnv *env, jobject, jlong, jlong)
 {
     ThrowStringViewDisabled(env);
     return 0;
 }
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniRowToColumnarJniWrapper_freeRowBuffer(
-    JNIEnv *, jobject, jlong, jlong)
+    JNIEnv *, jobject, jlong, jlong, jlong)
 {}
 #endif
 
@@ -666,17 +714,29 @@ JNIEXPORT jlong JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_cre
     jstring jBackendType, jlong nmmHandle, jbyteArray sessionConf)
 {
     JNI_FUNC_START
-        auto safeArray = getByteArrayElementsSafe(env, sessionConf);
+        gluten::ScopedByteArrayElements safeArray(env, sessionConf);
         auto length = env->GetArrayLength(sessionConf);
-        auto sparkConf = omniruntime::ParseConfMap(safeArray, length);
+        auto sparkConf = omniruntime::ParseConfMap(safeArray.data(), length);
 
-        auto runtime = std::make_unique<omniruntime::Runtime>("omni", sparkConf);
+        // Decode the JVM-side opaque handle into the
+        // per-task gluten::MemoryManager*. Helper is defined in
+        // SparkJniWrapperMemory.cpp (separate TU with cpp/core include path)
+        // and throws std::runtime_error on nullptr — caught by JNI_FUNC_END and
+        // rethrown to the JVM.
+        auto *memoryManager = DecodeNmmHandleOrThrow(env, nmmHandle);
+
+        auto runtime = std::make_unique<omniruntime::Runtime>("omni", memoryManager, sparkConf);
         return reinterpret_cast<jlong>(runtime.release());
     JNI_FUNC_END(runtimeExceptionClass)
 }
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_runtime_OmniRuntimeJniWrapper_releaseRuntime(JNIEnv *env, jclass,
-    jlong ctxHandle) {}
+    jlong ctxHandle)
+{
+    JNI_FUNC_START
+        delete reinterpret_cast<omniruntime::Runtime *>(ctxHandle);
+    JNI_FUNC_END_VOID(runtimeExceptionClass)
+}
 
 JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniColumnarBatchOutIterator_nativeClose(
     JNIEnv *env,
@@ -761,11 +821,11 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_init_OmniNativeBackendInitializer_
         if (env->GetJavaVM(&vm) != JNI_OK) {
             throw std::runtime_error("Unable to get JavaVM instance");
         }
-        auto safeArray = getByteArrayElementsSafe(env, conf);
+        gluten::ScopedByteArrayElements safeArray(env, conf);
         auto length = env->GetArrayLength(conf);
         // Create a global allocation listener that reserves global off-heap memory from Java-side GlobalOffHeapMemory utility
         // class.
-        auto sparkConf = ParseConfMap(safeArray, length);
+        auto sparkConf = ParseConfMap(safeArray.data(), length);
         gluten::OmniBackend::create(sparkConf);
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
@@ -778,17 +838,23 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_udf_UdfJniWrapper_registerFunction
 }
 
 std::unique_ptr<omniruntime::ColumnarBatchIterator> createDeserializer(JNIEnv *env, jobject jniIn, jstring codec_jstr,
-    int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
+    int64_t shuffleCompressBlockSize, jboolean isRowShuffle,
+    omniruntime::mem::OmniTaskMemoryPool* taskPool)
 {
     auto codec = GetCompressionType(env, codec_jstr);
-    return std::make_unique<ShuffleReaderDeserializer>(env, jniIn, codec, shuffleCompressBlockSize, isRowShuffle);
+    return std::make_unique<ShuffleReaderDeserializer>(env, jniIn, codec, shuffleCompressBlockSize, isRowShuffle, taskPool);
 }
 
 JNIEXPORT jlong JNICALL Java_com_huawei_boostkit_spark_jni_SparkJniWrapper_makeNativeDeserializer(JNIEnv *env, jobject obj,
-    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle)
+    jobject jniIn, jstring codec_jstr, int64_t shuffleCompressBlockSize, jboolean isRowShuffle,
+    // Raw OmniTaskMemoryPool address from getPoolAddress, not an NMM handle.
+    // The owning task memory manager must outlive the deserializer.
+    jlong taskPoolAddress)
 {
     JNI_FUNC_START
-    auto handler = std::make_unique<omniruntime::ResultIterator>(createDeserializer(env, jniIn, codec_jstr, shuffleCompressBlockSize, isRowShuffle));
+    auto* taskPool = reinterpret_cast<omniruntime::mem::OmniTaskMemoryPool*>(taskPoolAddress);
+    auto handler = std::make_unique<omniruntime::ResultIterator>(
+        createDeserializer(env, jniIn, codec_jstr, shuffleCompressBlockSize, isRowShuffle, taskPool));
     return reinterpret_cast<long>(static_cast<void*>(handler.release()));
     JNI_FUNC_END(runtimeExceptionClass)
 }
@@ -850,6 +916,33 @@ JNIEXPORT void JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWra
 {
     JNI_FUNC_START
     std::string htId = JStringToCString(env, buildHashTableId);
-    omniruntime::op::BroadcastHashTableCache::getInstance().invalidate(htId);
+    omniruntime::op::InvalidateBroadcastCachePrefix(htId);
     JNI_FUNC_END_VOID(runtimeExceptionClass)
 }
+
+JNIEXPORT jlongArray JNICALL Java_org_apache_gluten_vectorized_OmniPlanEvaluatorJniWrapper_nativeBroadcastCacheSnapshot(
+    JNIEnv *env, jclass)
+{
+    JNI_FUNC_START
+    const auto stats = omniruntime::op::GetBroadcastCacheStats();
+    const jlong values[] = {
+        static_cast<jlong>(stats.indexedEntries),
+        static_cast<jlong>(stats.builds),
+        static_cast<jlong>(stats.hits),
+        static_cast<jlong>(stats.retirements),
+        static_cast<jlong>(gluten::OmniBackend::broadcastCacheOutstandingBytes())
+    };
+    jlongArray result = env->NewLongArray(5);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    env->SetLongArrayRegion(result, 0, 5, values);
+    return result;
+    JNI_FUNC_END(runtimeExceptionClass)
+}
+
+// Note: the 5 OmniNativeMemoryManagerJniWrapper_* JNI methods and
+// DecodeNmmHandleOrThrow live in SparkJniWrapperMemory.cpp — a sibling .cpp
+// that has gluten/cpp/core on its per-file INCLUDE_DIRECTORIES. They are
+// linked into libspark_columnar_plugin.so via the same SOURCE_FILES GLOB at
+// the top of cpp-omni/src/CMakeLists.txt.

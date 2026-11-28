@@ -21,6 +21,7 @@ import org.apache.gluten.backendsapi.ListenerApi
 import org.apache.gluten.config.GlutenConfig
 import org.apache.gluten.expression.UDFMappings
 import org.apache.gluten.init.OmniNativeBackendInitializer
+import org.apache.spark.memory.OmniBroadcastStorageTarget
 import org.apache.gluten.jni.JniLibLoader
 import org.apache.gluten.udf.UdfJniWrapper
 import org.apache.spark.{SparkConf, SparkContext}
@@ -35,7 +36,9 @@ import org.apache.gluten.datasources.text.OmniTextFormatWriterInjects
 import org.apache.gluten.execution.datasource.GlutenFormatFactory
 import org.apache.gluten.vectorized.OmniNativePlanEvaluator.destroyNative
 import org.apache.spark.sql.execution.datasources.OmniGlutenWriterColumnarRules
+import org.apache.spark.sql.execution.omni.OmniBroadcastCacheRpc
 import java.util.concurrent.atomic.AtomicBoolean
+import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
 class OmniListenerApi extends ListenerApi with Logging {
@@ -43,44 +46,91 @@ class OmniListenerApi extends ListenerApi with Logging {
   import OmniListenerApi._
 
   override def onDriverStart(sc: SparkContext, pc: PluginContext): Unit = {
-    // Static initializers for driver.
-    if (!driverInitialized.compareAndSet(false, true)) {
-      // Make sure we call the static initializers only once.
+    val conf = pc.conf()
+    if (driverInitialized.compareAndSet(false, true)) {
+      SparkDirectoryUtil.init(conf)
+      UDFResolver.resolveUdfConf(conf, isDriver = true)
+      initialize(conf, isDriver = true)
+      UdfJniWrapper.registerFunctionSignatures()
+    } else {
       logInfo(
         "Skip rerunning static initializers since they are only supposed to run once." +
           " You see this message probably because you are creating a new SparkSession.")
-      return
     }
-    val conf = pc.conf()
-    SparkDirectoryUtil.init(conf)
-    UDFResolver.resolveUdfConf(conf, isDriver = true)
-    initialize(conf, isDriver = true)
-    UdfJniWrapper.registerFunctionSignatures()
+    // The coordinator follows each SparkContext even when native/UDF static
+    // initialization was already completed in this JVM.
+    if (conf.getBoolean("spark.gluten.omni.buildHashTableOncePerExecutor.enabled", false)) {
+      OmniBroadcastCacheRpc.startDriver(sc)
+    }
   }
 
   override def onExecutorStart(pc: PluginContext): Unit = {
     val conf = pc.conf()
 
-    // Static initializers for executor.
-    if (!executorInitialized.compareAndSet(false, true)) {
-      // Make sure we call the static initializers only once.
+    val firstInitialization = executorInitialized.compareAndSet(false, true)
+    if (!firstInitialization) {
       logInfo(
         "Skip rerunning static initializers since they are only supposed to run once." +
           " You see this message probably because you are creating a new SparkSession.")
-      return
     }
-    if (inLocalMode(conf)) {
-      // Don't do static initializations from executor side in local mode.
-      // Driver already did that.
+    if (firstInitialization && inLocalMode(conf)) {
       logInfo(
         "Gluten is running with Spark local mode. Skip running static initializer for executor.")
+    } else if (firstInitialization) {
+      SparkDirectoryUtil.init(conf)
+      // Executors run native UDAF code, so they must load the UDF/UDAF configuration.
+      UDFResolver.resolveUdfConf(conf, isDriver = false)
+      initialize(conf, isDriver = false)
+    }
+    // Cache storage and RPC endpoint are SparkContext-scoped, also in local mode.
+    startBroadcastCache(conf, pc)
+  }
+
+  override def onDriverMessage(message: AnyRef): Option[AnyRef] = {
+    OmniBroadcastCacheRpc.onDriverMessage(message)
+  }
+
+  private def startBroadcastCache(conf: SparkConf, pc: PluginContext): Unit = {
+    if (!conf.getBoolean("spark.gluten.omni.buildHashTableOncePerExecutor.enabled", false)) {
       return
     }
+    initializeBroadcastCache(conf)
+    try {
+      OmniBroadcastCacheRpc.startExecutor(pc)
+    } catch {
+      case NonFatal(e) =>
+        OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME)
+          .shutdownBroadcastCache()
+        throw e
+    }
+  }
 
-    SparkDirectoryUtil.init(conf)
-    // Executors run native UDAF code, so they must load the UDF/UDAF configuration.
-    UDFResolver.resolveUdfConf(conf, isDriver = false)
-    initialize(conf, isDriver = false)
+  private def initializeBroadcastCache(conf: SparkConf): Unit = {
+    if (!conf.getBoolean("spark.gluten.omni.buildHashTableOncePerExecutor.enabled", false)) {
+      return
+    }
+    val maxBytes = conf.getSizeAsBytes(
+      "spark.gluten.omni.broadcastCache.maxBytes",
+      conf.get("spark.memory.offHeap.size", "1g"))
+    val target = OmniBroadcastStorageTarget.forCurrentExecutor(maxBytes)
+    OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME)
+      .initializeBroadcastCache(target)
+  }
+
+  override def onExecutorShutdown(): Unit = {
+    OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME)
+      .shutdownBroadcastCache()
+    OmniBroadcastCacheRpc.stopExecutor()
+    OmniBroadcastStorageTarget.clearCurrent()
+  }
+
+  override def onDriverShutdown(): Unit = {
+    // The same JVM owns both plugins in local mode; shutdown is idempotent.
+    OmniNativeBackendInitializer.forBackend(OmniBackend.BACKEND_NAME)
+      .shutdownBroadcastCache()
+    OmniBroadcastCacheRpc.stopExecutor()
+    OmniBroadcastStorageTarget.clearCurrent()
+    OmniBroadcastCacheRpc.stopDriver()
   }
 
   private def replaceEnvVarsWithDefaults(input: String, defaultForMissing: String = ""): String = {

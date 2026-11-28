@@ -47,7 +47,7 @@ int32_t BytesGen(uint64_t offsetsAddr, std::string &nullStr, uint64_t valuesAddr
     int32_t* offsets = reinterpret_cast<int32_t *>(offsetsAddr);  // offsets of the string
     char *nulls = nullptr;
     char* values = reinterpret_cast<char *>(valuesAddr); // raw pointer of string data
-    std::vector<VCLocation> &lst = vcb.getVcList();
+    auto &lst = vcb.getVcList();
     int itemsTotalLen = lst.size(); // number of strings
 
     int64_t valueTotalLen = 0; // total length of the string (use 64-bit to avoid overflow)

@@ -104,7 +104,7 @@ public class ColumnShuffleCompressionTest extends ColumnShuffleTest {
                 OMNI_DATE32, OMNI_DATE64, OMNI_DECIMAL64, OMNI_DECIMAL128, OMNI_TIMESTAMP};
         DataType[] types = dataTypeId2DataType(idTypes);
         String inputType = DataTypeSerializer.serialize(types);
-        SparkJniWrapper jniWrapper = new SparkJniWrapper();
+        SparkJniWrapper jniWrapper = newTestShuffleWrapper();
         int partitionNum = 4;
         long splitterId = jniWrapper.nativeMake(
                 "hash",
@@ -119,7 +119,9 @@ public class ColumnShuffleCompressionTest extends ColumnShuffleTest {
                 64 * 1024,
                 4096,
                 1024 * 1024 * 1024,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                nmmHandle,
+                0L);
         for (int i = 0; i < 999; i++) {
             VecBatch vecBatchTmp = buildVecBatch(idTypes, 1000, partitionNum, true, true);
             jniWrapper.split(splitterId, vecBatchTmp.getNativeVectorBatch());

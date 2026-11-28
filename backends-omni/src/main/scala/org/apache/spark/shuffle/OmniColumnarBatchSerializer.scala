@@ -16,7 +16,9 @@
  */
 package org.apache.spark.shuffle
 
+import org.apache.gluten.backendsapi.BackendsApiManager
 import org.apache.gluten.config.GlutenConfig
+import org.apache.gluten.runtime.OmniRuntimes
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
@@ -83,8 +85,29 @@ private class ColumnarBatchSerializerInstance(
 
       private val dIn: JniByteInputStream = JniByteInputStreams.create(in)
 
+      // Resolve the per-task OmniRuntime
+      // (TaskResources keyed on backend + "omni-shuffle-reader"; symmetric with
+      // the writer-side "omni-shuffle-writer" in OmniShuffleUtil.scala) and
+      // obtain its OmniTaskMemoryPool address via the gluten-side getPoolAddress
+      // bridge. Passed as nmmHandle to makeNativeDeserializer so the native
+      // ShuffleReaderDeserializer + DecompressionStream Vector ctors allocate
+      // against the per-task pool; downstream operators such as the lookup join
+      // output builder inherit that pool from the deserialized vectors. Returns 0
+      // in test setups where no Spark task is active; the native side then falls
+      // back to the unaccounted no-pool Vector ctor, as on the writer side.
+      private val taskPoolAddress: Long =
+        try {
+          val runtime = OmniRuntimes.contextInstance(
+            BackendsApiManager.getBackendName,
+            "omni-shuffle-reader")
+          runtime.getPoolAddress()
+        } catch {
+          case _: IllegalStateException => 0L  // not in a Spark task (test path)
+        }
+
       private val shuffleReaderHandle =
-        jniWrapper.makeNativeDeserializer(dIn, shuffleCompressionCodec, shuffleCompressBlockSize, isRowShuffle)
+        jniWrapper.makeNativeDeserializer(
+          dIn, shuffleCompressionCodec, shuffleCompressBlockSize, isRowShuffle, taskPoolAddress)
       private var cb: ColumnarBatch = _
       private val wrappedOut: ShuffleColumnarBatchOutIterator = new ShuffleColumnarBatchOutIterator(shuffleReaderHandle)
 
